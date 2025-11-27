@@ -90,7 +90,7 @@ camera->onGrabbed([=](const CPylonImage &image, size_t frame){
   case Pylon::PixelType_Mono8:
     /// 8비트 모노 이미지 출력
     /// 원하는 포맷으로 변환
-    /// Example: Image outputImage = Image(buffer, width, height, format);
+    /// Example: Image outputImage = Image(buffer, width, height, imageFormat);
     break;
   }
   // 이후 프로세싱 처리
