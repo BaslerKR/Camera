@@ -86,7 +86,7 @@ camera->onGrabbed([=](const CPylonImage &image, size_t frame){
   // 필요한 타입으로 변환합니다.
   const uchar* buffer = static_cast<const uchar*>(image.GetBuffer());
   auto imageForamt = image.GetPixelType();
-  switch(imageFormat()){
+  switch(imageFormat){
   case Pylon::PixelType_Mono8:
     /// 8비트 모노 이미지 출력
     /// 원하는 포맷으로 변환
