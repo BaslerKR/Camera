@@ -42,7 +42,7 @@ git clone https://github.com/BaslerKR/Camera
 
 하기 제공되는 코드를 귀하의 CMakeLists.txt 안에 붙여넣기 합니다.
 ```cmake
-add_subdirectory(CameraSystem/C++)
+add_subdirectory(Camera/C++)
 target_link_libraries(${PROJECT_NAME} PUBLIC CameraSystem)
 ```
 
