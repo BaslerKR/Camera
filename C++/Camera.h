@@ -5,6 +5,8 @@
 #include <thread>
 #include <atomic>
 #include <functional>
+#include <mutex>
+#include <condition_variable>
 
 using namespace Pylon;
 using namespace std;
@@ -17,15 +19,24 @@ public:
     Camera(CameraSystem* parent, int allottedNumber=0);
     ~Camera();
 
+    enum Status{
+        GrabbingStatus,
+        ConnectionStatus
+    };
+    using StatusCallback = std::function<void(Status status, bool on)>;
+    void onCameraStatus(StatusCallback cb);
+
     bool open(std::string cameraName="");
     bool isOpened();
     void close();
+    std::string getConnectedCameraName(){ return _connectedCameraName; }
 
     using GrabCallback = std::function<void(const CPylonImage&, size_t frame)>;
+    void onGrabbed(GrabCallback cb);
+
     size_t addObserver(GrabCallback cb);
     bool removeObserver(size_t id);
     void clearObservers();
-    void onGrabbed(GrabCallback cb);
     void ready();
 
     void dispatchToObservers(const CPylonImage& image, size_t frame);
@@ -38,18 +49,20 @@ public:
     GenApi::INodeMap& getNodeMap();
 
     using NodeCallback = std::function<void(GenApi::INode*)>;
-    void onConfiguration(NodeCallback cb);
+    void onNodeUpdated(NodeCallback cb);
 
     CameraSystem* getSystem(){ return _system; }
 
 private:
     CameraSystem *_system;
     CBaslerUniversalInstantCamera _currentCamera;
+    std::string _connectedCameraName = "";
     int _allottedNumber = 0;
 
     std::thread _thread;
     std::atomic<bool> _isRunning=false;
 
+    StatusCallback _scb;
     NodeCallback _ncb;
 
     std::mutex _observerMutex;
@@ -67,14 +80,14 @@ private:
 protected:
     // Pylon::CConfigurationEventHandler functions
     virtual void OnAttached(Pylon::CInstantCamera& camera);
-    virtual void OnDetached(Pylon::CInstantCamera& camera){}
-    virtual void OnDestroyed(Pylon::CInstantCamera& camera){}
+    virtual void OnDetached(Pylon::CInstantCamera& camera);
+    virtual void OnDestroyed(Pylon::CInstantCamera& camera);
     virtual void OnOpened(Pylon::CInstantCamera& camera);
-    virtual void OnClosed(Pylon::CInstantCamera& camera){}
+    virtual void OnClosed(Pylon::CInstantCamera& camera);
     virtual void OnGrabStarted(Pylon::CInstantCamera& camera);
     virtual void OnGrabStopped(Pylon::CInstantCamera& camera);
     virtual void OnGrabError(Pylon::CInstantCamera& camera, const char* errorMessage){}
-    virtual void OnCameraDeviceRemoved(Pylon::CInstantCamera& camera){}
+    virtual void OnCameraDeviceRemoved(Pylon::CInstantCamera& camera);
 
     // Pylon::CCameraEventHandler function
     virtual void OnCameraEvent(Pylon::CInstantCamera& camera, intptr_t userProvidedId, GenApi::INode* pNode);

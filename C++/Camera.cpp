@@ -8,11 +8,18 @@ Camera::Camera(CameraSystem *parent, int allottedNumber) : _system(parent), _all
 
 Camera::~Camera()
 {
+    stop();
+    _system->removeCamera(this);
+}
+
+void Camera::onCameraStatus(StatusCallback cb)
+{
+    _scb = std::move(cb);
 }
 
 bool Camera::open(string cameraName){
     try{
-
+        CameraSystem::syslog("Try to open " + cameraName + ".");
         _currentCamera.Attach(_system->createDevice(cameraName), Cleanup_Delete);
         _currentCamera.Open();
 
@@ -32,12 +39,13 @@ bool Camera::open(string cameraName){
                 try{
                     String_t nodeName = child->GetName();
                     _currentCamera.RegisterCameraEventHandler(this, nodeName, _allottedNumber, ERegistrationMode::RegistrationMode_Append, ECleanup::Cleanup_None);
-                }catch(const GenericException &e){ cerr << e.what() << endl; }
+                }catch(const GenericException &e){ CameraSystem::syslog(e.what(),true); }
             }
         }
-
         return true;
-    }catch(const GenericException &e){ cerr << e.what() << endl; }
+    }catch(const GenericException &e){
+CameraSystem::syslog(e.what(),true);
+    }
     return false;
 }
 
@@ -45,14 +53,16 @@ bool Camera::isOpened()
 {
     try{
         return _currentCamera.IsOpen();
-    }catch(const GenericException &e){ cerr << e.what() << endl; }
+    }catch(const GenericException &e){ CameraSystem::syslog(e.what(),true); }
     return false;
 }
 
 void Camera::close(){
     try{
         _currentCamera.Close();
-    }catch(const GenericException &e){ cerr << e.what() << endl; }
+        _currentCamera.DetachDevice();
+        _currentCamera.DestroyDevice();
+    }catch(const GenericException &e){ CameraSystem::syslog(e.what(),true); }
 }
 
 size_t Camera::addObserver(GrabCallback cb)
@@ -134,10 +144,11 @@ void Camera::grab(size_t frame){
                         });
 
                         if (!_isRunning.load(std::memory_order_acquire)) break;
-                        _permits.fetch_sub(1, std::memory_order_acq_rel);
                     }
-                    if(_currentCamera.RetrieveResult(1000, grabResult, TimeoutHandling_ThrowException)){
+                    if(_currentCamera.RetrieveResult(1000, grabResult, Pylon::TimeoutHandling_Return)){
                         if(grabResult->GrabSucceeded()){
+                            _permits.fetch_sub(1, std::memory_order_acq_rel);
+
                             CPylonImage image;
                             image.AttachGrabResultBuffer(grabResult);
 
@@ -154,20 +165,20 @@ void Camera::grab(size_t frame){
                     }
                 }
                 if(_currentCamera.IsGrabbing()) _currentCamera.StopGrabbing();
-            }catch(const GenericException &e){ cerr << e.what() << endl; }
-
+            }catch(const GenericException &e){ CameraSystem::syslog(e.what(),true); }
             _isRunning.store(false, std::memory_order_release);
             _permitCondition.notify_all();
         });
-    }catch(const GenericException &e){ cerr << e.what() << endl; }
+    }catch(const GenericException &e){ CameraSystem::syslog(e.what(),true); }
 }
 
 void Camera::stop(){
     try{
-        _isRunning.exchange(false, std::memory_order_acq_rel);
-        if(_currentCamera.IsGrabbing()) _currentCamera.StopGrabbing();
+        _isRunning.store(false, std::memory_order_release);
+        _permitCondition.notify_all();
+
         if(_thread.joinable()) _thread.join();
-    }catch(const GenericException &e){ cerr << e.what() << endl; }
+    }catch(const GenericException &e){ CameraSystem::syslog(e.what(),true); }
 }
 
 std::vector<string> Camera::getUpdatedCameraList()
@@ -180,7 +191,7 @@ GenApi::INodeMap &Camera::getNodeMap(){
     return _currentCamera.GetNodeMap();
 }
 
-void Camera::onConfiguration(NodeCallback cb)
+void Camera::onNodeUpdated(NodeCallback cb)
 {
     _ncb = std::move(cb);
 }
@@ -190,60 +201,91 @@ GenApi::INode *Camera::getNode(string name){
 }
 
 void Camera::OnAttached(CInstantCamera &camera){
-    cout << "[Info " + to_string(_allottedNumber)  +"] " << camera.GetDeviceInfo().GetFriendlyName() + " is attached." << endl;
+    auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
+    CameraSystem::syslog(from + " attached.");
+}
+
+void Camera::OnDetached(CInstantCamera &camera){
+    auto from = "[Info " + to_string(_allottedNumber)  +"] ";
+    CameraSystem::syslog(from + "Detached.");
+}
+
+void Camera::OnDestroyed(CInstantCamera &camera){
+    auto from = "[Info " + to_string(_allottedNumber)  +"] ";
+    CameraSystem::syslog(from + "Device destroyed.");
+    if(_scb) _scb(ConnectionStatus, false);
 }
 
 void Camera::OnOpened(CInstantCamera &camera){
-    cout << "[Info " + to_string(_allottedNumber)  +"] " << camera.GetDeviceInfo().GetFriendlyName() + " is opened." << endl;
+    _connectedCameraName = camera.GetDeviceInfo().GetFriendlyName();
+    auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
+    CameraSystem::syslog(from + " opened.");
+    if(_scb) _scb(ConnectionStatus, true);
+}
+
+void Camera::OnClosed(CInstantCamera &camera){
+    _connectedCameraName = "";
+    auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
+    CameraSystem::syslog(from + " closed.");
+    if(_scb) _scb(ConnectionStatus, false);
+}
+
+void Camera::OnCameraDeviceRemoved(CInstantCamera &camera){
+    _connectedCameraName = "";
+    auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
+    CameraSystem::syslog(from + " removed physically.");
+    if(_scb) _scb(ConnectionStatus, false);
 }
 
 void Camera::OnGrabStarted(CInstantCamera &camera){
-    cout << "[Info " + to_string(_allottedNumber)  +"] " << camera.GetDeviceInfo().GetFriendlyName() << " starts grabbing." << endl;
+    auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
+    CameraSystem::syslog(from + " started grabbing.");
+    if(_scb) _scb(GrabbingStatus, true);
 }
 
 void Camera::OnGrabStopped(CInstantCamera &camera){
-    cout << "[Info " + to_string(_allottedNumber)  +"] " << camera.GetDeviceInfo().GetFriendlyName() << " stopped grabbing." << endl;
+    auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
+    CameraSystem::syslog(from + " stopped grabbing.");
+    if(_scb) _scb(GrabbingStatus, false);
 }
 
 void Camera::OnCameraEvent(CInstantCamera &camera, intptr_t userProvidedId, GenApi::INode *pNode){
-    // 여기서 받은 데이터를 Camera Widget에 넘길 수 있어야 한다..
     using namespace GenApi;
-    std::string output = std::string("[Event] ") + camera.GetDeviceInfo().GetFriendlyName().c_str() + " - ";
+    std::string output = std::string("[Event ") + std::to_string(_allottedNumber) + "] ";
+
     switch(pNode->GetPrincipalInterfaceType()){
-    case GenApi_3_1_Basler_pylon_v3::intfIInteger:
-        output += std::string(pNode->GetDisplayName().c_str()) + ": " + to_string(CIntegerPtr(pNode)->GetValue());
+    case GenApi::intfIInteger:
+        output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + to_string(CIntegerPtr(pNode)->GetValue());
         break;
-    case GenApi_3_1_Basler_pylon_v3::intfIBoolean:
-        output += std::string(pNode->GetDisplayName().c_str()) + ": " + to_string(CBooleanPtr(pNode)->GetValue());
+    case GenApi::intfIBoolean:
+        output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + to_string(CBooleanPtr(pNode)->GetValue());
         break;
-    case GenApi_3_1_Basler_pylon_v3::intfIFloat:
-        output += std::string(pNode->GetDisplayName().c_str()) + ": " + to_string(CFloatPtr(pNode)->GetValue());
+    case GenApi::intfIFloat:
+        output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + to_string(CFloatPtr(pNode)->GetValue());
         break;
-    case GenApi_3_1_Basler_pylon_v3::intfIString:
-        output += std::string(pNode->GetDisplayName().c_str()) + ": " + CStringPtr(pNode)->GetValue().c_str();
+    case GenApi::intfIString:
+        output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + CStringPtr(pNode)->GetValue().c_str();
         break;
-    case GenApi_3_1_Basler_pylon_v3::intfIEnumeration:
-        output += std::string(pNode->GetDisplayName().c_str()) + ": " + CEnumerationPtr(pNode)->GetCurrentEntry()->GetNode()->GetDisplayName().c_str();
+    case GenApi::intfIEnumeration:
+        output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + CEnumerationPtr(pNode)->GetCurrentEntry()->GetNode()->GetDisplayName().c_str();
         break;
-    case GenApi_3_1_Basler_pylon_v3::intfICommand:
-        output += std::string(CCommandPtr(pNode)->GetNode()->GetDisplayName().c_str()) + ": " + CCommandPtr(pNode)->ToString().c_str();
+    case GenApi::intfICommand:
+        output += std::string(CCommandPtr(pNode)->GetNode()->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + CCommandPtr(pNode)->ToString().c_str();
         break;
-    case GenApi_3_1_Basler_pylon_v3::intfIRegister:
+    case GenApi::intfIRegister:
         output += CRegisterPtr(pNode)->GetNode()->GetDisplayName().c_str() + CRegisterPtr(pNode)->GetAddress();
         break;
-    case GenApi_3_1_Basler_pylon_v3::intfIEnumEntry:
-        cout << "enum entry" << endl; break;
-    case GenApi_3_1_Basler_pylon_v3::intfICategory:
-        cout << "category" << endl; break;
-    case GenApi_3_1_Basler_pylon_v3::intfIPort:
-        cout << "port" << endl; break;
-    case GenApi_3_1_Basler_pylon_v3::intfIValue:
-        cout << "ivalue" << endl; break;
-    case GenApi_3_1_Basler_pylon_v3::intfIBase:
-        cout << "Another case occurred." << endl;
+    case GenApi::intfICategory:
+        // We are going to ignore the category events due to the meaningless data for users.
+        return;
+    case GenApi::intfIEnumEntry:
+    case GenApi::intfIPort:
+    case GenApi::intfIValue:
+    case GenApi::intfIBase:
         break;
     }
-    cout << output << endl;
+    CameraSystem::syslog(output);
+
     if(_ncb) _ncb(pNode);
 }
 
