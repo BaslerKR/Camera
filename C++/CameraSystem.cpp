@@ -6,10 +6,6 @@ CameraSystem::CameraSystem(){
 }
 
 CameraSystem::~CameraSystem(){
-    for(const auto cur : _cameraList){
-        cur->stop();
-        cur->close();
-    }
     Pylon::PylonTerminate();
 }
 
@@ -17,13 +13,13 @@ void CameraSystem::updateCameraList(){
     try{
         _cameraList.clear();
         auto cnt = _tlFactory->EnumerateDevices(_devices);
-        cout << cnt << " Camera(s) found." << endl;
+        syslog("Updated the camera list: " + to_string(cnt) + " Camera(s) found.");
         for(auto i=0; i<_devices.size(); ++i){
-            cout << "-- " <<_devices.at(i).GetFriendlyName() << endl;
+            syslog("-- " + std::string(_devices.at(i).GetFriendlyName()));
         }
         // Signal needed to interface a UI class, sending to camera classes
     }catch(const GenericException &e){
-        cerr << e.what() << endl;
+        syslog(e.what(), true);
     }
 }
 
@@ -33,7 +29,7 @@ std::vector<string> CameraSystem::getCameraList(){
         for(auto &cur : _devices)
             list.push_back(cur.GetFriendlyName().c_str());
     }catch(const GenericException &e){
-        cerr << e.what() << endl;
+        syslog(e.what(), true);
     }
     return list;
 }
@@ -44,16 +40,17 @@ bool CameraSystem::isAccesible(string camera){
 
 const CDeviceInfo CameraSystem::getCameraInfo(string cameraName){
     try{
-        cout << "Searching the device information of " + cameraName + "..." << endl;
+        syslog("Searching the device information of " + cameraName + "...");
         for(auto &cur:_devices){
             if(cameraName == cur.GetFriendlyName().c_str()){
-                cout << "Matched information found." << endl;
+                syslog("Matched information found.");
                 return cur;
             }
         }
     }catch(const GenericException &e){
-        cerr << e.what() << endl;
+        syslog(e.what(), true);
     }
+    syslog("Not matched information found. ", true);
     return CDeviceInfo();
 }
 
@@ -62,8 +59,16 @@ Camera *CameraSystem::addCamera()
     auto camera = new Camera(this, _cameraList.size());
     _cameraList.push_back(camera);
 
-    cout << "New camera instance created." << endl;
+    syslog("New camera instance created.");
     return camera;
+}
+
+void CameraSystem::removeCamera(Camera *camera)
+{
+    _cameraList.erase(std::remove(_cameraList.begin(), _cameraList.end(), camera), _cameraList.end());
+    syslog("This camera instance was removed.");
+
+    updateCameraList();
 }
 
 Camera *CameraSystem::getCamera(int allottedNumber)
@@ -74,6 +79,17 @@ Camera *CameraSystem::getCamera(int allottedNumber)
 
 IPylonDevice* CameraSystem::createDevice(string cameraName)
 {
-    if(cameraName=="") return _tlFactory->GetInstance().CreateFirstDevice();
-    return _tlFactory->GetInstance().CreateDevice(getCameraInfo(cameraName));
+    auto instance = &_tlFactory->GetInstance();
+    if(cameraName=="") return instance->CreateFirstDevice();
+
+    auto cameraInfo = getCameraInfo(cameraName);
+    auto device = instance->CreateDevice(cameraInfo);
+
+    return device;
+}
+
+void CameraSystem::syslog(string message, bool warning)
+{
+    if(!warning) cout << "[Camera System] " << message << endl;
+    else cerr << "[Camera System] " << message << endl;
 }

@@ -21,6 +21,8 @@ public:
     Camera* getCamera(int allottedNumber);
     IPylonDevice *createDevice(std::string cameraName="");
 
+    static void syslog(std::string message, bool warning=false);
+
 private:
     CTlFactory *_tlFactory = nullptr;
     DeviceInfoList_t _devices;
