@@ -10,6 +10,8 @@
 #include <QSpinBox>
 #include <QToolButton>
 #include <QStatusBar>
+#include <QCheckBox>
+#include <QLineEdit>
 
 #include "CameraSystem.h"
 
@@ -18,9 +20,12 @@ class QCameraWidget : public QWidget
     Q_OBJECT
 public:
     QCameraWidget(QWidget *parent=nullptr, Camera *camera=nullptr);
+    ~QCameraWidget();
 
     void generateFeaturesWidget(GenApi::INodeMap& nodemap);
     void generateChildrenItem(QTreeWidgetItem *parent, GenApi::NodeList_t children);
+
+    QWidget *createNodeWidget(GenApi::INode* node);
 
 private:
     Camera *_camera;

@@ -21,11 +21,25 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     _toolRefresh = new QToolButton(this);
     _toolRefresh->setIcon(QIcon(":/Resources/Icons/icons8-refresh-48.png"));
     _toolConnect = new QToolButton(this);
-    _toolConnect->setIcon(QIcon(":/Resources/Icons/icons8-connect-48.png"));
+    _toolConnect->setCheckable(true);
+    {
+        QIcon icon;
+        icon.addFile(":/Resources/Icons/icons8-connect-48.png", QSize(), QIcon::Normal, QIcon::Off);
+        icon.addFile(":/Resources/Icons/icons8-disconnected-48.png", QSize(), QIcon::Normal, QIcon::On);
+        _toolConnect->setIcon(icon);
+    }
     _toolGrabOne = new QToolButton(this);
     _toolGrabOne->setIcon(QIcon(":/Resources/Icons/icons8-camera-48.png"));
+    _toolGrabOne->setEnabled(false);
     _toolGrabLive = new QToolButton(this);
-    _toolGrabLive->setIcon(QIcon(":/Resources/Icons/icons8-cameras-48.png"));
+    _toolGrabLive->setCheckable(true);
+    _toolGrabLive->setEnabled(false);
+    {
+        QIcon icon;
+        icon.addFile(":/Resources/Icons/icons8-cameras-48.png", QSize(), QIcon::Normal, QIcon::Off);
+        icon.addFile(":/Resources/Icons/icons8-pause-48.png", QSize(), QIcon::Normal, QIcon::On);
+        _toolGrabLive->setIcon(icon);
+    }
 
     // Configure the details of toolbuttons
     connect(_toolRefresh, &QToolButton::clicked, this, [=]{
@@ -33,18 +47,53 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
         for(const auto &camera: _camera->getUpdatedCameraList()){
             _cameraListComboBox->addItem(camera.c_str());
         }
+        if(_camera->isOpened()) _cameraListComboBox->setCurrentText(_camera->getConnectedCameraName().c_str());
     });
-    connect(_toolConnect, &QToolButton::clicked, this, [=]{
+    _camera->onCameraStatus([=](Camera::Status status, bool on){
+        switch(status){
+        case Camera::GrabbingStatus:{
+            if(on){ // Grabbing started
+                QSignalBlocker grabbingBlock(_toolGrabLive);
+                _toolGrabLive->setChecked(true);
+            }else{ // Grabbing stopped
+                QSignalBlocker grabbingBlock(_toolGrabLive);
+                _toolGrabLive->setChecked(false);
+            }
+        }break;
+        case Camera::ConnectionStatus:{
+            QSignalBlocker connectBlock(_toolConnect);
+            _toolConnect->setChecked(on);
+
+            _cameraListComboBox->setEnabled(!on);
+            _toolRefresh->setEnabled(!on);
+            _toolGrabOne->setEnabled(on);
+            _toolGrabLive->setEnabled(on);
+
+            if(on){ // Camera Connected
+                generateFeaturesWidget(_camera->getNodeMap());
+            }else{ // Camera Disconnected
+                _toolGrabLive->setChecked(false);
+                _featuresWidget->clear();
+            }
+            if(!on) emit _toolRefresh->clicked();
+        }break;
+        }
+    });
+    connect(_toolConnect, &QToolButton::toggled, this, [=](bool toggled){
         // Request to open the camera
-        if(_camera->open(_cameraListComboBox->currentText().toStdString())){
-            generateFeaturesWidget(_camera->getNodeMap());
+        if(toggled){
+            if(!_camera->open(_cameraListComboBox->currentText().toStdString())){
+                QSignalBlocker connectBlock(_toolConnect);
+                _toolConnect->setChecked(false);
+            }
+        }else{
+            _camera->close();
         }
     });
     connect(_toolGrabOne, &QToolButton::clicked, this, [=]{
         // Request to start a single grabbing
         _camera->grab(1);
     });
-    _toolGrabLive->setCheckable(true);
     connect(_toolGrabLive, &QToolButton::toggled, this, [=](bool toggled){
         // Request to start a continuous grabbing
         if(toggled) _camera->grab();
@@ -81,42 +130,116 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     _statusBar->setContentsMargins(0,0,0,0);
     layout->addWidget(_statusBar);
     setLayout(layout);
-
     emit _toolRefresh->clicked();
 
-    camera->onConfiguration([](GenApi::INode* node){
-        qDebug() << "Node changed." << node->GetDisplayName().c_str();
+    camera->onNodeUpdated([=](GenApi::INode* node){
+        auto items = _featuresWidget->findItems(node->GetDisplayName().c_str(), Qt::MatchFlag::MatchRecursive);
+        if(items.size() ==0){
+            qDebug() << "Need to create something to fill" << node->GetDisplayName().c_str();
+        }
+        for(const auto item : items){
+            auto cur = _featuresWidget->itemWidget(item, 1);
+            switch(node->GetPrincipalInterfaceType()){
+            case GenApi::intfIInteger:{
+                if(auto* spinBox = qobject_cast<QSpinBox*>(cur)){
+                    GenApi::CIntegerPtr ptr = node;
+
+                    QSignalBlocker block(spinBox);
+                    spinBox->setEnabled(GenApi::IsWritable(ptr));
+                    spinBox->setRange(ptr->GetMin(), ptr->GetMax());
+                    spinBox->setValue(ptr->GetValue());
+                }
+            } break;
+            case GenApi::intfIFloat:{
+                if(auto* spinBox = qobject_cast<QDoubleSpinBox*>(cur)){
+                    GenApi::CFloatPtr ptr = node;
+
+                    QSignalBlocker block(spinBox);
+                    spinBox->setEnabled(GenApi::IsWritable(ptr));
+                    spinBox->setRange(ptr->GetMin(), ptr->GetMax());
+                    spinBox->setValue(ptr->GetValue());
+                }
+            } break;
+            case GenApi::intfIBoolean:{
+                if(auto* checkBox = qobject_cast<QCheckBox*>(cur)){
+                    GenApi::CBooleanPtr ptr = node;
+
+                    QSignalBlocker block(checkBox);
+                    checkBox->setEnabled(GenApi::IsWritable(ptr));
+                    checkBox->setChecked(ptr->GetValue());
+                }
+            } break;
+            case GenApi::intfIString:{
+                if(auto *lineEdit = qobject_cast<QLineEdit*>(cur)){
+                    GenApi::CStringPtr ptr = node;
+
+                    QSignalBlocker block(lineEdit);
+                    lineEdit->setEnabled(GenApi::IsWritable(ptr));
+                    lineEdit->setText(ptr->GetValue().c_str());
+                }
+            } break;
+            case GenApi::intfIEnumeration:{
+                if(auto *comboBox = qobject_cast<QComboBox*>(cur)){
+                    GenApi::CEnumerationPtr ptr = node;
+
+                    QSignalBlocker block(comboBox);
+                    comboBox->setEnabled(GenApi::IsWritable(ptr));
+                    comboBox->setCurrentText(ptr->GetCurrentEntry()->GetNode()->GetDisplayName().c_str());
+                }
+            } break;
+            case GenApi::intfICommand:{
+                if(auto *button = qobject_cast<QPushButton*>(cur)){
+                    GenApi::CCommandPtr ptr = node;
+
+                    button->setEnabled(GenApi::IsWritable(ptr));
+                }
+            } break;
+            case GenApi::intfIRegister:
+            case GenApi::intfICategory:
+            case GenApi::intfIEnumEntry:
+            case GenApi::intfIPort:
+            case GenApi::intfIValue:
+            case GenApi::intfIBase:
+                break;
+            }
+        }
     });
+}
+
+QCameraWidget::~QCameraWidget()
+{
+    if(_camera->isOpened()) _camera->close();
 }
 
 void QCameraWidget::generateFeaturesWidget(GenApi::INodeMap &nodemap)
 {
     _featuresWidget->clear();
+    try{
+        GenApi::NodeList_t nodes;
+        nodemap.GetNodes(nodes);
 
-    GenApi::NodeList_t nodes;
-    nodemap.GetNodes(nodes);
+        QTreeWidgetItem *cameraFeatures = new QTreeWidgetItem(_featuresWidget, QStringList() << _camera->getConnectedCameraName().c_str());
+        for(auto cat : nodes){
+            if(cat->GetName() == "Root") continue;
+            if(!GenApi::IsAvailable(cat)) continue;
+            if(cat->GetPrincipalInterfaceType() != GenApi::EInterfaceType::intfICategory) continue;
 
-    QTreeWidgetItem *cameraFeatures = new QTreeWidgetItem(_featuresWidget, QStringList() << QString("Camera Name"));
-    for(auto cat : nodes){
-        if(cat->GetName() == "Root") continue;
-        if(!GenApi::IsAvailable(cat)) continue;
-        if(cat->GetPrincipalInterfaceType() != GenApi::EInterfaceType::intfICategory) continue;
+            GenApi::NodeList_t parentsList;
+            cat->GetParents(parentsList);
+            if(parentsList.at(0)->GetDisplayName() == "Events Generation") continue;
 
-        GenApi::NodeList_t parentsList;
-        cat->GetParents(parentsList);
-        if(parentsList.at(0)->GetDisplayName() == "Events Generation") continue;
+            QTreeWidgetItem* item = new QTreeWidgetItem(cameraFeatures, QStringList() << cat->GetDisplayName().c_str());
 
-        QTreeWidgetItem* item = new QTreeWidgetItem(cameraFeatures, QStringList() << cat->GetDisplayName().c_str());
+            GenApi::NodeList_t children;
+            cat->GetChildren(children);
+            generateChildrenItem(item, children);
+        }
+        _featuresWidget->expandToDepth(0);
+        _featuresWidget->header()->resizeSection(0,200);
 
-        GenApi::NodeList_t children;
-        cat->GetChildren(children);
-
-        generateChildrenItem(item, children);
+    }catch(const GenericException &e){
+        qDebug() << e.what();
     }
-    _featuresWidget->expandToDepth(0);
-    _featuresWidget->header()->resizeSection(0,200);
-
-
 }
 
 void QCameraWidget::generateChildrenItem(QTreeWidgetItem *parent, GenApi::NodeList_t children)
@@ -124,360 +247,182 @@ void QCameraWidget::generateChildrenItem(QTreeWidgetItem *parent, GenApi::NodeLi
     for(auto sub : children){
         if(!GenApi::IsAvailable(sub)) continue;
 
+        auto nodeWidget = createNodeWidget(sub);
+        if(!nodeWidget) continue;
+
         QTreeWidgetItem* subItem = new QTreeWidgetItem(parent, QStringList() << sub->GetDisplayName().c_str());
-        switch (sub->GetPrincipalInterfaceType()){
-            if(!GenApi::IsReadable(sub)) continue;
-        case GenApi::intfIInteger:{
-            GenApi::CIntegerPtr ptr = sub;
-            auto spinBox = new QSpinBox;
-            spinBox->setEnabled(GenApi::IsWritable(ptr));
-
-            try{
-                spinBox->blockSignals(true);
-                spinBox->setAccessibleName(sub->GetName().c_str());
-                spinBox->setRange(ptr->GetMin(), ptr->GetMax());
-                spinBox->setValue(ptr->GetValue());
-                spinBox->setSingleStep(ptr->GetInc());
-                spinBox->setEnabled(GenApi::IsWritable(ptr));
-                spinBox->blockSignals(false);
-            }catch (const Pylon::GenericException &e){
-                _statusBar->showMessage(e.GetDescription(), 5000);
-            }
-            // connect(this, &CameraWidget::nodeUpdated, spinBox, [=](){
-            //     spinBox->blockSignals(true);
-            //     try{
-            //         spinBox->setValue(ptr->GetValue());
-            //     }catch(const Pylon::GenericException &e){
-            //         statusMessage(e.GetDescription());
-            //     }
-            //     spinBox->blockSignals(false);
-            // });
-            // connect(this, &CameraWidget::grabbingState, spinBox, [=](bool){
-            //     try{
-            //         spinBox->setEnabled(GenApi::IsWritable(ptr));
-            //     }catch(const Pylon::GenericException &e){
-            //         statusMessage(e.GetDescription());
-            //     }
-            // });
-            connect(spinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [=](int value){
-                try{
-                    ptr->SetValue(value);
-                    auto currentValue = ptr->GetValue();
-                    spinBox->blockSignals(true);
-                    spinBox->setValue(currentValue);
-                    spinBox->blockSignals(false);
-
-                    _statusBar->showMessage(QString(ptr->GetNode()->GetDisplayName()) + " is set to " + QString::number(currentValue), 5000);
-                }catch(const Pylon::GenericException &e){
-                    auto currentValue = ptr->GetValue();
-                    spinBox->blockSignals(true);
-                    spinBox->setValue(currentValue);
-                    spinBox->blockSignals(false);
-
-                    _statusBar->showMessage(e.GetDescription(), 5000);
-                }
-            });
-            _featuresWidget->setItemWidget(subItem, parent->columnCount(), spinBox);
-        }break;
-        case GenApi::intfIValue:
-        case GenApi::intfIBase:
-        case GenApi::intfIBoolean:
-        case GenApi::intfICommand:
-        case GenApi::intfIFloat:
-        case GenApi::intfIString:
-        case GenApi::intfIRegister:
-        case GenApi::intfICategory:
-        case GenApi::intfIEnumeration:
-        case GenApi::intfIEnumEntry:
-        case GenApi::intfIPort:
-            break;
-        }
+        _featuresWidget->setItemWidget(subItem, parent->columnCount(), nodeWidget);
     }
 }
 
-/*
-void Qylon::CameraWidget::generateChildrenWidgetItem(QTreeWidgetItem *parent, GenApi::NodeList_t children)
+QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
 {
-    for(auto sub : children){
-        if(!GenApi::IsAvailable(sub)) continue;
-
-        QTreeWidgetItem* subItem = new QTreeWidgetItem(parent, QStringList() << sub->GetDisplayName().c_str());
-        manageItems.push_back(subItem);
-
-        switch (sub->GetPrincipalInterfaceType()){
-        case GenApi::EInterfaceType::intfIInteger:{
-            if(!GenApi::IsReadable(sub)) continue;
-
-            GenApi::CIntegerPtr ptr = sub;
-            auto spinBox = new QSpinBox;
-            spinBox->setEnabled(GenApi::IsWritable(ptr));
-            try{
-                spinBox->setAccessibleName(sub->GetName().c_str());
-                spinBox->setRange(ptr->GetMin(), ptr->GetMax());
-                spinBox->setValue(ptr->GetValue());
-                spinBox->setSingleStep(ptr->GetInc());
-                spinBox->setEnabled(GenApi::IsWritable(ptr));
-            }catch (const Pylon::GenericException &e){
-                statusMessage(e.GetDescription());
-            }
-
-            connect(this, &CameraWidget::nodeUpdated, spinBox, [=](){
-                spinBox->blockSignals(true);
-                try{
-                    spinBox->setValue(ptr->GetValue());
-                }catch(const Pylon::GenericException &e){
-                    statusMessage(e.GetDescription());
-                }
-                spinBox->blockSignals(false);
-            });
-            connect(this, &CameraWidget::grabbingState, spinBox, [=](bool){
-                try{
-                    spinBox->setEnabled(GenApi::IsWritable(ptr));
-                }catch(const Pylon::GenericException &e){
-                    statusMessage(e.GetDescription());
-                }
-            });
-            connect(spinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [=](int value){
-                try{
-                    ptr->SetValue(value);
-                    statusMessage(QString(ptr->GetNode()->GetDisplayName()) + " sets to " + QString::number(ptr->GetValue()));
-                }catch(const Pylon::GenericException &e){
-                    statusMessage(e.GetDescription());
-                }
-                emit nodeUpdated();
-            });
-            widget->setItemWidget(subItem, parent->columnCount(), spinBox);
-            break;
+    QWidget *widget = nullptr;
+    switch(node->GetPrincipalInterfaceType()){
+    case GenApi::intfIInteger:{
+        GenApi::CIntegerPtr ptr = node;
+        auto spinBox = new QSpinBox;
+        widget = spinBox;
+        try{
+            QSignalBlocker block(spinBox);
+            spinBox->setSingleStep(ptr->GetInc());
+            spinBox->setRange(ptr->GetMin(), ptr->GetMax());
+            spinBox->setValue(ptr->GetValue());
+        }catch (const Pylon::GenericException &e){
+            _statusBar->showMessage(e.GetDescription(), 5000);
+            qWarning() << e.GetDescription() << node->GetName().c_str();
         }
-        case GenApi::EInterfaceType::intfIFloat:{
-            if(!GenApi::IsReadable(sub)) continue;
-
-            GenApi::CFloatPtr ptr = sub;
-            auto spinBox = new QDoubleSpinBox;
-            spinBox->setEnabled(GenApi::IsWritable(ptr));
+        connect(spinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [=](int value){
             try{
-                spinBox->setAccessibleName(sub->GetName().c_str());
-                spinBox->setDecimals(ptr->GetDisplayPrecision());
-                spinBox->setRange(ptr->GetMin(), ptr->GetMax());
-                spinBox->setValue(ptr->GetValue());
-                // spinBox->setSingleStep(ptr->GetInc());
-                spinBox->setSingleStep(0.1);
-                spinBox->setEnabled(GenApi::IsWritable(ptr));
+                QSignalBlocker block(spinBox);
+                ptr->SetValue(value);
             }catch(const Pylon::GenericException &e){
-                statusMessage(e.GetDescription());
+                QSignalBlocker block(spinBox);
+                auto currentValue = ptr->GetValue();
+                spinBox->setValue(currentValue);
+                _statusBar->showMessage(e.GetDescription(), 5000);
+                qWarning() << e.GetDescription() << node->GetName().c_str();
             }
-            connect(this, &CameraWidget::nodeUpdated, spinBox, [=](){
-                spinBox->blockSignals(true);
-                try{
-                    spinBox->setValue(ptr->GetValue());
-                }catch(const Pylon::GenericException &e){
-                    statusMessage(e.GetDescription());
-                }
-                spinBox->blockSignals(false);
-            });
-            connect(this, &CameraWidget::grabbingState, spinBox, [=](bool){
-                try{
-                    spinBox->setEnabled(GenApi::IsWritable(ptr));
-                }catch(const Pylon::GenericException &e){
-                    statusMessage(e.GetDescription());
-                }
-            });
-            connect(spinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [=](double value){
-                try{
-                    ptr->SetValue(value);
-                    statusMessage(QString(ptr->GetNode()->GetDisplayName()) + " sets to " + QString::number(ptr->GetValue())) ;
-                    emit nodeUpdated();
-                }catch(const Pylon::GenericException &e){
-                    statusMessage(e.GetDescription());
-                }
-            });
-            widget->setItemWidget(subItem, parent->columnCount(), spinBox);
-            break;
+        });
+    } break;
+    case GenApi::intfIFloat:{
+        GenApi::CFloatPtr ptr = node;
+        auto spinBox = new QDoubleSpinBox;
+        widget = spinBox;
+        try{
+            QSignalBlocker block(spinBox);
+            spinBox->setSingleStep(0.1);
+            spinBox->setRange(ptr->GetMin(), ptr->GetMax());
+            spinBox->setValue(ptr->GetValue());
+        }catch (const Pylon::GenericException &e){
+            _statusBar->showMessage(e.GetDescription(), 5000);
+            qWarning() << e.GetDescription() << node->GetName().c_str() << "Float";
         }
-        case GenApi::EInterfaceType::intfIBoolean:{
-            if(!GenApi::IsReadable(sub)) continue;
-
-            GenApi::CBooleanPtr ptr = sub;
-            auto checkBox = new QCheckBox;
-            checkBox->setEnabled(GenApi::IsWritable(ptr));
+        connect(spinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [=](double value){
             try{
-                checkBox->setChecked(ptr->GetValue());
-                checkBox->setAccessibleName(sub->GetName().c_str());
-                checkBox->setEnabled(GenApi::IsWritable(ptr));
+                QSignalBlocker block(spinBox);
+                ptr->SetValue(value);
             }catch(const Pylon::GenericException &e){
-                statusMessage(e.GetDescription());
+                QSignalBlocker block(spinBox);
+                auto currentValue = ptr->GetValue();
+                spinBox->setValue(currentValue);
+                _statusBar->showMessage(e.GetDescription(), 5000);
+                qWarning() << e.GetDescription() << node->GetName().c_str();
             }
-            connect(this, &CameraWidget::nodeUpdated, checkBox, [=](){
-                checkBox->blockSignals(true);
-                try{
-                    checkBox->setChecked(ptr->GetValue());
-                }catch(const Pylon::GenericException &e){
-                    statusMessage(e.GetDescription());
-                }
-                checkBox->blockSignals(false);
-            });
-            connect(this, &CameraWidget::grabbingState, checkBox, [=](bool){
-                try{
-                    checkBox->setEnabled(GenApi::IsWritable(ptr));
-                }catch(const Pylon::GenericException &e){
-                    statusMessage(e.GetDescription());
-                }
-            });
-            connect(checkBox, &QCheckBox::clicked, this, [=](bool on){
-                try{
-                    ptr->SetValue(on);
-                    statusMessage(QString(ptr->GetNode()->GetDisplayName()) + " is " + (ptr->GetValue() ? "On" : "Off"));
-                    emit nodeUpdated();
-                }catch(const Pylon::GenericException &e){
-                    statusMessage(e.GetDescription());
-                }
-            });
-            widget->setItemWidget(subItem, parent->columnCount(), checkBox);
-            break;
+        });
+    } break;
+    case GenApi::intfIBoolean:{
+        GenApi::CBooleanPtr ptr = node;
+        auto checkBox = new QCheckBox;
+        widget = checkBox;
+        try{
+            QSignalBlocker block(checkBox);
+            checkBox->setChecked(ptr->GetValue());
+        }catch (const Pylon::GenericException &e){
+            _statusBar->showMessage(e.GetDescription(), 5000);
+            qWarning() << e.GetDescription() << node->GetName().c_str();
         }
-        case GenApi::EInterfaceType::intfIString:{
-            if(!GenApi::IsReadable(sub)) continue;
-
-            GenApi::CStringPtr ptr = sub;
-            QLineEdit *lineEdit = new QLineEdit;
-            lineEdit->setEnabled(GenApi::IsWritable(ptr));
-            lineEdit->setFrame(false);
+        connect(checkBox, &QCheckBox::checkStateChanged, this, [=](Qt::CheckState state){
             try{
-                lineEdit->setText(ptr->GetValue().c_str());
+                QSignalBlocker block(checkBox);
+                ptr->SetValue((state == Qt::CheckState::Checked) ? true : false);
             }catch(const Pylon::GenericException &e){
-                statusMessage(e.GetDescription());
+                QSignalBlocker block(checkBox);
+                auto currentValue = ptr->GetValue();
+                checkBox->setChecked(currentValue);
+                _statusBar->showMessage(e.GetDescription(), 5000);
+                qWarning() << e.GetDescription() << node->GetName().c_str();
             }
+        });
+    } break;
+    case GenApi::intfIString:{
+        GenApi::CStringPtr ptr = node;
+        auto lineEdit = new QLineEdit;
+        widget = lineEdit;
 
-            connect(this, &CameraWidget::nodeUpdated, lineEdit, [=](){
-                lineEdit->blockSignals(true);
-                try{
-                    lineEdit->setText(ptr->GetValue().c_str());
-                }catch(const Pylon::GenericException &e){
-                    statusMessage(e.GetDescription());
-                }
-                lineEdit->blockSignals(false);
-            });
-            connect(this, &CameraWidget::grabbingState, lineEdit, [=](bool){
-                try{
-                    lineEdit->setEnabled(GenApi::IsWritable(ptr));
-                }catch(const Pylon::GenericException &e){
-                    statusMessage(e.GetDescription());
-                }
-            });
-            connect(lineEdit, &QLineEdit::editingFinished, this, [=]{
-                try{
-                    ptr->SetValue(lineEdit->text().toStdString().c_str());
-                    statusMessage(QString(ptr->GetNode()->GetDisplayName()) + " sets to " + ptr->GetValue());
-                    emit nodeUpdated();
-                }catch(const Pylon::GenericException &e){
-                    qDebug() << "string 3 error";
-                    statusMessage(e.GetDescription());
-                }
-            });
-            widget->setItemWidget(subItem, parent->columnCount(), lineEdit);
-            break;
+        try{
+            QSignalBlocker block(lineEdit);
+            lineEdit->setText(ptr->GetValue().c_str());
+        }catch (const Pylon::GenericException &e){
+            _statusBar->showMessage(e.GetDescription(), 5000);
+            qWarning() << e.GetDescription() << node->GetName().c_str();
         }
-        case GenApi::EInterfaceType::intfIEnumeration:{
-            if(!GenApi::IsReadable(sub)) continue;
-
-            GenApi::CEnumerationPtr ptr = sub;
-            auto comboBox = new QComboBox;
-            comboBox->setEnabled(GenApi::IsWritable(ptr));
-
+        connect(lineEdit, &QLineEdit::editingFinished, this, [=](){
             try{
-                Pylon::StringList_t enuList;
-                ptr->GetSymbolics(enuList);
-
-                comboBox->setAccessibleName(sub->GetName().c_str());
-                comboBox->setEnabled(GenApi::IsWritable(ptr));
-
-                for(const auto &current : enuList){
-                    comboBox->addItem(QString::fromStdString(ptr->GetEntryByName(current)->GetNode()->GetDisplayName().c_str()), QVariant::fromValue((QString)current));
-                }
-                comboBox->setCurrentText(ptr->GetCurrentEntry()->GetNode()->GetDisplayName().c_str());
+                QSignalBlocker block(lineEdit);
+                ptr->SetValue(lineEdit->text().toStdString().c_str());
             }catch(const Pylon::GenericException &e){
-                qDebug() << "Enum 1 error";
-                statusMessage(e.GetDescription());
+                QSignalBlocker block(lineEdit);
+                auto currentValue = ptr->GetValue().c_str();
+                lineEdit->setText(currentValue);
+                _statusBar->showMessage(e.GetDescription(), 5000);
+                qWarning() << e.GetDescription() << node->GetName().c_str();
             }
+        });
+    } break;
+    case GenApi::intfIEnumeration:{
+        GenApi::CEnumerationPtr ptr = node;
+        auto comboBox = new QComboBox;
+        widget = comboBox;
+        try{
+            QSignalBlocker block(comboBox);
 
-            connect(this, &CameraWidget::nodeUpdated, comboBox, [=](){
-                comboBox->blockSignals(true);
-                try{
-                    GenApi::CEnumerationPtr ptr = camera->getNode(comboBox->accessibleName().toStdString().c_str());
-                    comboBox->setCurrentText(ptr->GetCurrentEntry()->GetNode()->GetDisplayName().c_str());
-                }catch(const Pylon::GenericException &e){
-                    statusMessage(e.GetDescription());
-                }
-                comboBox->blockSignals(false);
-            });
-            connect(this, &CameraWidget::grabbingState, comboBox, [=](bool){
-                try{
-                    comboBox->setEnabled(GenApi::IsWritable(ptr));
-                }catch(const Pylon::GenericException &e){
-                    statusMessage(e.GetDescription());
-                }
-            });
-            connect(comboBox, &QComboBox::currentTextChanged, this, [=](QString){
-                comboBox->blockSignals(true);
-                try{
-                    auto val = ptr->GetEntryByName(comboBox->currentData().toString().toStdString().c_str());
-                    ptr->SetIntValue(val->GetNumericValue());
-                    statusMessage(QString(ptr->GetNode()->GetDisplayName().c_str()) + " sets to " + val->GetSymbolic() );
+            Pylon::StringList_t list;
+            ptr->GetSymbolics(list);
 
-                    emit nodeUpdated();
-                }catch(const Pylon::GenericException &e){
-                    statusMessage(e.GetDescription());
-                }
-                comboBox->blockSignals(false);
-            });
-            widget->setItemWidget(subItem, parent->columnCount(), comboBox);
-            break;
+            for(const auto &item : list){
+                comboBox->addItem(QString::fromStdString(ptr->GetEntryByName(item)->GetNode()->GetDisplayName().c_str()), QVariant::fromValue((QString)item));
+            }
+            comboBox->setCurrentText(ptr->GetCurrentEntry()->GetNode()->GetDisplayName().c_str());
+        }catch (const Pylon::GenericException &e){
+            _statusBar->showMessage(e.GetDescription(), 5000);
+            qWarning() << e.GetDescription() << node->GetName().c_str();
         }
-        case GenApi::EInterfaceType::intfICommand:{
-            GenApi::CCommandPtr ptr = sub;
-            auto button = new QPushButton("Execute");
-            button->setEnabled(GenApi::IsWritable(ptr));
+        connect(comboBox, &QComboBox::currentTextChanged, this, [=](QString){
+            try{
+                QSignalBlocker block(comboBox);
+                auto val = ptr->GetEntryByName(comboBox->currentData().toString().toStdString().c_str());
+                ptr->SetIntValue(val->GetNumericValue());
+            }catch(const Pylon::GenericException &e){
+                QSignalBlocker block(comboBox);
+                auto currentValue = ptr->GetCurrentEntry()->GetNumericValue();
+                ptr->SetIntValue(currentValue);
 
-            button->setAccessibleName(sub->GetName().c_str());
-            connect(this, &CameraWidget::grabbingState, button, [=](bool){
-                try{
-                    button->setEnabled(GenApi::IsWritable(ptr));
-                }catch(const Pylon::GenericException &e){
-                    statusMessage(e.GetDescription());
-                }
-            });
-            connect(button, &QPushButton::clicked, this, [=](){
-                try{
-                    ptr->Execute();
-                    statusMessage("Executed " + QString(ptr->GetNode()->GetDisplayName().c_str()));
-                    emit nodeUpdated();
-                }catch (const Pylon::GenericException &e){
-                    statusMessage(e.GetDescription());
-                }
-            });
-            widget->setItemWidget(subItem, parent->columnCount(), button);
-
-            break;
-        }
-        case GenApi::EInterfaceType::intfIRegister:{
-            GenApi::CRegisterPtr ptr = sub;
-            widget->setItemWidget(subItem, parent->columnCount(), new QLabel(QString::number(ptr->GetAddress())));
-            break;
-        }
-        case GenApi::EInterfaceType::intfICategory:{
-            GenApi::NodeList_t subChildren;
-            sub->GetChildren(subChildren);
-            generateChildrenWidgetItem(parent, subChildren);
-            break;
-        }
-        case GenApi::EInterfaceType::intfIEnumEntry:
-        case GenApi::EInterfaceType::intfIBase:
-        case GenApi::EInterfaceType::intfIValue:
-        case GenApi::EInterfaceType::intfIPort:{
-            delete subItem;
-            manageItems.pop_back();
-            break;
-        }}
+                _statusBar->showMessage(e.GetDescription(), 5000);
+                qWarning() << e.GetDescription() << node->GetName().c_str();
+            }
+        });
+    } break;
+    case GenApi::intfICommand:{
+        GenApi::CCommandPtr ptr = node;
+        auto button = new QPushButton("Execute");
+        widget = button;
+        connect(button, &QPushButton::clicked, this, [=]{
+            try{
+                ptr->Execute();
+            }catch(const Pylon::GenericException &e){
+                _statusBar->showMessage(e.GetDescription(), 5000);
+                qWarning() << e.GetDescription() << node->GetName().c_str();
+            }
+        });
+    } break;
+    case GenApi::intfIRegister:{
+        GenApi::CRegisterPtr ptr = node;
+        auto label = new QLabel("0x" + QString::number(ptr->GetAddress(), 16));
+        widget = label;
+    } break;
+    case GenApi::intfICategory:
+    case GenApi::intfIEnumEntry:
+    case GenApi::intfIPort:
+    case GenApi::intfIValue:
+    case GenApi::intfIBase:
+        break;
     }
-}*/
+
+    if(widget){
+        widget->setAccessibleName(node->GetName().c_str());
+        widget->setEnabled(GenApi::IsWritable(node));
+    }
+    return widget;
+}
 #endif
