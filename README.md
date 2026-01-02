@@ -27,8 +27,8 @@ git submodule update
 
 ```cmake
 # 예시: 프로젝트 루트 CMakeLists.txt에서
-add_subdirectory(CameraSystem/C++)
-target_link_libraries(${PROJECT_NAME} PUBLIC CameraSystem)
+add_subdirectory(Camera/C++)
+target_link_libraries(${PROJECT_NAME} PUBLIC Camera)
 ```
 
 ---
@@ -94,3 +94,4 @@ int main() {
 ## 문의
 본 프로젝트는 지속적으로 업데이트되지만 **보증하지 않습니다**.  
 문의/버그/제안은 **이 저장소의 Issues**에 등록할 수 있습니다.
+
