@@ -42,10 +42,14 @@ int main() {
     auto camera = system.addCamera();   // 보유 카메라 중 하나를 시스템에 추가
 
     // 카메라 연결
-    // 인자 미지정: 검색된 첫 번째 카메라에 연결
-    // 인자 지정: FriendlyName 일치 카메라에 연결
-    camera->open(); 
-    camera->grab();
+    // cameraName = "" -> 첫번째 검색된 카메라
+    // cameraName = "Basler acA1300-60gm SERIALNUMBER" -> 특정 카메라의 Freindly name
+    camera->open(std::string cameraName);
+
+    // 촬영
+    // frameCnt = 0 -> 연속 촬영
+    // frameCnt = NUM -> 정해진 수 촬영
+    camera->grab(size_t frameCnt);
 
     // 이미지 프레임 수신 콜백
     camera->onGrabbed([&](const CPylonImage& pylonImage, size_t frameCnt) {
@@ -93,5 +97,6 @@ int main() {
 ## 문의
 본 프로젝트는 지속적으로 업데이트되지만 **보증하지 않습니다**.  
 문의/버그/제안은 **이 저장소의 Issues**에 등록할 수 있습니다.
+
 
 
