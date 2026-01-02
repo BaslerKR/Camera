@@ -45,6 +45,7 @@ int main() {
     // 인자 미지정: 검색된 첫 번째 카메라에 연결
     // 인자 지정: FriendlyName 일치 카메라에 연결
     camera->open(); 
+    camera->grab();
 
     // 이미지 프레임 수신 콜백
     camera->onGrabbed([&](const CPylonImage& pylonImage, size_t frameCnt) {
@@ -68,10 +69,8 @@ int main() {
         // 또는 본 프로젝트의 Utility/Qt/QCameraWidget.h 참고
     });
 
-    // 필요 시 그랩 시작/정지 등의 제어를 수행
-    // camera->startGrabbing();
     // ...
-    // camera->stopGrabbing();
+    camera->stop();
 
     return 0;
 }
@@ -94,4 +93,5 @@ int main() {
 ## 문의
 본 프로젝트는 지속적으로 업데이트되지만 **보증하지 않습니다**.  
 문의/버그/제안은 **이 저장소의 Issues**에 등록할 수 있습니다.
+
 
