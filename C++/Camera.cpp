@@ -122,32 +122,37 @@ void Camera::grab(size_t frame){
         if(_isRunning.load(std::memory_order_acquire)) return;
         if(_thread.joinable()) _thread.join();
 
-        _currentCamera.MaxNumBuffer = 5;
-        _currentCamera.StartGrabbing(GrabStrategy_LatestImageOnly, GrabLoop_ProvidedByUser);
+        bool triggerMode = _currentCamera.TriggerMode.GetValue() == Basler_UniversalCameraParams::TriggerModeEnums::TriggerMode_On;
+        if(triggerMode){
+            _currentCamera.MaxNumBuffer = 30;
+            _currentCamera.StartGrabbing(GrabStrategy_OneByOne, GrabLoop_ProvidedByUser);
+        }else{
+            _currentCamera.MaxNumBuffer = 5;
+            _currentCamera.StartGrabbing(GrabStrategy_LatestImageOnly, GrabLoop_ProvidedByUser);
+        }
 
         _isRunning.store(true, std::memory_order_release);
         _frameTarget.store(frame, std::memory_order_release);
         _frameSeq.store(0, std::memory_order_release);
         _permits.store(1, std::memory_order_release);
 
-        _thread = std::thread([this]{
+        _thread = std::thread([=]{
             try{
                 CGrabResultPtr grabResult;
                 size_t delivered = 0;
 
                 while(_isRunning.load(std::memory_order_acquire) && _currentCamera.IsGrabbing()){
-                    // Waiting the call of ready()
-                    {
-                        std::unique_lock<std::mutex> lock(_permitMutex);
-                        _permitCondition.wait(lock, [this]{
-                            return !_isRunning.load(std::memory_order_acquire) || _permits.load(std::memory_order_acquire) > 0;
-                        });
-
-                        if (!_isRunning.load(std::memory_order_acquire)) break;
-                    }
                     if(_currentCamera.RetrieveResult(1000, grabResult, Pylon::TimeoutHandling_Return)){
                         if(grabResult->GrabSucceeded()){
-                            _permits.fetch_sub(1, std::memory_order_acq_rel);
+                            if(!triggerMode){
+                                std::unique_lock<std::mutex> lock(_permitMutex);
+                                _permitCondition.wait(lock, [this]{
+                                    return !_isRunning.load(std::memory_order_acquire) || _permits.load(std::memory_order_acquire) > 0;
+                                });
+
+                                if (!_isRunning.load(std::memory_order_acquire)) break;
+                                _permits.fetch_sub(1, std::memory_order_acq_rel);
+                            }
 
                             CPylonImage image;
                             image.AttachGrabResultBuffer(grabResult);
