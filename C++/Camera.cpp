@@ -19,7 +19,7 @@ void Camera::onCameraStatus(StatusCallback cb)
 
 bool Camera::open(string cameraName){
     try{
-        CameraSystem::syslog("Try to open " + cameraName + ".");
+        CameraSystem::syslog("Try to open " + (cameraName=="" ? "any one of the cameras on this system" : cameraName) + ".");
         _currentCamera.Attach(_system->createDevice(cameraName), Cleanup_Delete);
         _currentCamera.Open();
 
