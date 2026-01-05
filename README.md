@@ -39,6 +39,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC Camera)
 
 int main() {
     CameraSystem system;
+    system.updateCameraList();
     auto camera = system.addCamera();   // 보유 카메라 중 하나를 시스템에 추가
 
     // 카메라 연결
@@ -79,6 +80,46 @@ int main() {
     return 0;
 }
 ```
+### 카메라 인스턴스 생성
+모든 카메라들은 `CameraSystem`Class에서 관리됩니다.
+연결에 필요한 카메라 개수만큼 아래의 코드로 Camera를 생성합니다. 
+```cpp
+CameraSystem system;
+system.addCamera();
+```
+### 연결 가능한 리스트 업데이트
+`CameraSystem`클래스를 생성한 후에는 명시적으로 카메라 리스트를 업데이트 합니다.
+```cpp
+system.updateCameraList();
+```
+또는 프로그램 실행 후 카메라의 연결 상태가 바뀐 경우(추가, 제거 등) `Camera`클래스에서 아래 함수를 호출하여 리스트를 업데이트할 수 있습니다.
+```cpp
+// auto camera = system.addCamera(); 이미 선언되어 있는 경우에는 제외
+camera->getUpdatedCameraList();
+```
+
+### 카메라 인스턴스에서 카메라 연결
+```cpp
+// auto camera = system.addCamera(); 이미 선언되어 있는 경우에는 제외
+// 카메라의 FriendlyName을 매개변수로 입력합니다.
+camera.open("Basler acA1300-60gm (24070434)");
+// 또는 시스템에 연결된 아무 카메라나 연결하고자 하는 경우
+camera.open();
+```
+
+### 카메라 동작
+```cpp
+// 카메라 연결 후
+// 연속 취득 모드 (Continuous Grab)
+camera.grab();
+// 또는 일정한 프레임 수 획득 (예로 10장)
+camera.grab(10);
+// 카메라 동작 정지
+camera.stop();
+
+
+```
+
 
 ---
 
@@ -97,6 +138,7 @@ int main() {
 ## 문의
 본 프로젝트는 지속적으로 업데이트되지만 **보증하지 않습니다**.  
 문의/버그/제안은 **이 저장소의 Issues**에 등록할 수 있습니다.
+
 
 
 
