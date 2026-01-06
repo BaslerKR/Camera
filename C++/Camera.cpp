@@ -39,12 +39,12 @@ bool Camera::open(string cameraName){
                 try{
                     String_t nodeName = child->GetName();
                     _currentCamera.RegisterCameraEventHandler(this, nodeName, _allottedNumber, ERegistrationMode::RegistrationMode_Append, ECleanup::Cleanup_None);
-                }catch(const GenericException &e){ CameraSystem::syslog(e.what(),true); }
+                }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
             }
         }
         return true;
     }catch(const GenericException &e){
-CameraSystem::syslog(e.what(),true);
+CameraSystem::syslog(e.GetDescription(),true);
     }
     return false;
 }
@@ -53,7 +53,7 @@ bool Camera::isOpened()
 {
     try{
         return _currentCamera.IsOpen();
-    }catch(const GenericException &e){ CameraSystem::syslog(e.what(),true); }
+    }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
     return false;
 }
 
@@ -62,7 +62,7 @@ void Camera::close(){
         _currentCamera.Close();
         _currentCamera.DetachDevice();
         _currentCamera.DestroyDevice();
-    }catch(const GenericException &e){ CameraSystem::syslog(e.what(),true); }
+    }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
 }
 
 size_t Camera::addObserver(GrabCallback cb)
@@ -170,11 +170,11 @@ void Camera::grab(size_t frame){
                     }
                 }
                 if(_currentCamera.IsGrabbing()) _currentCamera.StopGrabbing();
-            }catch(const GenericException &e){ CameraSystem::syslog(e.what(),true); }
+            }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
             _isRunning.store(false, std::memory_order_release);
             _permitCondition.notify_all();
         });
-    }catch(const GenericException &e){ CameraSystem::syslog(e.what(),true); }
+    }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
 }
 
 void Camera::stop(){
@@ -183,7 +183,7 @@ void Camera::stop(){
         _permitCondition.notify_all();
 
         if(_thread.joinable()) _thread.join();
-    }catch(const GenericException &e){ CameraSystem::syslog(e.what(),true); }
+    }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
 }
 
 std::vector<string> Camera::getUpdatedCameraList()
