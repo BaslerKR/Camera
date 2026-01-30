@@ -12,8 +12,7 @@
 #include <QStatusBar>
 #include <QCheckBox>
 #include <QLineEdit>
-
-#include "CameraSystem.h"
+#include "Camera.h"
 
 class QCameraWidget : public QWidget
 {
