@@ -6,7 +6,7 @@ CameraSystem::CameraSystem(){
 }
 
 CameraSystem::~CameraSystem(){
-    Pylon::PylonTerminate();
+    PylonTerminate();
 }
 
 void CameraSystem::updateCameraList(){

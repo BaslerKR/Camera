@@ -99,6 +99,16 @@ inline QImage convertPylonImageToQImage(Pylon::CPylonImage pylonImg){
     case Pylon::PixelType_Data32f:
     case Pylon::PixelType_Data64f:
     case Pylon::PixelType_Error8:
+    case Pylon::PixelType_BiColorRGBG8:
+    case Pylon::PixelType_BiColorBGRG8:
+    case Pylon::PixelType_BiColorRGBG10:
+    case Pylon::PixelType_BiColorRGBG10p:
+    case Pylon::PixelType_BiColorBGRG10:
+    case Pylon::PixelType_BiColorBGRG10p:
+    case Pylon::PixelType_BiColorRGBG12:
+    case Pylon::PixelType_BiColorRGBG12p:
+    case Pylon::PixelType_BiColorBGRG12:
+    case Pylon::PixelType_BiColorBGRG12p:
 #endif
         break;
     }
