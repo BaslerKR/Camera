@@ -51,6 +51,10 @@ endif()
 
 # pylon Loading
 # Locate the cmake find module for pylon ...
+
+if(POLICY CMP0144)
+    cmake_policy(SET CMP0144 NEW)
+endif()
 if(NOT pylon_FOUND)
     find_path(pylon_cmake Findpylon.cmake
         HINTS "$ENV{PYLON_DEV_DIR}/lib/cmake"
