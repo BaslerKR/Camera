@@ -23,26 +23,17 @@ add_library(${PROJECT_NAME} STATIC ${HEADERS} ${SOURCES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 find_package(QT NAMES Qt6 Qt5 QUIET)
-if(Qt6_FOUND)
-    find_package(Qt${QT_VERSION_MAJOR} QUIET COMPONENTS Core Gui Widgets)
+if(QT_FOUND)
+    find_package(Qt${QT_VERSION_MAJOR} QUIET COMPONENTS Core Gui Widgets Xml)
     message(STATUS "[${PROJECT_NAME}] Configuring for Qt6")
     target_sources(${PROJECT_NAME} PRIVATE ${QT_HEADERS} ${QT_SOURCES})
     target_link_libraries(${PROJECT_NAME} PUBLIC
         Qt${QT_VERSION_MAJOR}::Core
         Qt${QT_VERSION_MAJOR}::Gui
         Qt${QT_VERSION_MAJOR}::Widgets
+        Qt${QT_VERSION_MAJOR}::Xml
     )
-    message(STATUS "[${PROJECT_NAME}] QtConverter.h features will be enabled for users")
-elseif(Qt5_FOUND)
-    find_package(Qt${QT_VERSION_MAJOR} QUIET COMPONENTS Core Gui Widgets)
-    message(STATUS "[${PROJECT_NAME}] Configuring for Qt5")
-    target_sources(${PROJECT_NAME} PRIVATE ${QT_HEADERS} ${QT_SOURCES})
-    target_link_libraries(${PROJECT_NAME} PUBLIC
-        Qt${QT_VERSION_MAJOR}::Core
-        Qt${QT_VERSION_MAJOR}::Gui
-        Qt${QT_VERSION_MAJOR}::Widgets
-    )
-    message(STATUS "[${PROJECT_NAME}] QtConverter.h features will be enabled for users")
+message(STATUS "[${PROJECT_NAME}] QtConverter.h features will be enabled for users")
 else()
     message(STATUS "[${PROJECT_NAME}] Qt Not Found")
     message(STATUS "[${PROJECT_NAME}] QtConverter.h features will be disabled")
