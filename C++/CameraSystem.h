@@ -13,15 +13,16 @@ public:
 
     void updateCameraList();
     std::vector<std::string> getCameraList();
-    bool isAccesible(std::string camera);
-    const CDeviceInfo getCameraInfo(std::string cameraName);
+    bool isAccessible(const std::string &camera);
+
+    CDeviceInfo getCameraInfo(const std::string &cameraName);
 
     Camera* addCamera();
     void removeCamera(Camera* camera);
-    Camera* getCamera(int allottedNumber);
-    IPylonDevice *createDevice(std::string cameraName="");
+    Camera* getCamera(int allottedNumber) const;
+    IPylonDevice *createDevice(const std::string &cameraName="");
 
-    static void syslog(std::string message, bool warning=false);
+    static void syslog(const std::string &message, bool warning=false);
 
 private:
     CTlFactory *_tlFactory = nullptr;

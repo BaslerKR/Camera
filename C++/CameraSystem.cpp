@@ -23,22 +23,22 @@ void CameraSystem::updateCameraList(){
     }
 }
 
-std::vector<string> CameraSystem::getCameraList(){
+std::vector<string> CameraSystem::getCameraList() {
     std::vector<std::string> list;
     try{
         for(auto &cur : _devices)
-            list.push_back(cur.GetFriendlyName().c_str());
-    }catch(const GenericException &e){
+            list.emplace_back(cur.GetFriendlyName().c_str());
+    }catch(const GenericException &e) {
         syslog(e.what(), true);
     }
     return list;
 }
 
-bool CameraSystem::isAccesible(string camera){
+bool CameraSystem::isAccessible(const string &camera){
     return _tlFactory->IsDeviceAccessible(getCameraInfo(camera));
 }
 
-const CDeviceInfo CameraSystem::getCameraInfo(string cameraName){
+CDeviceInfo CameraSystem::getCameraInfo(const string &cameraName) {
     try{
         syslog("Searching for the device information of " + cameraName + "...");
         for(auto &cur:_devices){
@@ -51,7 +51,7 @@ const CDeviceInfo CameraSystem::getCameraInfo(string cameraName){
         syslog(e.what(), true);
     }
     syslog("No matched information found. ", true);
-    return CDeviceInfo();
+    return {};
 }
 
 Camera *CameraSystem::addCamera()
@@ -71,16 +71,15 @@ void CameraSystem::removeCamera(Camera *camera)
     updateCameraList();
 }
 
-Camera *CameraSystem::getCamera(int allottedNumber)
-{
+Camera *CameraSystem::getCamera(const int allottedNumber) const {
     if(_cameraList.size() <= allottedNumber) return nullptr;
     else return _cameraList.at(allottedNumber);
 }
 
-IPylonDevice* CameraSystem::createDevice(string cameraName)
+IPylonDevice* CameraSystem::createDevice(const string &cameraName)
 {
-    auto instance = &_tlFactory->GetInstance();
-    if(cameraName=="") return instance->CreateFirstDevice();
+    const auto instance = &_tlFactory->GetInstance();
+    if(cameraName.empty()) return instance->CreateFirstDevice();
 
     auto cameraInfo = getCameraInfo(cameraName);
     auto device = instance->CreateDevice(cameraInfo);
@@ -88,7 +87,7 @@ IPylonDevice* CameraSystem::createDevice(string cameraName)
     return device;
 }
 
-void CameraSystem::syslog(string message, bool warning)
+void CameraSystem::syslog(const string &message, const bool warning)
 {
     if(!warning) cout << "[Camera System] " << message << endl;
     else cerr << "[Camera System] " << message << endl;
