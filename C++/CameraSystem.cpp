@@ -40,7 +40,7 @@ bool CameraSystem::isAccesible(string camera){
 
 const CDeviceInfo CameraSystem::getCameraInfo(string cameraName){
     try{
-        syslog("Searching the device information of " + cameraName + "...");
+        syslog("Searching for the device information of " + cameraName + "...");
         for(auto &cur:_devices){
             if(cameraName == cur.GetFriendlyName().c_str()){
                 syslog("Matched information found.");
@@ -50,7 +50,7 @@ const CDeviceInfo CameraSystem::getCameraInfo(string cameraName){
     }catch(const GenericException &e){
         syslog(e.what(), true);
     }
-    syslog("Not matched information found. ", true);
+    syslog("No matched information found. ", true);
     return CDeviceInfo();
 }
 
