@@ -1,7 +1,7 @@
 #include "Camera.h"
 #include "CameraSystem.h"
 
-Camera::Camera(CameraSystem *parent, int allottedNumber) : _system(parent), _allottedNumber(allottedNumber)
+Camera::Camera(CameraSystem *parent, const int allottedNumber) : _system(parent), _allottedNumber(allottedNumber)
 {
     _currentCamera.RegisterConfiguration(this, RegistrationMode_ReplaceAll, Pylon::Cleanup_None);
 }
@@ -17,9 +17,9 @@ void Camera::onCameraStatus(StatusCallback cb)
     _scb = std::move(cb);
 }
 
-bool Camera::open(string cameraName){
+bool Camera::open(const string& cameraName){
     try{
-        CameraSystem::syslog("Try to open " + (cameraName=="" ? "any one of the cameras on this system" : cameraName) + ".");
+        CameraSystem::syslog("Try to open " + (cameraName.empty() ? "any one of the cameras on this system" : cameraName) + ".");
         _currentCamera.Attach(_system->createDevice(cameraName), Cleanup_Delete);
         _currentCamera.Open();
 
@@ -49,8 +49,7 @@ CameraSystem::syslog(e.GetDescription(),true);
     return false;
 }
 
-bool Camera::isOpened()
-{
+bool Camera::isOpened() const {
     try{
         return _currentCamera.IsOpen();
     }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
@@ -74,7 +73,7 @@ size_t Camera::addObserver(GrabCallback cb)
     return id;
 }
 
-bool Camera::removeObserver(size_t id)
+bool Camera::removeObserver(const size_t id)
 {
     std::lock_guard<std::mutex> lock(_observerMutex);
     return _observers.erase(id) > 0;
@@ -116,7 +115,7 @@ void Camera::dispatchToObservers(const CPylonImage &image, size_t frame)
     }
 }
 
-void Camera::grab(size_t frame){
+void Camera::grab(const size_t frames){
     try{
         if(!_currentCamera.IsOpen()) return;
         if(_isRunning.load(std::memory_order_acquire)) return;
@@ -132,7 +131,7 @@ void Camera::grab(size_t frame){
         }
 
         _isRunning.store(true, std::memory_order_release);
-        _frameTarget.store(frame, std::memory_order_release);
+        _frameTarget.store(frames, std::memory_order_release);
         _frameSeq.store(0, std::memory_order_release);
         _permits.store(1, std::memory_order_release);
 
@@ -186,8 +185,7 @@ void Camera::stop(){
     }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
 }
 
-std::vector<string> Camera::getUpdatedCameraList()
-{
+std::vector<string> Camera::getUpdatedCameraList() const {
     _system->updateCameraList();
     return _system->getCameraList();
 }
@@ -201,7 +199,7 @@ void Camera::onNodeUpdated(NodeCallback cb)
     _ncb = std::move(cb);
 }
 
-GenApi::INode *Camera::getNode(string name){
+GenApi::INode *Camera::getNode(const string &name){
     return _currentCamera.GetNodeMap().GetNode(name.c_str());
 }
 
