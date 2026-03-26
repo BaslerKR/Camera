@@ -16,8 +16,8 @@ class Camera : public Pylon::CConfigurationEventHandler,
                public Pylon::CCameraEventHandler
 {
 public:
-    Camera(CameraSystem* parent, int allottedNumber=0);
-    ~Camera();
+    explicit Camera(CameraSystem* parent, int allottedNumber=0);
+    ~Camera() override;
 
     enum Status{
         GrabbingStatus,
@@ -26,8 +26,8 @@ public:
     using StatusCallback = std::function<void(Status status, bool on)>;
     void onCameraStatus(StatusCallback cb);
 
-    bool open(std::string cameraName="");
-    bool isOpened();
+    bool open(const std::string& cameraName="");
+    bool isOpened() const;
     void close();
     std::string getConnectedCameraName(){ return _connectedCameraName; }
 
@@ -44,19 +44,19 @@ public:
     void grab(size_t frames=0);
     void stop();
 
-    std::vector<std::string> getUpdatedCameraList();
-    GenApi::INode* getNode(std::string name);
+    std::vector<std::string> getUpdatedCameraList() const;
+    GenApi::INode* getNode(const std::string &name);
     GenApi::INodeMap& getNodeMap();
 
     using NodeCallback = std::function<void(GenApi::INode*)>;
     void onNodeUpdated(NodeCallback cb);
 
-    CameraSystem* getSystem(){ return _system; }
+    CameraSystem* getSystem() const { return _system; }
 
 private:
     CameraSystem *_system;
     CBaslerUniversalInstantCamera _currentCamera;
-    std::string _connectedCameraName = "";
+    std::string _connectedCameraName;
     int _allottedNumber = 0;
 
     std::thread _thread;
@@ -79,18 +79,18 @@ private:
 
 protected:
     // Pylon::CConfigurationEventHandler functions
-    virtual void OnAttached(Pylon::CInstantCamera& camera);
-    virtual void OnDetached(Pylon::CInstantCamera& camera);
-    virtual void OnDestroyed(Pylon::CInstantCamera& camera);
-    virtual void OnOpened(Pylon::CInstantCamera& camera);
-    virtual void OnClosed(Pylon::CInstantCamera& camera);
-    virtual void OnGrabStarted(Pylon::CInstantCamera& camera);
-    virtual void OnGrabStopped(Pylon::CInstantCamera& camera);
-    virtual void OnGrabError(Pylon::CInstantCamera& camera, const char* errorMessage){}
-    virtual void OnCameraDeviceRemoved(Pylon::CInstantCamera& camera);
+    void OnAttached(Pylon::CInstantCamera& camera) override;
+    void OnDetached(Pylon::CInstantCamera& camera) override;
+    void OnDestroyed(Pylon::CInstantCamera& camera) override;
+    void OnOpened(Pylon::CInstantCamera& camera) override;
+    void OnClosed(Pylon::CInstantCamera& camera) override;
+    void OnGrabStarted(Pylon::CInstantCamera& camera) override;
+    void OnGrabStopped(Pylon::CInstantCamera& camera) override;
+    void OnGrabError(Pylon::CInstantCamera& camera, const char* errorMessage) override {}
+    void OnCameraDeviceRemoved(Pylon::CInstantCamera& camera) override;
 
     // Pylon::CCameraEventHandler function
-    virtual void OnCameraEvent(Pylon::CInstantCamera& camera, intptr_t userProvidedId, GenApi::INode* pNode);
+    void OnCameraEvent(Pylon::CInstantCamera& camera, intptr_t userProvidedId, GenApi::INode* pNode) override;
 
 };
 
