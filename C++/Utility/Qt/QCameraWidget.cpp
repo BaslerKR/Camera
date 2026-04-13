@@ -4,6 +4,8 @@
 #include <QAction>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QMetaObject>
+#include <QPointer>
 
 QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent), _camera(camera)
 {
@@ -41,65 +43,6 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
         _toolGrabLive->setIcon(icon);
     }
 
-    // Configure the details of toolbuttons
-    connect(_toolRefresh, &QToolButton::clicked, this, [=]{
-        _cameraListComboBox->clear();
-        for(const auto &camera: _camera->getUpdatedCameraList()){
-            _cameraListComboBox->addItem(camera.c_str());
-        }
-        if(_camera->isOpened()) _cameraListComboBox->setCurrentText(_camera->getConnectedCameraName().c_str());
-    });
-    _camera->onCameraStatus([=](Camera::Status status, bool on){
-        switch(status){
-        case Camera::GrabbingStatus:{
-            if(on){ // Grabbing started
-                QSignalBlocker grabbingBlock(_toolGrabLive);
-                _toolGrabLive->setChecked(true);
-            }else{ // Grabbing stopped
-                QSignalBlocker grabbingBlock(_toolGrabLive);
-                _toolGrabLive->setChecked(false);
-            }
-        }break;
-        case Camera::ConnectionStatus:{
-            QSignalBlocker connectBlock(_toolConnect);
-            _toolConnect->setChecked(on);
-
-            _cameraListComboBox->setEnabled(!on);
-            _toolRefresh->setEnabled(!on);
-            _toolGrabOne->setEnabled(on);
-            _toolGrabLive->setEnabled(on);
-
-            if(on){ // Camera Connected
-                generateFeaturesWidget(_camera->getNodeMap());
-            }else{ // Camera Disconnected
-                _toolGrabLive->setChecked(false);
-                _featuresWidget->clear();
-            }
-            if(!on) emit _toolRefresh->clicked();
-        }break;
-        }
-    });
-    connect(_toolConnect, &QToolButton::toggled, this, [=](bool toggled){
-        // Request to open the camera
-        if(toggled){
-            if(!_camera->open(_cameraListComboBox->currentText().toStdString())){
-                QSignalBlocker connectBlock(_toolConnect);
-                _toolConnect->setChecked(false);
-            }
-        }else{
-            _camera->close();
-        }
-    });
-    connect(_toolGrabOne, &QToolButton::clicked, this, [=]{
-        // Request to start a single grabbing
-        _camera->grab(1);
-    });
-    connect(_toolGrabLive, &QToolButton::toggled, this, [=](bool toggled){
-        // Request to start a continuous grabbing
-        if(toggled) _camera->grab();
-        else _camera->stop();
-    });
-
     QHBoxLayout *cameraListLayout = new QHBoxLayout;
     cameraListLayout->addWidget(_cameraListComboBox);
     cameraListLayout->addWidget(_toolRefresh);
@@ -130,85 +73,170 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     _statusBar->setContentsMargins(0,0,0,0);
     layout->addWidget(_statusBar);
     setLayout(layout);
+
+    if(!_camera){
+        _cameraListComboBox->setEnabled(false);
+        _toolRefresh->setEnabled(false);
+        _toolConnect->setEnabled(false);
+        _toolGrabOne->setEnabled(false);
+        _toolGrabLive->setEnabled(false);
+        _statusBar->showMessage("Camera instance is not configured.", 0);
+        return;
+    }
+
+    QPointer<QCameraWidget> guard(this);
+
+    // Configure the details of toolbuttons
+    connect(_toolRefresh, &QToolButton::clicked, this, [=]{
+        _cameraListComboBox->clear();
+        for(const auto &camera: _camera->getUpdatedCameraList()){
+            _cameraListComboBox->addItem(camera.c_str());
+        }
+        if(_camera->isOpened()) _cameraListComboBox->setCurrentText(_camera->getConnectedCameraName().c_str());
+    });
+    _statusObserverId = _camera->addStatusObserver([guard](Camera::Status status, bool on){
+        if(!guard) return;
+        QMetaObject::invokeMethod(guard, [guard, status, on]{
+            if(!guard) return;
+            switch(status){
+            case Camera::GrabbingStatus:{
+                if(on){ // Grabbing started
+                    QSignalBlocker grabbingBlock(guard->_toolGrabLive);
+                    guard->_toolGrabLive->setChecked(true);
+                }else{ // Grabbing stopped
+                    QSignalBlocker grabbingBlock(guard->_toolGrabLive);
+                    guard->_toolGrabLive->setChecked(false);
+                }
+            }break;
+            case Camera::ConnectionStatus:{
+                QSignalBlocker connectBlock(guard->_toolConnect);
+                guard->_toolConnect->setChecked(on);
+
+                guard->_cameraListComboBox->setEnabled(!on);
+                guard->_toolRefresh->setEnabled(!on);
+                guard->_toolGrabOne->setEnabled(on);
+                guard->_toolGrabLive->setEnabled(on);
+
+                if(on){ // Camera Connected
+                    guard->generateFeaturesWidget(guard->_camera->getNodeMap());
+                }else{ // Camera Disconnected
+                    guard->_toolGrabLive->setChecked(false);
+                    guard->_featuresWidget->clear();
+                }
+                if(!on) emit guard->_toolRefresh->clicked();
+            }break;
+            }
+        }, Qt::QueuedConnection);
+    });
+    connect(_toolConnect, &QToolButton::toggled, this, [=](bool toggled){
+        // Request to open the camera
+        if(toggled){
+            if(!_camera->open(_cameraListComboBox->currentText().toStdString())){
+                QSignalBlocker connectBlock(_toolConnect);
+                _toolConnect->setChecked(false);
+            }
+        }else{
+            _camera->close();
+        }
+    });
+    connect(_toolGrabOne, &QToolButton::clicked, this, [=]{
+        // Request to start a single grabbing
+        _camera->grab(1);
+    });
+    connect(_toolGrabLive, &QToolButton::toggled, this, [=](bool toggled){
+        // Request to start a continuous grabbing
+        if(toggled) _camera->grab();
+        else _camera->stop();
+    });
+
     emit _toolRefresh->clicked();
 
-    camera->onNodeUpdated([=](GenApi::INode* node){
-        auto items = _featuresWidget->findItems(node->GetDisplayName().c_str(), Qt::MatchFlag::MatchRecursive);
-        if(items.size() ==0){
-            qDebug() << "Need to create something to fill" << node->GetDisplayName().c_str();
-        }
-        for(const auto item : items){
-            auto cur = _featuresWidget->itemWidget(item, 1);
-            switch(node->GetPrincipalInterfaceType()){
-            case GenApi::intfIInteger:{
-                if(auto* spinBox = qobject_cast<QSpinBox*>(cur)){
-                    GenApi::CIntegerPtr ptr = node;
-
-                    QSignalBlocker block(spinBox);
-                    spinBox->setEnabled(GenApi::IsWritable(ptr));
-                    spinBox->setRange(ptr->GetMin(), ptr->GetMax());
-                    spinBox->setValue(ptr->GetValue());
-                }
-            } break;
-            case GenApi::intfIFloat:{
-                if(auto* spinBox = qobject_cast<QDoubleSpinBox*>(cur)){
-                    GenApi::CFloatPtr ptr = node;
-
-                    QSignalBlocker block(spinBox);
-                    spinBox->setEnabled(GenApi::IsWritable(ptr));
-                    spinBox->setRange(ptr->GetMin(), ptr->GetMax());
-                    spinBox->setValue(ptr->GetValue());
-                }
-            } break;
-            case GenApi::intfIBoolean:{
-                if(auto* checkBox = qobject_cast<QCheckBox*>(cur)){
-                    GenApi::CBooleanPtr ptr = node;
-
-                    QSignalBlocker block(checkBox);
-                    checkBox->setEnabled(GenApi::IsWritable(ptr));
-                    checkBox->setChecked(ptr->GetValue());
-                }
-            } break;
-            case GenApi::intfIString:{
-                if(auto *lineEdit = qobject_cast<QLineEdit*>(cur)){
-                    GenApi::CStringPtr ptr = node;
-
-                    QSignalBlocker block(lineEdit);
-                    lineEdit->setEnabled(GenApi::IsWritable(ptr));
-                    lineEdit->setText(ptr->GetValue().c_str());
-                }
-            } break;
-            case GenApi::intfIEnumeration:{
-                if(auto *comboBox = qobject_cast<QComboBox*>(cur)){
-                    GenApi::CEnumerationPtr ptr = node;
-
-                    QSignalBlocker block(comboBox);
-                    comboBox->setEnabled(GenApi::IsWritable(ptr));
-                    comboBox->setCurrentText(ptr->GetCurrentEntry()->GetNode()->GetDisplayName().c_str());
-                }
-            } break;
-            case GenApi::intfICommand:{
-                if(auto *button = qobject_cast<QPushButton*>(cur)){
-                    GenApi::CCommandPtr ptr = node;
-
-                    button->setEnabled(GenApi::IsWritable(ptr));
-                }
-            } break;
-            case GenApi::intfIRegister:
-            case GenApi::intfICategory:
-            case GenApi::intfIEnumEntry:
-            case GenApi::intfIPort:
-            case GenApi::intfIValue:
-            case GenApi::intfIBase:
-                break;
+    _camera->onNodeUpdated([guard](GenApi::INode* node){
+        if(!guard) return;
+        QMetaObject::invokeMethod(guard, [guard, node]{
+            if(!guard) return;
+            auto items = guard->_featuresWidget->findItems(node->GetDisplayName().c_str(), Qt::MatchFlag::MatchRecursive);
+            if(items.size() ==0){
+                qDebug() << "Need to create something to fill" << node->GetDisplayName().c_str();
             }
-        }
+            for(const auto item : items){
+                auto cur = guard->_featuresWidget->itemWidget(item, 1);
+                switch(node->GetPrincipalInterfaceType()){
+                case GenApi::intfIInteger:{
+                    if(auto* spinBox = qobject_cast<QSpinBox*>(cur)){
+                        GenApi::CIntegerPtr ptr = node;
+
+                        QSignalBlocker block(spinBox);
+                        spinBox->setEnabled(GenApi::IsWritable(ptr));
+                        spinBox->setRange(ptr->GetMin(), ptr->GetMax());
+                        spinBox->setValue(ptr->GetValue());
+                    }
+                } break;
+                case GenApi::intfIFloat:{
+                    if(auto* spinBox = qobject_cast<QDoubleSpinBox*>(cur)){
+                        GenApi::CFloatPtr ptr = node;
+
+                        QSignalBlocker block(spinBox);
+                        spinBox->setEnabled(GenApi::IsWritable(ptr));
+                        spinBox->setRange(ptr->GetMin(), ptr->GetMax());
+                        spinBox->setValue(ptr->GetValue());
+                    }
+                } break;
+                case GenApi::intfIBoolean:{
+                    if(auto* checkBox = qobject_cast<QCheckBox*>(cur)){
+                        GenApi::CBooleanPtr ptr = node;
+
+                        QSignalBlocker block(checkBox);
+                        checkBox->setEnabled(GenApi::IsWritable(ptr));
+                        checkBox->setChecked(ptr->GetValue());
+                    }
+                } break;
+                case GenApi::intfIString:{
+                    if(auto *lineEdit = qobject_cast<QLineEdit*>(cur)){
+                        GenApi::CStringPtr ptr = node;
+
+                        QSignalBlocker block(lineEdit);
+                        lineEdit->setEnabled(GenApi::IsWritable(ptr));
+                        lineEdit->setText(ptr->GetValue().c_str());
+                    }
+                } break;
+                case GenApi::intfIEnumeration:{
+                    if(auto *comboBox = qobject_cast<QComboBox*>(cur)){
+                        GenApi::CEnumerationPtr ptr = node;
+
+                        QSignalBlocker block(comboBox);
+                        comboBox->setEnabled(GenApi::IsWritable(ptr));
+                        comboBox->setCurrentText(ptr->GetCurrentEntry()->GetNode()->GetDisplayName().c_str());
+                    }
+                } break;
+                case GenApi::intfICommand:{
+                    if(auto *button = qobject_cast<QPushButton*>(cur)){
+                        GenApi::CCommandPtr ptr = node;
+
+                        button->setEnabled(GenApi::IsWritable(ptr));
+                    }
+                } break;
+                case GenApi::intfIRegister:
+                case GenApi::intfICategory:
+                case GenApi::intfIEnumEntry:
+                case GenApi::intfIPort:
+                case GenApi::intfIValue:
+                case GenApi::intfIBase:
+                    break;
+                }
+            }
+        }, Qt::QueuedConnection);
     });
 }
 
 QCameraWidget::~QCameraWidget()
 {
-    if(_camera->isOpened()) _camera->close();
+    if(_camera){
+        if(_statusObserverId != 0){
+            _camera->removeStatusObserver(_statusObserverId);
+        }
+        _camera->onNodeUpdated({});
+    }
 }
 
 void QCameraWidget::generateFeaturesWidget(GenApi::INodeMap &nodemap)

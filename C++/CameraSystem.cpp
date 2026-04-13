@@ -1,17 +1,22 @@
 #include "CameraSystem.h"
 
+#include <algorithm>
+
 CameraSystem::CameraSystem(){
     PylonInitialize();
     _tlFactory = &CTlFactory::GetInstance();
 }
 
 CameraSystem::~CameraSystem(){
+    while(!_cameraList.empty()){
+        delete _cameraList.back();
+    }
     PylonTerminate();
 }
 
 void CameraSystem::updateCameraList(){
     try{
-        _cameraList.clear();
+        _devices.clear();
         auto cnt = _tlFactory->EnumerateDevices(_devices);
         syslog("Updated the camera list: " + to_string(cnt) + " Camera(s) found.");
         for(auto i=0; i<_devices.size(); ++i){
