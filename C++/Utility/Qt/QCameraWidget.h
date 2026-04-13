@@ -28,6 +28,7 @@ public:
 
 private:
     Camera *_camera;
+    size_t _statusObserverId = 0;
     QTreeWidget *_featuresWidget;
     QComboBox *_cameraListComboBox;
 

@@ -14,7 +14,30 @@ Camera::~Camera()
 
 void Camera::onCameraStatus(StatusCallback cb)
 {
-    _scb = std::move(cb);
+    std::lock_guard<std::mutex> lock(_statusMutex);
+    _statusObservers.clear();
+    if(cb) _statusObservers.emplace(_nextStatusObserverId++, std::move(cb));
+}
+
+size_t Camera::addStatusObserver(StatusCallback cb)
+{
+    if(!cb) return 0;
+    std::lock_guard<std::mutex> lock(_statusMutex);
+    const size_t id = _nextStatusObserverId++;
+    _statusObservers.emplace(id, std::move(cb));
+    return id;
+}
+
+bool Camera::removeStatusObserver(size_t id)
+{
+    std::lock_guard<std::mutex> lock(_statusMutex);
+    return _statusObservers.erase(id) > 0;
+}
+
+void Camera::clearStatusObservers()
+{
+    std::lock_guard<std::mutex> lock(_statusMutex);
+    _statusObservers.clear();
 }
 
 bool Camera::open(const string& cameraName){
@@ -112,6 +135,21 @@ void Camera::dispatchToObservers(const CPylonImage &image, size_t frame)
     }
     for(auto& cb: cbs){
         if(cb) cb(image, frame);
+    }
+}
+
+void Camera::dispatchStatus(Status status, bool on)
+{
+    std::vector<StatusCallback> callbacks;
+    {
+        std::lock_guard<std::mutex> lock(_statusMutex);
+        callbacks.reserve(_statusObservers.size());
+        for(auto &kv : _statusObservers){
+            callbacks.push_back(kv.second);
+        }
+    }
+    for(auto &cb : callbacks){
+        if(cb) cb(status, on);
     }
 }
 
@@ -216,40 +254,40 @@ void Camera::OnDetached(CInstantCamera &camera){
 void Camera::OnDestroyed(CInstantCamera &camera){
     auto from = "[Info " + to_string(_allottedNumber)  +"] ";
     CameraSystem::syslog(from + "Device destroyed.");
-    if(_scb) _scb(ConnectionStatus, false);
+    dispatchStatus(ConnectionStatus, false);
 }
 
 void Camera::OnOpened(CInstantCamera &camera){
     _connectedCameraName = camera.GetDeviceInfo().GetFriendlyName();
     auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
     CameraSystem::syslog(from + " opened.");
-    if(_scb) _scb(ConnectionStatus, true);
+    dispatchStatus(ConnectionStatus, true);
 }
 
 void Camera::OnClosed(CInstantCamera &camera){
     _connectedCameraName = "";
     auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
     CameraSystem::syslog(from + " closed.");
-    if(_scb) _scb(ConnectionStatus, false);
+    dispatchStatus(ConnectionStatus, false);
 }
 
 void Camera::OnCameraDeviceRemoved(CInstantCamera &camera){
     _connectedCameraName = "";
     auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
     CameraSystem::syslog(from + " removed physically.");
-    if(_scb) _scb(ConnectionStatus, false);
+    dispatchStatus(ConnectionStatus, false);
 }
 
 void Camera::OnGrabStarted(CInstantCamera &camera){
     auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
     CameraSystem::syslog(from + " started grabbing.");
-    if(_scb) _scb(GrabbingStatus, true);
+    dispatchStatus(GrabbingStatus, true);
 }
 
 void Camera::OnGrabStopped(CInstantCamera &camera){
     auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
     CameraSystem::syslog(from + " stopped grabbing.");
-    if(_scb) _scb(GrabbingStatus, false);
+    dispatchStatus(GrabbingStatus, false);
 }
 
 void Camera::OnCameraEvent(CInstantCamera &camera, intptr_t userProvidedId, GenApi::INode *pNode){

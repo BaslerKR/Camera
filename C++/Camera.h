@@ -7,6 +7,7 @@
 #include <functional>
 #include <mutex>
 #include <condition_variable>
+#include <unordered_map>
 
 using namespace Pylon;
 using namespace std;
@@ -25,6 +26,9 @@ public:
     };
     using StatusCallback = std::function<void(Status status, bool on)>;
     void onCameraStatus(StatusCallback cb);
+    size_t addStatusObserver(StatusCallback cb);
+    bool removeStatusObserver(size_t id);
+    void clearStatusObservers();
 
     bool open(const std::string& cameraName="");
     bool isOpened() const;
@@ -62,8 +66,11 @@ private:
     std::thread _thread;
     std::atomic<bool> _isRunning=false;
 
-    StatusCallback _scb;
     NodeCallback _ncb;
+
+    std::mutex _statusMutex;
+    std::unordered_map<size_t, StatusCallback> _statusObservers;
+    std::atomic<size_t> _nextStatusObserverId{1};
 
     std::mutex _observerMutex;
     std::unordered_map<size_t, GrabCallback> _observers;
@@ -75,6 +82,8 @@ private:
 
     std::atomic<size_t> _frameSeq{0};
     std::atomic<size_t> _frameTarget{0};
+
+    void dispatchStatus(Status status, bool on);
 
 
 protected:
