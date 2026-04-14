@@ -22,6 +22,22 @@ set(QT_SOURCES
 add_library(${PROJECT_NAME} STATIC ${HEADERS} ${SOURCES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
+find_package(OpenMP QUIET)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(${PROJECT_NAME} PUBLIC OpenMP::OpenMP_CXX)
+endif()
+
+find_package(PCL QUIET COMPONENTS common)
+if(PCL_FOUND)
+    target_sources(${PROJECT_NAME} PRIVATE
+        Utility/PCL/PCLConverter.h
+        Utility/PCL/PCLConverter.cpp
+    )
+    target_link_libraries(${PROJECT_NAME} PUBLIC ${PCL_LIBRARIES})
+    target_include_directories(${PROJECT_NAME} PUBLIC ${PCL_INCLUDE_DIRS})
+    target_compile_definitions(${PROJECT_NAME} PUBLIC PCL_ENABLED)
+endif()
+
 find_package(QT NAMES Qt6 Qt5 QUIET)
 if(QT_FOUND)
     find_package(Qt${QT_VERSION_MAJOR} QUIET COMPONENTS Core Gui Widgets Xml)
