@@ -1,6 +1,93 @@
 #include "Camera.h"
 #include "CameraSystem.h"
 
+#include <algorithm>
+#include <cctype>
+#include <limits>
+#include <sstream>
+
+namespace {
+
+string toLowerCopy(string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch){
+        return static_cast<char>(std::tolower(ch));
+    });
+    return value;
+}
+
+void enableComponent(GenApi::INodeMap& nodeMap, const char* componentName, const char* pixelFormat = nullptr)
+{
+    auto* componentSelectorNode = nodeMap.GetNode("ComponentSelector");
+    auto* componentEnableNode = nodeMap.GetNode("ComponentEnable");
+    if(!componentSelectorNode || !componentEnableNode) return;
+    if(!GenApi::IsWritable(componentSelectorNode) || !GenApi::IsWritable(componentEnableNode)) return;
+
+    auto componentSelector = Pylon::CEnumParameter(nodeMap, "ComponentSelector");
+    auto componentEnable = Pylon::CBooleanParameter(nodeMap, "ComponentEnable");
+    componentSelector.SetValue(componentName);
+    componentEnable.SetValue(true);
+
+    if(pixelFormat){
+        auto* pixelFormatNode = nodeMap.GetNode("PixelFormat");
+        if(pixelFormatNode && GenApi::IsWritable(pixelFormatNode)){
+            auto pixelFormatParam = Pylon::CEnumParameter(nodeMap, "PixelFormat");
+            pixelFormatParam.TrySetValue(pixelFormat);
+        }
+    }
+}
+
+string componentTypeToString(const Pylon::EComponentType componentType)
+{
+    switch(componentType){
+    case Pylon::ComponentType_Undefined:
+        return "Undefined";
+    case Pylon::ComponentType_Intensity:
+        return "Intensity";
+    case Pylon::ComponentType_Confidence:
+        return "Confidence";
+    case Pylon::ComponentType_Disparity:
+        return "Disparity";
+    case Pylon::ComponentType_Range:
+        return "Range";
+    case Pylon::ComponentType_Reflectance:
+        return "Reflectance";
+    case Pylon::ComponentType_Scatter:
+        return "Scatter";
+    case Pylon::ComponentType_IntensityCombined_STA:
+        return "IntensityCombined_STA";
+    case Pylon::ComponentType_Error_STA:
+        return "Error_STA";
+    case Pylon::ComponentType_RawCombined_STA:
+        return "RawCombined_STA";
+    case Pylon::ComponentType_Calibration_STA:
+        return "Calibration_STA";
+    }
+    return "Unknown";
+}
+
+void log3DComponentLayout(const Pylon::CPylonDataContainer& container, int allottedNumber, const string& cameraName)
+{
+    std::ostringstream oss;
+    oss << "[Info " << allottedNumber << "] " << cameraName << " 3D components:";
+
+    for(size_t i = 0; i < container.GetDataComponentCount(); ++i){
+        const auto component = container.GetDataComponent(i);
+        if(!component.IsValid()) continue;
+
+        oss << " ["
+            << i
+            << ": type=" << componentTypeToString(component.GetComponentType())
+            << ", pixel=" << Pylon::CPixelTypeMapper::GetNameByPixelType(component.GetPixelType())
+            << ", " << component.GetWidth() << "x" << component.GetHeight()
+            << "]";
+    }
+
+    CameraSystem::syslog(oss.str());
+}
+
+}
+
 Camera::Camera(CameraSystem *parent, const int allottedNumber) : _system(parent), _allottedNumber(allottedNumber)
 {
     _currentCamera.RegisterConfiguration(this, RegistrationMode_ReplaceAll, Pylon::Cleanup_None);
@@ -45,6 +132,30 @@ bool Camera::open(const string& cameraName){
         CameraSystem::syslog("Try to open " + (cameraName.empty() ? "any one of the cameras on this system" : cameraName) + ".");
         _currentCamera.Attach(_system->createDevice(cameraName), Cleanup_Delete);
         _currentCamera.Open();
+        _logged3DComponentLayout = false;
+
+        auto& nodeMap = _currentCamera.GetNodeMap();
+        const auto modelName = toLowerCopy(_currentCamera.GetDeviceInfo().GetModelName().c_str());
+
+        if(modelName.find("blaze") != string::npos){
+            enableComponent(nodeMap, "Range", "Coord3D_ABC32f");
+            enableComponent(nodeMap, "Intensity", "Mono16");
+            enableComponent(nodeMap, "Confidence", "Confidence16");
+
+            auto* coordinateSelectorNode = _currentCamera.Scan3dCoordinateSelector.GetNode();
+            auto* invalidDataValueNode = _currentCamera.Scan3dInvalidDataValue.GetNode();
+            if(coordinateSelectorNode && invalidDataValueNode &&
+               GenApi::IsWritable(coordinateSelectorNode) &&
+               GenApi::IsWritable(invalidDataValueNode)){
+                for(const auto* axis : {"CoordinateA", "CoordinateB", "CoordinateC"}){
+                    _currentCamera.Scan3dCoordinateSelector.SetValue(axis);
+                    _currentCamera.Scan3dInvalidDataValue.SetValue(std::numeric_limits<float>::quiet_NaN());
+                }
+            }
+        }else if(modelName.find("stereo ace") != string::npos || modelName.find("sta") != string::npos){
+            enableComponent(nodeMap, "Intensity");
+            enableComponent(nodeMap, "Disparity");
+        }
 
         // Registering event handlers
         GenApi::NodeList_t nodes;
@@ -81,6 +192,7 @@ bool Camera::isOpened() const {
 
 void Camera::close(){
     try{
+        _logged3DComponentLayout = false;
         _currentCamera.Close();
         _currentCamera.DetachDevice();
         _currentCamera.DestroyDevice();
@@ -106,6 +218,35 @@ void Camera::clearObservers()
 {
     std::lock_guard<std::mutex> lock(_observerMutex);
     _observers.clear();
+}
+
+void Camera::on3DGrabbed(Grab3DCallback cb)
+{
+    std::lock_guard<std::mutex> lock(_observer3DMutex);
+    _observers3D.clear();
+
+    if(cb) _observers3D.emplace(_next3DObserverId++, std::move(cb));
+}
+
+size_t Camera::add3DObserver(Grab3DCallback cb)
+{
+    if(!cb) return 0;
+    std::lock_guard<std::mutex> lock(_observer3DMutex);
+    const size_t id = _next3DObserverId++;
+    _observers3D.emplace(id, std::move(cb));
+    return id;
+}
+
+bool Camera::remove3DObserver(const size_t id)
+{
+    std::lock_guard<std::mutex> lock(_observer3DMutex);
+    return _observers3D.erase(id) > 0;
+}
+
+void Camera::clear3DObservers()
+{
+    std::lock_guard<std::mutex> lock(_observer3DMutex);
+    _observers3D.clear();
 }
 
 // For single callback function
@@ -138,6 +279,21 @@ void Camera::dispatchToObservers(const CPylonImage &image, size_t frame)
     }
 }
 
+void Camera::dispatchTo3DObservers(const Pylon::CPylonDataContainer &container, size_t frame)
+{
+    std::vector<Grab3DCallback> cbs;
+    {
+        std::lock_guard<std::mutex> lock(_observer3DMutex);
+        cbs.reserve(_observers3D.size());
+        for(auto &kv : _observers3D){
+            cbs.push_back(kv.second);
+        }
+    }
+    for(auto &cb : cbs){
+        if(cb) cb(container, frame);
+    }
+}
+
 void Camera::dispatchStatus(Status status, bool on)
 {
     std::vector<StatusCallback> callbacks;
@@ -151,6 +307,40 @@ void Camera::dispatchStatus(Status status, bool on)
     for(auto &cb : callbacks){
         if(cb) cb(status, on);
     }
+}
+
+bool Camera::has3DComponents(const Pylon::CGrabResultPtr &grabResult) const
+{
+    if(!grabResult.IsValid()) return false;
+
+    try{
+        const auto container = grabResult->GetDataContainer();
+        const auto count = container.GetDataComponentCount();
+        for(size_t i = 0; i < count; ++i){
+            const auto component = container.GetDataComponent(i);
+            if(!component.IsValid()) continue;
+
+            switch(component.GetComponentType()){
+            case Pylon::ComponentType_Intensity:
+            case Pylon::ComponentType_Confidence:
+            case Pylon::ComponentType_Disparity:
+            case Pylon::ComponentType_Range:
+            case Pylon::ComponentType_Reflectance:
+            case Pylon::ComponentType_Scatter:
+            case Pylon::ComponentType_IntensityCombined_STA:
+            case Pylon::ComponentType_Error_STA:
+            case Pylon::ComponentType_RawCombined_STA:
+            case Pylon::ComponentType_Calibration_STA:
+                return true;
+            case Pylon::ComponentType_Undefined:
+                break;
+            }
+        }
+    }catch(const GenericException &){
+        return false;
+    }
+
+    return false;
 }
 
 void Camera::grab(const size_t frames){
@@ -191,11 +381,19 @@ void Camera::grab(const size_t frames){
                                 _permits.fetch_sub(1, std::memory_order_acq_rel);
                             }
 
-                            CPylonImage image;
-                            image.AttachGrabResultBuffer(grabResult);
-
                             auto seq = _frameSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
-                            dispatchToObservers(image, seq);
+                            if(has3DComponents(grabResult)){
+                                auto container = grabResult->GetDataContainer();
+                                if(!_logged3DComponentLayout){
+                                    log3DComponentLayout(container, _allottedNumber, _currentCamera.GetDeviceInfo().GetFriendlyName().c_str());
+                                    _logged3DComponentLayout = true;
+                                }
+                                dispatchTo3DObservers(container, seq);
+                            }else{
+                                CPylonImage image;
+                                image.AttachGrabResultBuffer(grabResult);
+                                dispatchToObservers(image, seq);
+                            }
 
                             auto target = _frameTarget.load(std::memory_order_acquire);
                             if(target !=0 && ++delivered >= target){

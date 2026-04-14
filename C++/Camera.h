@@ -41,9 +41,16 @@ public:
     size_t addObserver(GrabCallback cb);
     bool removeObserver(size_t id);
     void clearObservers();
+
+    using Grab3DCallback = std::function<void(const Pylon::CPylonDataContainer&, size_t frame)>;
+    void on3DGrabbed(Grab3DCallback cb);
+    size_t add3DObserver(Grab3DCallback cb);
+    bool remove3DObserver(size_t id);
+    void clear3DObservers();
     void ready();
 
     void dispatchToObservers(const CPylonImage& image, size_t frame);
+    void dispatchTo3DObservers(const Pylon::CPylonDataContainer& container, size_t frame);
 
     void grab(size_t frames=0);
     void stop();
@@ -76,14 +83,20 @@ private:
     std::unordered_map<size_t, GrabCallback> _observers;
     std::atomic<size_t> _nextObserverId{1};
 
+    std::mutex _observer3DMutex;
+    std::unordered_map<size_t, Grab3DCallback> _observers3D;
+    std::atomic<size_t> _next3DObserverId{1};
+
     std::mutex _permitMutex;
     std::condition_variable _permitCondition;
     std::atomic<int> _permits{0};
 
     std::atomic<size_t> _frameSeq{0};
     std::atomic<size_t> _frameTarget{0};
+    bool _logged3DComponentLayout = false;
 
     void dispatchStatus(Status status, bool on);
+    bool has3DComponents(const Pylon::CGrabResultPtr& grabResult) const;
 
 
 protected:

@@ -12,6 +12,7 @@
 #include <QStatusBar>
 #include <QCheckBox>
 #include <QLineEdit>
+#include <QTimer>
 #include "Camera.h"
 
 class QCameraWidget : public QWidget
@@ -25,6 +26,11 @@ public:
     void generateChildrenItem(QTreeWidgetItem *parent, GenApi::NodeList_t children);
 
     QWidget *createNodeWidget(GenApi::INode* node);
+    QList<QTreeWidgetItem*> findItemsByNodeName(const QString& nodeName) const;
+    bool refreshNodeWidget(GenApi::INode* node);
+    void scheduleFeaturesRebuild();
+    void collectExpandedNodeNames(QTreeWidgetItem* item, QSet<QString>& expandedNodeNames) const;
+    void restoreExpandedNodeNames(QTreeWidgetItem* item, const QSet<QString>& expandedNodeNames);
 
 private:
     Camera *_camera;
@@ -38,6 +44,7 @@ private:
     QToolButton *_toolGrabLive;
 
     QStatusBar *_statusBar;
+    bool _rebuildScheduled = false;
 };
 #endif
 #endif // QCAMERAWIDGET_H
