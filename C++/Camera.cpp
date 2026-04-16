@@ -8,6 +8,51 @@
 
 namespace {
 
+template<typename Callback>
+using CallbackRegistry = std::unordered_map<size_t, Callback>;
+
+template<typename Callback>
+size_t registerCallback(std::mutex& mutex, CallbackRegistry<Callback>& registry, std::atomic<size_t>& nextId, Callback cb)
+{
+    if(!cb) return 0;
+
+    std::lock_guard<std::mutex> lock(mutex);
+    const size_t id = nextId++;
+    registry.emplace(id, std::move(cb));
+    return id;
+}
+
+template<typename Callback>
+bool deregisterCallback(std::mutex& mutex, CallbackRegistry<Callback>& registry, size_t id)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    return registry.erase(id) > 0;
+}
+
+template<typename Callback>
+void clearCallbacks(std::mutex& mutex, CallbackRegistry<Callback>& registry)
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    registry.clear();
+}
+
+template<typename Callback, typename... Args>
+void dispatchCallbacks(std::mutex& mutex, CallbackRegistry<Callback>& registry, Args&&... args)
+{
+    std::vector<Callback> callbacks;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        callbacks.reserve(registry.size());
+        for(auto& kv : registry){
+            callbacks.push_back(kv.second);
+        }
+    }
+
+    for(auto& cb : callbacks){
+        if(cb) cb(std::forward<Args>(args)...);
+    }
+}
+
 string toLowerCopy(string value)
 {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch){
@@ -99,32 +144,19 @@ Camera::~Camera()
     _system->removeCamera(this);
 }
 
-void Camera::onCameraStatus(StatusCallback cb)
+Camera::CallbackId Camera::registerStatusCallback(StatusCallback cb)
 {
-    std::lock_guard<std::mutex> lock(_statusMutex);
-    _statusObservers.clear();
-    if(cb) _statusObservers.emplace(_nextStatusObserverId++, std::move(cb));
+    return registerCallback(_statusMutex, _statusObservers, _nextStatusObserverId, std::move(cb));
 }
 
-size_t Camera::addStatusObserver(StatusCallback cb)
+bool Camera::deregisterStatusCallback(CallbackId id)
 {
-    if(!cb) return 0;
-    std::lock_guard<std::mutex> lock(_statusMutex);
-    const size_t id = _nextStatusObserverId++;
-    _statusObservers.emplace(id, std::move(cb));
-    return id;
+    return deregisterCallback(_statusMutex, _statusObservers, id);
 }
 
-bool Camera::removeStatusObserver(size_t id)
+void Camera::clearStatusCallbacks()
 {
-    std::lock_guard<std::mutex> lock(_statusMutex);
-    return _statusObservers.erase(id) > 0;
-}
-
-void Camera::clearStatusObservers()
-{
-    std::lock_guard<std::mutex> lock(_statusMutex);
-    _statusObservers.clear();
+    clearCallbacks(_statusMutex, _statusObservers);
 }
 
 bool Camera::open(const string& cameraName){
@@ -199,63 +231,34 @@ void Camera::close(){
     }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
 }
 
-size_t Camera::addObserver(GrabCallback cb)
+Camera::CallbackId Camera::registerGrabCallback(GrabCallback cb)
 {
-    if(!cb) return 0;
-    std::lock_guard<std::mutex> lock(_observerMutex);
-    size_t id = _nextObserverId++;
-    _observers.emplace(id, std::move(cb));
-    return id;
+    return registerCallback(_grabCallbackMutex, _grabCallbacks, _nextGrabCallbackId, std::move(cb));
 }
 
-bool Camera::removeObserver(const size_t id)
+bool Camera::deregisterGrabCallback(const CallbackId id)
 {
-    std::lock_guard<std::mutex> lock(_observerMutex);
-    return _observers.erase(id) > 0;
+    return deregisterCallback(_grabCallbackMutex, _grabCallbacks, id);
 }
 
-void Camera::clearObservers()
+void Camera::clearGrabCallbacks()
 {
-    std::lock_guard<std::mutex> lock(_observerMutex);
-    _observers.clear();
+    clearCallbacks(_grabCallbackMutex, _grabCallbacks);
 }
 
-void Camera::on3DGrabbed(Grab3DCallback cb)
+Camera::CallbackId Camera::registerGrab3DCallback(Grab3DCallback cb)
 {
-    std::lock_guard<std::mutex> lock(_observer3DMutex);
-    _observers3D.clear();
-
-    if(cb) _observers3D.emplace(_next3DObserverId++, std::move(cb));
+    return registerCallback(_grab3DCallbackMutex, _grab3DCallbacks, _nextGrab3DCallbackId, std::move(cb));
 }
 
-size_t Camera::add3DObserver(Grab3DCallback cb)
+bool Camera::deregisterGrab3DCallback(const CallbackId id)
 {
-    if(!cb) return 0;
-    std::lock_guard<std::mutex> lock(_observer3DMutex);
-    const size_t id = _next3DObserverId++;
-    _observers3D.emplace(id, std::move(cb));
-    return id;
+    return deregisterCallback(_grab3DCallbackMutex, _grab3DCallbacks, id);
 }
 
-bool Camera::remove3DObserver(const size_t id)
+void Camera::clearGrab3DCallbacks()
 {
-    std::lock_guard<std::mutex> lock(_observer3DMutex);
-    return _observers3D.erase(id) > 0;
-}
-
-void Camera::clear3DObservers()
-{
-    std::lock_guard<std::mutex> lock(_observer3DMutex);
-    _observers3D.clear();
-}
-
-// For single callback function
-void Camera::onGrabbed(GrabCallback cb)
-{
-    std::lock_guard<std::mutex> lock(_observerMutex);
-    _observers.clear();
-
-    if(cb) _observers.emplace(_nextObserverId++, std::move(cb));
+    clearCallbacks(_grab3DCallbackMutex, _grab3DCallbacks);
 }
 
 void Camera::ready()
@@ -266,47 +269,17 @@ void Camera::ready()
 
 void Camera::dispatchToObservers(const CPylonImage &image, size_t frame)
 {
-    std::vector<GrabCallback> cbs;
-    {
-        std::lock_guard<std::mutex> lock(_observerMutex);
-        cbs.reserve(_observers.size());
-        for(auto & kv : _observers){
-            cbs.push_back(kv.second);
-        }
-    }
-    for(auto& cb: cbs){
-        if(cb) cb(image, frame);
-    }
+    dispatchCallbacks(_grabCallbackMutex, _grabCallbacks, image, frame);
 }
 
 void Camera::dispatchTo3DObservers(const Pylon::CPylonDataContainer &container, size_t frame)
 {
-    std::vector<Grab3DCallback> cbs;
-    {
-        std::lock_guard<std::mutex> lock(_observer3DMutex);
-        cbs.reserve(_observers3D.size());
-        for(auto &kv : _observers3D){
-            cbs.push_back(kv.second);
-        }
-    }
-    for(auto &cb : cbs){
-        if(cb) cb(container, frame);
-    }
+    dispatchCallbacks(_grab3DCallbackMutex, _grab3DCallbacks, container, frame);
 }
 
 void Camera::dispatchStatus(Status status, bool on)
 {
-    std::vector<StatusCallback> callbacks;
-    {
-        std::lock_guard<std::mutex> lock(_statusMutex);
-        callbacks.reserve(_statusObservers.size());
-        for(auto &kv : _statusObservers){
-            callbacks.push_back(kv.second);
-        }
-    }
-    for(auto &cb : callbacks){
-        if(cb) cb(status, on);
-    }
+    dispatchCallbacks(_statusMutex, _statusObservers, status, on);
 }
 
 bool Camera::has3DComponents(const Pylon::CGrabResultPtr &grabResult) const
@@ -430,9 +403,19 @@ GenApi::INodeMap &Camera::getNodeMap(){
     return _currentCamera.GetNodeMap();
 }
 
-void Camera::onNodeUpdated(NodeCallback cb)
+Camera::CallbackId Camera::registerNodeUpdatedCallback(NodeCallback cb)
 {
-    _ncb = std::move(cb);
+    return registerCallback(_nodeCallbackMutex, _nodeCallbacks, _nextNodeCallbackId, std::move(cb));
+}
+
+bool Camera::deregisterNodeUpdatedCallback(const CallbackId id)
+{
+    return deregisterCallback(_nodeCallbackMutex, _nodeCallbacks, id);
+}
+
+void Camera::clearNodeUpdatedCallbacks()
+{
+    clearCallbacks(_nodeCallbackMutex, _nodeCallbacks);
 }
 
 GenApi::INode *Camera::getNode(const string &name){
@@ -525,6 +508,6 @@ void Camera::OnCameraEvent(CInstantCamera &camera, intptr_t userProvidedId, GenA
     }
     CameraSystem::syslog(output);
 
-    if(_ncb) _ncb(pNode);
+    dispatchCallbacks(_nodeCallbackMutex, _nodeCallbacks, pNode);
 }
 
