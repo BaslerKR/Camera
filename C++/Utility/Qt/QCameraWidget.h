@@ -34,7 +34,8 @@ public:
 
 private:
     Camera *_camera;
-    size_t _statusObserverId = 0;
+    Camera::CallbackId _statusCallbackId = 0;
+    Camera::CallbackId _nodeCallbackId = 0;
     QTreeWidget *_featuresWidget;
     QComboBox *_cameraListComboBox;
 

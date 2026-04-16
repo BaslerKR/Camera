@@ -97,7 +97,7 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
         }
         if(_camera->isOpened()) _cameraListComboBox->setCurrentText(_camera->getConnectedCameraName().c_str());
     });
-    _statusObserverId = _camera->addStatusObserver([guard](Camera::Status status, bool on){
+    _statusCallbackId = _camera->registerStatusCallback([guard](Camera::Status status, bool on){
         if(!guard) return;
         QMetaObject::invokeMethod(guard, [guard, status, on]{
             if(!guard) return;
@@ -131,6 +131,17 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
             }
         }, Qt::QueuedConnection);
     });
+    _nodeCallbackId = _camera->registerNodeUpdatedCallback([guard](GenApi::INode* node){
+        if(!guard) return;
+        QMetaObject::invokeMethod(guard, [guard, node]{
+            if(!guard) return;
+            if(!node) return;
+            if(!guard->refreshNodeWidget(node)){
+                qDebug() << "Rebuilding feature tree for dynamic node" << node->GetName().c_str();
+                guard->scheduleFeaturesRebuild();
+            }
+        }, Qt::QueuedConnection);
+    });
     connect(_toolConnect, &QToolButton::toggled, this, [=](bool toggled){
         // Request to open the camera
         if(toggled){
@@ -153,26 +164,17 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     });
 
     emit _toolRefresh->clicked();
-
-    _camera->onNodeUpdated([guard](GenApi::INode* node){
-        if(!guard) return;
-        QMetaObject::invokeMethod(guard, [guard, node]{
-            if(!guard) return;
-            if(!guard->refreshNodeWidget(node)){
-                qDebug() << "Rebuilding feature tree for dynamic node" << node->GetName().c_str();
-                guard->scheduleFeaturesRebuild();
-            }
-        }, Qt::QueuedConnection);
-    });
 }
 
 QCameraWidget::~QCameraWidget()
 {
     if(_camera){
-        if(_statusObserverId != 0){
-            _camera->removeStatusObserver(_statusObserverId);
+        if(_statusCallbackId != 0){
+            _camera->deregisterStatusCallback(_statusCallbackId);
         }
-        _camera->onNodeUpdated({});
+        if(_nodeCallbackId != 0){
+            _camera->deregisterNodeUpdatedCallback(_nodeCallbackId);
+        }
     }
 }
 
@@ -203,7 +205,7 @@ void QCameraWidget::generateFeaturesWidget(GenApi::INodeMap &nodemap)
 
             GenApi::NodeList_t parentsList;
             cat->GetParents(parentsList);
-            if(parentsList.at(0)->GetDisplayName() == "Events Generation") continue;
+            if(!parentsList.empty() && parentsList.at(0)->GetDisplayName() == "Events Generation") continue;
 
             QTreeWidgetItem* item = new QTreeWidgetItem(cameraFeatures, QStringList() << cat->GetDisplayName().c_str());
             item->setData(0, Qt::UserRole, QString::fromStdString(cat->GetName().c_str()));

@@ -41,6 +41,7 @@ endif()
 find_package(QT NAMES Qt6 Qt5 QUIET)
 if(QT_FOUND)
     find_package(Qt${QT_VERSION_MAJOR} QUIET COMPONENTS Core Gui Widgets Xml)
+    set(CMAKE_AUTOMOC ON)
     message(STATUS "[${PROJECT_NAME}] Configuring for Qt ${QT_VERSION_MAJOR}")
     target_sources(${PROJECT_NAME} PRIVATE ${QT_HEADERS} ${QT_SOURCES})
     target_link_libraries(${PROJECT_NAME} PUBLIC
