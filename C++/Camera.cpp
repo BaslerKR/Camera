@@ -355,6 +355,10 @@ void Camera::grab(const size_t frames){
                             }
 
                             auto seq = _frameSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
+                            CPylonImage image;
+                            image.AttachGrabResultBuffer(grabResult);
+                            dispatchToObservers(image, seq);
+
                             if(has3DComponents(grabResult)){
                                 auto container = grabResult->GetDataContainer();
                                 if(!_logged3DComponentLayout){
@@ -362,10 +366,6 @@ void Camera::grab(const size_t frames){
                                     _logged3DComponentLayout = true;
                                 }
                                 dispatchTo3DObservers(container, seq);
-                            }else{
-                                CPylonImage image;
-                                image.AttachGrabResultBuffer(grabResult);
-                                dispatchToObservers(image, seq);
                             }
 
                             auto target = _frameTarget.load(std::memory_order_acquire);

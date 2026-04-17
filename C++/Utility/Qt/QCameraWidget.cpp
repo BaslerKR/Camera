@@ -8,25 +8,43 @@
 #include <QPointer>
 #include <QScrollBar>
 #include <QSet>
+#include <QSize>
+#include <QSizePolicy>
 #include <QVariant>
 
 QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent), _camera(camera)
 {
     setWindowTitle("Basler pylon Camera Configuration");
-
     // Create the camera list combobox
     _cameraListComboBox = new QComboBox;
     _cameraListComboBox->setMinimumWidth(120);
+    _cameraListComboBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
     // Create the features widget
     _featuresWidget = new QTreeWidget;
     _featuresWidget->setHeaderLabels(QStringList() << "Feature" << "Value");
+    _featuresWidget->setObjectName(QStringLiteral("CameraFeaturesTree"));
+    _featuresWidget->setRootIsDecorated(true);
+    _featuresWidget->setAnimated(false);
+    _featuresWidget->setAlternatingRowColors(true);
+    _featuresWidget->setUniformRowHeights(false);
+    _featuresWidget->setIndentation(18);
+    _featuresWidget->header()->setStretchLastSection(true);
+    _featuresWidget->header()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    _featuresWidget->header()->setSectionResizeMode(0, QHeaderView::Interactive);
+    _featuresWidget->header()->setSectionResizeMode(1, QHeaderView::Stretch);
+    _featuresWidget->header()->setMinimumSectionSize(60);
+    _featuresWidget->header()->resizeSection(0, 200);
 
     // Create the toolbuttons
     _toolRefresh = new QToolButton(this);
     _toolRefresh->setIcon(QIcon(":/Resources/Icons/icons8-refresh-48.png"));
+    _toolRefresh->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    _toolRefresh->setIconSize(QSize(16, 16));
     _toolConnect = new QToolButton(this);
     _toolConnect->setCheckable(true);
+    _toolConnect->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    _toolConnect->setIconSize(QSize(16, 16));
     {
         QIcon icon;
         icon.addFile(":/Resources/Icons/icons8-connect-48.png", QSize(), QIcon::Normal, QIcon::Off);
@@ -36,9 +54,13 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     _toolGrabOne = new QToolButton(this);
     _toolGrabOne->setIcon(QIcon(":/Resources/Icons/icons8-camera-48.png"));
     _toolGrabOne->setEnabled(false);
+    _toolGrabOne->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    _toolGrabOne->setIconSize(QSize(16, 16));
     _toolGrabLive = new QToolButton(this);
     _toolGrabLive->setCheckable(true);
     _toolGrabLive->setEnabled(false);
+    _toolGrabLive->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    _toolGrabLive->setIconSize(QSize(16, 16));
     {
         QIcon icon;
         icon.addFile(":/Resources/Icons/icons8-cameras-48.png", QSize(), QIcon::Normal, QIcon::Off);
@@ -47,33 +69,38 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     }
 
     QHBoxLayout *cameraListLayout = new QHBoxLayout;
+    cameraListLayout->setContentsMargins(0, 0, 0, 0);
+    cameraListLayout->setSpacing(8);
     cameraListLayout->addWidget(_cameraListComboBox);
     cameraListLayout->addWidget(_toolRefresh);
-    cameraListLayout->setSpacing(-1);
 
     QHBoxLayout *toolButtonLayout = new QHBoxLayout;
+    toolButtonLayout->setContentsMargins(0, 0, 0, 0);
+    toolButtonLayout->setSpacing(6);
     toolButtonLayout->addWidget(_toolConnect);
-    toolButtonLayout->setSpacing(-1);
-    toolButtonLayout->addSpacerItem(new QSpacerItem(5,5));
     toolButtonLayout->addWidget(_toolGrabOne);
     toolButtonLayout->addWidget(_toolGrabLive);
 
     auto *listAndButtonLayout = new QHBoxLayout;
-    listAndButtonLayout->setContentsMargins(9,9,9,9);
+    listAndButtonLayout->setContentsMargins(12, 12, 12, 12);
+    listAndButtonLayout->setSpacing(10);
     listAndButtonLayout->addLayout(cameraListLayout);
     listAndButtonLayout->addLayout(toolButtonLayout);
 
     auto *featuresWidgetLayout = new QVBoxLayout;
-    featuresWidgetLayout->setContentsMargins(9,0,9,0);
+    featuresWidgetLayout->setContentsMargins(12, 0, 12, 12);
+    featuresWidgetLayout->setSpacing(8);
     featuresWidgetLayout->addWidget(_featuresWidget);
 
     auto *layout = new QVBoxLayout;
-    layout->setContentsMargins(0,0,0,0);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
     layout->addLayout(listAndButtonLayout);
     layout->addLayout(featuresWidgetLayout);
 
     _statusBar = new QStatusBar(this);
-    _statusBar->setContentsMargins(0,0,0,0);
+    _statusBar->setObjectName(QStringLiteral("CameraStatusBar"));
+    _statusBar->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(_statusBar);
     setLayout(layout);
 
@@ -198,6 +225,8 @@ void QCameraWidget::generateFeaturesWidget(GenApi::INodeMap &nodemap)
 
         QTreeWidgetItem *cameraFeatures = new QTreeWidgetItem(_featuresWidget, QStringList() << _camera->getConnectedCameraName().c_str());
         cameraFeatures->setData(0, Qt::UserRole, QStringLiteral("__camera_root__"));
+        cameraFeatures->setSizeHint(0, QSize(0, 22));
+        cameraFeatures->setSizeHint(1, QSize(0, 22));
         for(auto cat : nodes){
             if(cat->GetName() == "Root") continue;
             if(!GenApi::IsAvailable(cat)) continue;
@@ -224,8 +253,6 @@ void QCameraWidget::generateFeaturesWidget(GenApi::INodeMap &nodemap)
         }
 
         _featuresWidget->verticalScrollBar()->setValue(scrollValue);
-        _featuresWidget->header()->resizeSection(0,200);
-
     }catch(const GenericException &e){
         qDebug() << e.what();
     }
@@ -241,6 +268,9 @@ void QCameraWidget::generateChildrenItem(QTreeWidgetItem *parent, GenApi::NodeLi
 
         QTreeWidgetItem* subItem = new QTreeWidgetItem(parent, QStringList() << sub->GetDisplayName().c_str());
         subItem->setData(0, Qt::UserRole, QString::fromStdString(sub->GetName().c_str()));
+        const int rowHeight = nodeWidget->sizeHint().height();
+        subItem->setSizeHint(0, QSize(0, rowHeight));
+        subItem->setSizeHint(1, QSize(0, rowHeight));
         _featuresWidget->setItemWidget(subItem, parent->columnCount(), nodeWidget);
     }
 }
