@@ -37,6 +37,7 @@ public:
     QWidget *createNodeWidget(GenApi::INode* node);
     QList<QTreeWidgetItem*> findItemsByNodeName(const QString& nodeName) const;
     bool refreshNodeWidget(GenApi::INode* node);
+    void handleNodeUpdated(const QString& nodeName);
     void scheduleFeaturesRebuild();
     void collectExpandedNodeNames(QTreeWidgetItem* item, QSet<QString>& expandedNodeNames) const;
     void restoreExpandedNodeNames(QTreeWidgetItem* item, const QSet<QString>& expandedNodeNames);
