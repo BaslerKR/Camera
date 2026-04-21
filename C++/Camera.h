@@ -99,7 +99,6 @@ public:
     void stop();
 
     std::vector<std::string> getUpdatedCameraList() const;
-    GenApi::INode* getNode(const std::string &name);
     GenApi::INodeMap& getNodeMap();
 
     using NodeCallback = std::function<void(GenApi::INode*)>;
@@ -120,9 +119,13 @@ public:
      */
     void clearNodeUpdatedCallbacks();
 
-    CameraSystem* getSystem() const { return _system; }
-
 private:
+    enum class StreamKind
+    {
+        Image2D,
+        MultiPart3D
+    };
+
     CameraSystem *_system;
     CBaslerUniversalInstantCamera _currentCamera;
     std::string _connectedCameraName;
@@ -153,13 +156,11 @@ private:
 
     std::atomic<size_t> _frameSeq{0};
     std::atomic<size_t> _frameTarget{0};
-    bool _logged3DComponentLayout = false;
-    bool _routeGrabResultsTo3DOnly = false;
+    StreamKind _streamKind = StreamKind::Image2D;
 
-    void dispatchStatus(Status status, bool on);
-    void dispatchToObservers(const CPylonImage& image, size_t frame);
-    void dispatchTo3DObservers(const Pylon::CPylonDataContainer& container, size_t frame);
-    bool has3DComponents(const Pylon::CGrabResultPtr& grabResult) const;
+    void configureStreamForConnectedCamera();
+    void configureBlazeStream(GenApi::INodeMap& nodeMap);
+    void configureStereoAceStream(GenApi::INodeMap& nodeMap);
 
 
 protected:
