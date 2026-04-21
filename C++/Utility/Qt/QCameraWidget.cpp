@@ -160,13 +160,12 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     });
     _nodeCallbackId = _camera->registerNodeUpdatedCallback([guard](GenApi::INode* node){
         if(!guard) return;
-        QMetaObject::invokeMethod(guard, [guard, node]{
+        if(!node) return;
+
+        const QString nodeName = QString::fromStdString(node->GetName().c_str());
+        QMetaObject::invokeMethod(guard, [guard, nodeName]{
             if(!guard) return;
-            if(!node) return;
-            if(!guard->refreshNodeWidget(node)){
-                qDebug() << "Rebuilding feature tree for dynamic node" << node->GetName().c_str();
-                guard->scheduleFeaturesRebuild();
-            }
+            guard->handleNodeUpdated(nodeName);
         }, Qt::QueuedConnection);
     });
     connect(_toolConnect, &QToolButton::toggled, this, [=](bool toggled){
@@ -378,6 +377,25 @@ bool QCameraWidget::refreshNodeWidget(GenApi::INode *node)
     return handled;
 }
 
+void QCameraWidget::handleNodeUpdated(const QString& nodeName)
+{
+    if(nodeName.isEmpty() || !_camera || !_camera->isOpened()) return;
+
+    auto* node = _camera->getNodeMap().GetNode(nodeName.toStdString().c_str());
+    if(!node || !GenApi::IsAvailable(node)){
+        scheduleFeaturesRebuild();
+        return;
+    }
+
+    try{
+        if(!refreshNodeWidget(node)){
+            scheduleFeaturesRebuild();
+        }
+    }catch(const GenericException&){
+        scheduleFeaturesRebuild();
+    }
+}
+
 void QCameraWidget::scheduleFeaturesRebuild()
 {
     if(_rebuildScheduled || !_camera || !_camera->isOpened()) return;
@@ -583,6 +601,7 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
         connect(button, &QPushButton::clicked, this, [=]{
             try{
                 ptr->Execute();
+                scheduleFeaturesRebuild();
             }catch(const Pylon::GenericException &e){
                 _statusBar->showMessage(e.GetDescription(), 5000);
                 qWarning() << e.GetDescription() << node->GetName().c_str();
