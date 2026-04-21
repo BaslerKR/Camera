@@ -1,6 +1,14 @@
 #ifndef CONVERTERPCL_H
 #define CONVERTERPCL_H
 
+/**
+ * @file PCLConverter.h
+ * @brief Converts Basler pylon 3D image containers into PCL XYZRGB point clouds.
+ *
+ * This is an internal Camera utility layer and does not expose PCL types through
+ * the GraphicsEngine public API.
+ */
+
 #include <pylon/PylonIncludes.h>
 
 #include <cstdint>

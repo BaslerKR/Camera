@@ -1,5 +1,14 @@
 #ifndef CAMERA_H
 #define CAMERA_H
+
+/**
+ * @file Camera.h
+ * @brief Wrapper for one Basler pylon camera connection, grab loop, and node callbacks.
+ *
+ * Keeps SDK types inside the Camera submodule and exposes status/grab callback
+ * hooks to the host application.
+ */
+
 #include <pylon/PylonIncludes.h>
 #include <pylon/BaslerUniversalInstantCamera.h>
 #include <thread>
