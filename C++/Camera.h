@@ -154,6 +154,7 @@ private:
     std::atomic<size_t> _frameSeq{0};
     std::atomic<size_t> _frameTarget{0};
     bool _logged3DComponentLayout = false;
+    bool _routeGrabResultsTo3DOnly = false;
 
     void dispatchStatus(Status status, bool on);
     void dispatchToObservers(const CPylonImage& image, size_t frame);
