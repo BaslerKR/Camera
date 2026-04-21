@@ -165,11 +165,13 @@ bool Camera::open(const string& cameraName){
         _currentCamera.Attach(_system->createDevice(cameraName), Cleanup_Delete);
         _currentCamera.Open();
         _logged3DComponentLayout = false;
+        _routeGrabResultsTo3DOnly = false;
 
         auto& nodeMap = _currentCamera.GetNodeMap();
         const auto modelName = toLowerCopy(_currentCamera.GetDeviceInfo().GetModelName().c_str());
 
         if(modelName.find("blaze") != string::npos){
+            _routeGrabResultsTo3DOnly = true;
             enableComponent(nodeMap, "Range", "Coord3D_ABC32f");
             enableComponent(nodeMap, "Intensity", "Mono16");
             enableComponent(nodeMap, "Confidence", "Confidence16");
@@ -185,6 +187,7 @@ bool Camera::open(const string& cameraName){
                 }
             }
         }else if(modelName.find("stereo ace") != string::npos || modelName.find("sta") != string::npos){
+            _routeGrabResultsTo3DOnly = true;
             enableComponent(nodeMap, "Intensity");
             enableComponent(nodeMap, "Disparity");
         }
@@ -225,6 +228,7 @@ bool Camera::isOpened() const {
 void Camera::close(){
     try{
         _logged3DComponentLayout = false;
+        _routeGrabResultsTo3DOnly = false;
         _currentCamera.Close();
         _currentCamera.DetachDevice();
         _currentCamera.DestroyDevice();
@@ -355,17 +359,20 @@ void Camera::grab(const size_t frames){
                             }
 
                             auto seq = _frameSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
-                            CPylonImage image;
-                            image.AttachGrabResultBuffer(grabResult);
-                            dispatchToObservers(image, seq);
-
-                            if(has3DComponents(grabResult)){
+                            const bool has3D = has3DComponents(grabResult);
+                            if(has3D){
                                 auto container = grabResult->GetDataContainer();
                                 if(!_logged3DComponentLayout){
                                     log3DComponentLayout(container, _allottedNumber, _currentCamera.GetDeviceInfo().GetFriendlyName().c_str());
                                     _logged3DComponentLayout = true;
                                 }
                                 dispatchTo3DObservers(container, seq);
+                            }else if(!_routeGrabResultsTo3DOnly){
+                                CPylonImage image;
+                                image.AttachGrabResultBuffer(grabResult);
+                                dispatchToObservers(image, seq);
+                            }else if(!triggerMode){
+                                ready();
                             }
 
                             auto target = _frameTarget.load(std::memory_order_acquire);
