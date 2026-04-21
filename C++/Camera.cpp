@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <cctype>
 #include <limits>
-#include <sstream>
 
 namespace {
 
@@ -82,55 +81,6 @@ void enableComponent(GenApi::INodeMap& nodeMap, const char* componentName, const
     }
 }
 
-string componentTypeToString(const Pylon::EComponentType componentType)
-{
-    switch(componentType){
-    case Pylon::ComponentType_Undefined:
-        return "Undefined";
-    case Pylon::ComponentType_Intensity:
-        return "Intensity";
-    case Pylon::ComponentType_Confidence:
-        return "Confidence";
-    case Pylon::ComponentType_Disparity:
-        return "Disparity";
-    case Pylon::ComponentType_Range:
-        return "Range";
-    case Pylon::ComponentType_Reflectance:
-        return "Reflectance";
-    case Pylon::ComponentType_Scatter:
-        return "Scatter";
-    case Pylon::ComponentType_IntensityCombined_STA:
-        return "IntensityCombined_STA";
-    case Pylon::ComponentType_Error_STA:
-        return "Error_STA";
-    case Pylon::ComponentType_RawCombined_STA:
-        return "RawCombined_STA";
-    case Pylon::ComponentType_Calibration_STA:
-        return "Calibration_STA";
-    }
-    return "Unknown";
-}
-
-void log3DComponentLayout(const Pylon::CPylonDataContainer& container, int allottedNumber, const string& cameraName)
-{
-    std::ostringstream oss;
-    oss << "[Info " << allottedNumber << "] " << cameraName << " 3D components:";
-
-    for(size_t i = 0; i < container.GetDataComponentCount(); ++i){
-        const auto component = container.GetDataComponent(i);
-        if(!component.IsValid()) continue;
-
-        oss << " ["
-            << i
-            << ": type=" << componentTypeToString(component.GetComponentType())
-            << ", pixel=" << Pylon::CPixelTypeMapper::GetNameByPixelType(component.GetPixelType())
-            << ", " << component.GetWidth() << "x" << component.GetHeight()
-            << "]";
-    }
-
-    CameraSystem::syslog(oss.str());
-}
-
 }
 
 Camera::Camera(CameraSystem *parent, const int allottedNumber) : _system(parent), _allottedNumber(allottedNumber)
@@ -164,33 +114,7 @@ bool Camera::open(const string& cameraName){
         CameraSystem::syslog("Try to open " + (cameraName.empty() ? "any one of the cameras on this system" : cameraName) + ".");
         _currentCamera.Attach(_system->createDevice(cameraName), Cleanup_Delete);
         _currentCamera.Open();
-        _logged3DComponentLayout = false;
-        _routeGrabResultsTo3DOnly = false;
-
-        auto& nodeMap = _currentCamera.GetNodeMap();
-        const auto modelName = toLowerCopy(_currentCamera.GetDeviceInfo().GetModelName().c_str());
-
-        if(modelName.find("blaze") != string::npos){
-            _routeGrabResultsTo3DOnly = true;
-            enableComponent(nodeMap, "Range", "Coord3D_ABC32f");
-            enableComponent(nodeMap, "Intensity", "Mono16");
-            enableComponent(nodeMap, "Confidence", "Confidence16");
-
-            auto* coordinateSelectorNode = _currentCamera.Scan3dCoordinateSelector.GetNode();
-            auto* invalidDataValueNode = _currentCamera.Scan3dInvalidDataValue.GetNode();
-            if(coordinateSelectorNode && invalidDataValueNode &&
-               GenApi::IsWritable(coordinateSelectorNode) &&
-               GenApi::IsWritable(invalidDataValueNode)){
-                for(const auto* axis : {"CoordinateA", "CoordinateB", "CoordinateC"}){
-                    _currentCamera.Scan3dCoordinateSelector.SetValue(axis);
-                    _currentCamera.Scan3dInvalidDataValue.SetValue(std::numeric_limits<float>::quiet_NaN());
-                }
-            }
-        }else if(modelName.find("stereo ace") != string::npos || modelName.find("sta") != string::npos){
-            _routeGrabResultsTo3DOnly = true;
-            enableComponent(nodeMap, "Intensity");
-            enableComponent(nodeMap, "Disparity");
-        }
+        configureStreamForConnectedCamera();
 
         // Registering event handlers
         GenApi::NodeList_t nodes;
@@ -227,8 +151,7 @@ bool Camera::isOpened() const {
 
 void Camera::close(){
     try{
-        _logged3DComponentLayout = false;
-        _routeGrabResultsTo3DOnly = false;
+        _streamKind = StreamKind::Image2D;
         _currentCamera.Close();
         _currentCamera.DetachDevice();
         _currentCamera.DestroyDevice();
@@ -271,53 +194,49 @@ void Camera::ready()
     _permitCondition.notify_one();
 }
 
-void Camera::dispatchToObservers(const CPylonImage &image, size_t frame)
+void Camera::configureStreamForConnectedCamera()
 {
-    dispatchCallbacks(_grabCallbackMutex, _grabCallbacks, image, frame);
-}
+    _streamKind = StreamKind::Image2D;
 
-void Camera::dispatchTo3DObservers(const Pylon::CPylonDataContainer &container, size_t frame)
-{
-    dispatchCallbacks(_grab3DCallbackMutex, _grab3DCallbacks, container, frame);
-}
+    auto& nodeMap = _currentCamera.GetNodeMap();
+    const auto modelName = toLowerCopy(_currentCamera.GetDeviceInfo().GetModelName().c_str());
 
-void Camera::dispatchStatus(Status status, bool on)
-{
-    dispatchCallbacks(_statusMutex, _statusObservers, status, on);
-}
-
-bool Camera::has3DComponents(const Pylon::CGrabResultPtr &grabResult) const
-{
-    if(!grabResult.IsValid()) return false;
-
-    try{
-        const auto container = grabResult->GetDataContainer();
-        const auto count = container.GetDataComponentCount();
-        for(size_t i = 0; i < count; ++i){
-            const auto component = container.GetDataComponent(i);
-            if(!component.IsValid()) continue;
-
-            switch(component.GetComponentType()){
-            case Pylon::ComponentType_Intensity:
-            case Pylon::ComponentType_Confidence:
-            case Pylon::ComponentType_Disparity:
-            case Pylon::ComponentType_Range:
-            case Pylon::ComponentType_Reflectance:
-            case Pylon::ComponentType_Scatter:
-            case Pylon::ComponentType_IntensityCombined_STA:
-            case Pylon::ComponentType_Error_STA:
-            case Pylon::ComponentType_RawCombined_STA:
-            case Pylon::ComponentType_Calibration_STA:
-                return true;
-            case Pylon::ComponentType_Undefined:
-                break;
-            }
-        }
-    }catch(const GenericException &){
-        return false;
+    if(modelName.find("blaze") != string::npos){
+        configureBlazeStream(nodeMap);
+    }else if(modelName.find("stereo ace") != string::npos || modelName.find("sta") != string::npos){
+        configureStereoAceStream(nodeMap);
     }
 
-    return false;
+    const auto* routeText = _streamKind == StreamKind::MultiPart3D ? "3D-only" : "2D";
+    CameraSystem::syslog("[Info " + to_string(_allottedNumber) + "] model="
+                         + modelName
+                         + " route=" + routeText);
+}
+
+void Camera::configureBlazeStream(GenApi::INodeMap& nodeMap)
+{
+    _streamKind = StreamKind::MultiPart3D;
+    enableComponent(nodeMap, "Range", "Coord3D_ABC32f");
+    enableComponent(nodeMap, "Intensity", "Mono16");
+    enableComponent(nodeMap, "Confidence", "Confidence16");
+
+    auto* coordinateSelectorNode = _currentCamera.Scan3dCoordinateSelector.GetNode();
+    auto* invalidDataValueNode = _currentCamera.Scan3dInvalidDataValue.GetNode();
+    if(coordinateSelectorNode && invalidDataValueNode &&
+       GenApi::IsWritable(coordinateSelectorNode) &&
+       GenApi::IsWritable(invalidDataValueNode)){
+        for(const auto* axis : {"CoordinateA", "CoordinateB", "CoordinateC"}){
+            _currentCamera.Scan3dCoordinateSelector.SetValue(axis);
+            _currentCamera.Scan3dInvalidDataValue.SetValue(std::numeric_limits<float>::quiet_NaN());
+        }
+    }
+}
+
+void Camera::configureStereoAceStream(GenApi::INodeMap& nodeMap)
+{
+    _streamKind = StreamKind::MultiPart3D;
+    enableComponent(nodeMap, "Intensity");
+    enableComponent(nodeMap, "Disparity");
 }
 
 void Camera::grab(const size_t frames){
@@ -359,20 +278,13 @@ void Camera::grab(const size_t frames){
                             }
 
                             auto seq = _frameSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
-                            const bool has3D = has3DComponents(grabResult);
-                            if(has3D){
+                            if(_streamKind == StreamKind::MultiPart3D){
                                 auto container = grabResult->GetDataContainer();
-                                if(!_logged3DComponentLayout){
-                                    log3DComponentLayout(container, _allottedNumber, _currentCamera.GetDeviceInfo().GetFriendlyName().c_str());
-                                    _logged3DComponentLayout = true;
-                                }
-                                dispatchTo3DObservers(container, seq);
-                            }else if(!_routeGrabResultsTo3DOnly){
+                                dispatchCallbacks(_grab3DCallbackMutex, _grab3DCallbacks, container, seq);
+                            }else{
                                 CPylonImage image;
                                 image.AttachGrabResultBuffer(grabResult);
-                                dispatchToObservers(image, seq);
-                            }else if(!triggerMode){
-                                ready();
+                                dispatchCallbacks(_grabCallbackMutex, _grabCallbacks, image, seq);
                             }
 
                             auto target = _frameTarget.load(std::memory_order_acquire);
@@ -425,10 +337,6 @@ void Camera::clearNodeUpdatedCallbacks()
     clearCallbacks(_nodeCallbackMutex, _nodeCallbacks);
 }
 
-GenApi::INode *Camera::getNode(const string &name){
-    return _currentCamera.GetNodeMap().GetNode(name.c_str());
-}
-
 void Camera::OnAttached(CInstantCamera &camera){
     auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
     CameraSystem::syslog(from + " attached.");
@@ -442,40 +350,40 @@ void Camera::OnDetached(CInstantCamera &camera){
 void Camera::OnDestroyed(CInstantCamera &camera){
     auto from = "[Info " + to_string(_allottedNumber)  +"] ";
     CameraSystem::syslog(from + "Device destroyed.");
-    dispatchStatus(ConnectionStatus, false);
+    dispatchCallbacks(_statusMutex, _statusObservers, ConnectionStatus, false);
 }
 
 void Camera::OnOpened(CInstantCamera &camera){
     _connectedCameraName = camera.GetDeviceInfo().GetFriendlyName();
     auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
     CameraSystem::syslog(from + " opened.");
-    dispatchStatus(ConnectionStatus, true);
+    dispatchCallbacks(_statusMutex, _statusObservers, ConnectionStatus, true);
 }
 
 void Camera::OnClosed(CInstantCamera &camera){
     _connectedCameraName = "";
     auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
     CameraSystem::syslog(from + " closed.");
-    dispatchStatus(ConnectionStatus, false);
+    dispatchCallbacks(_statusMutex, _statusObservers, ConnectionStatus, false);
 }
 
 void Camera::OnCameraDeviceRemoved(CInstantCamera &camera){
     _connectedCameraName = "";
     auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
     CameraSystem::syslog(from + " removed physically.");
-    dispatchStatus(ConnectionStatus, false);
+    dispatchCallbacks(_statusMutex, _statusObservers, ConnectionStatus, false);
 }
 
 void Camera::OnGrabStarted(CInstantCamera &camera){
     auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
     CameraSystem::syslog(from + " started grabbing.");
-    dispatchStatus(GrabbingStatus, true);
+    dispatchCallbacks(_statusMutex, _statusObservers, GrabbingStatus, true);
 }
 
 void Camera::OnGrabStopped(CInstantCamera &camera){
     auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
     CameraSystem::syslog(from + " stopped grabbing.");
-    dispatchStatus(GrabbingStatus, false);
+    dispatchCallbacks(_statusMutex, _statusObservers, GrabbingStatus, false);
 }
 
 void Camera::OnCameraEvent(CInstantCamera &camera, intptr_t userProvidedId, GenApi::INode *pNode){

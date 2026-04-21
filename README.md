@@ -52,8 +52,8 @@ int main() {
     // frameCnt = NUM -> 정해진 수 촬영
     camera->grab(size_t frameCnt);
 
-    // 이미지 프레임 수신 콜백
-    camera->onGrabbed([&](const CPylonImage& pylonImage, size_t frameCnt) {
+    // 2D 이미지 프레임 수신 콜백
+    const auto grabCallbackId = camera->registerGrabCallback([&](const CPylonImage& pylonImage, size_t frameCnt) {
         // 여기서 사용자의 이미지 처리 절차 수행
         convertPylonImageToYourFormat(pylonImage);
         doProcessingYourWay();
@@ -62,19 +62,31 @@ int main() {
         camera->ready();
     });
 
+    // 3D multipart 프레임 수신 콜백
+    const auto grab3DCallbackId = camera->registerGrab3DCallback([&](const Pylon::CPylonDataContainer& container, size_t frameCnt) {
+        convertPylon3DContainerToYourFormat(container);
+        doProcessingYourWay();
+
+        camera->ready();
+    });
+
     // 카메라 상태 변경 콜백
-    camera->onCameraStatus([&](Camera::Status status, bool on) {
+    const auto statusCallbackId = camera->registerStatusCallback([&](Camera::Status status, bool on) {
         // Camera::Status::GrabbingStatus: 촬영 중이면 on=true, 정지로 전환 시 false
         // Camera::Status::ConnectionStatus: 연결 시 on=true, 연결 해제 시 false
     });
 
     // 파라미터 변경/정보 전달 콜백
-    camera->onNodeUpdated([&](GenApi::INode* node) {
+    const auto nodeCallbackId = camera->registerNodeUpdatedCallback([&](GenApi::INode* node) {
         // 상세 사용법은 Basler 공식 문서 참조
         // 또는 본 프로젝트의 Utility/Qt/QCameraWidget.h 참고
     });
 
     // ...
+    camera->deregisterGrabCallback(grabCallbackId);
+    camera->deregisterGrab3DCallback(grab3DCallbackId);
+    camera->deregisterStatusCallback(statusCallbackId);
+    camera->deregisterNodeUpdatedCallback(nodeCallbackId);
     camera->stop();
 
     return 0;
@@ -124,13 +136,15 @@ camera.stop();
 ---
 
 ## 이벤트 콜백
-- **`onGrabbed`**  
-  새 이미지 프레임을 수신하면 호출됩니다. 내부에서 이미지 변환/처리 후 `camera->ready()` 를 호출해 다음 프레임 준비를 알립니다.
-- **`onCameraStatus`**  
-  연결/촬영 상태 변경 시 호출됩니다.  
-  - `GrabbingStatus`: 촬영 중 `true`, 정지 시 `false`  
+- **`registerGrabCallback`**
+  2D 이미지 프레임을 수신하면 호출됩니다. 내부에서 이미지 변환/처리 후 `camera->ready()` 를 호출해 다음 프레임 준비를 알립니다.
+- **`registerGrab3DCallback`**
+  blaze/stereo ace/STA 같은 multipart 3D 프레임을 수신하면 호출됩니다. 3D 전용으로 판별된 카메라는 2D 콜백으로 fallback하지 않습니다.
+- **`registerStatusCallback`**
+  연결/촬영 상태 변경 시 호출됩니다.
+  - `GrabbingStatus`: 촬영 중 `true`, 정지 시 `false`
   - `ConnectionStatus`: 연결됨 `true`, 해제됨 `false`
-- **`onNodeUpdated`**  
+- **`registerNodeUpdatedCallback`**
   파라미터 변경 또는 관련 정보 전달 시 호출됩니다. 자세한 노드/GenApi 사용은 Basler 공식 문서 또는 프로젝트 내 `Utility/Qt/QCameraWidget.h`를 참고하세요.
 
 ---
