@@ -1,5 +1,14 @@
 #ifndef QCAMERAWIDGET_H
 #define QCAMERAWIDGET_H
+
+/**
+ * @file QCameraWidget.h
+ * @brief Qt widget for Basler camera connection, grab control, and GenApi feature tree editing.
+ *
+ * Acts as the Camera submodule control panel and forwards only grab callback
+ * results to GraphicsEngine.
+ */
+
 #ifdef QT_GUI_LIB
 #include <QWidget>
 #include <QObject>

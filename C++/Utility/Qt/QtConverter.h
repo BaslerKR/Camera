@@ -1,6 +1,14 @@
 #ifndef CONVERTERQT_H
 #define CONVERTERQT_H
 
+/**
+ * @file QtConverter.h
+ * @brief Converts Basler pylon image buffers into Qt QImage frames.
+ *
+ * Selects direct-copy or Pylon ImageFormatConverter paths for Mono/RGB pixel
+ * types so 2D grab results can be passed to GraphicsEngine::setImage().
+ */
+
 #include <pylon/ImageFormatConverter.h>
 #include <pylon/PylonImage.h>
 
