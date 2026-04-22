@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <limits>
+#include <string>
 
 namespace {
 
@@ -81,6 +82,17 @@ void enableComponent(GenApi::INodeMap& nodeMap, const char* componentName, const
     }
 }
 
+std::string safeCameraName(Pylon::CInstantCamera& camera, const std::string& fallback)
+{
+    if(!fallback.empty()) return fallback;
+
+    try{
+        return camera.GetDeviceInfo().GetFriendlyName().c_str();
+    }catch(const Pylon::GenericException&){
+        return {};
+    }
+}
+
 }
 
 Camera::Camera(CameraSystem *parent, const int allottedNumber) : _system(parent), _allottedNumber(allottedNumber)
@@ -111,6 +123,7 @@ void Camera::clearStatusCallbacks()
 
 bool Camera::open(const string& cameraName){
     try{
+        _deviceAvailable.store(false, std::memory_order_release);
         CameraSystem::syslog("Try to open " + (cameraName.empty() ? "any one of the cameras on this system" : cameraName) + ".");
         _currentCamera.Attach(_system->createDevice(cameraName), Cleanup_Delete);
         _currentCamera.Open();
@@ -144,17 +157,23 @@ CameraSystem::syslog(e.GetDescription(),true);
 
 bool Camera::isOpened() const {
     try{
-        return _currentCamera.IsOpen();
+        return _deviceAvailable.load(std::memory_order_acquire) && _currentCamera.IsOpen();
     }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
     return false;
 }
 
 void Camera::close(){
     try{
+        stop();
+        _deviceAvailable.store(false, std::memory_order_release);
         _streamKind = StreamKind::Image2D;
-        _currentCamera.Close();
-        _currentCamera.DetachDevice();
-        _currentCamera.DestroyDevice();
+        if(_currentCamera.IsOpen()){
+            _currentCamera.Close();
+        }
+        if(_currentCamera.IsPylonDeviceAttached()){
+            _currentCamera.DetachDevice();
+            _currentCamera.DestroyDevice();
+        }
     }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
 }
 
@@ -241,7 +260,7 @@ void Camera::configureStereoAceStream(GenApi::INodeMap& nodeMap)
 
 void Camera::grab(const size_t frames){
     try{
-        if(!_currentCamera.IsOpen()) return;
+        if(!isOpened()) return;
         if(_isRunning.load(std::memory_order_acquire)) return;
         if(_thread.joinable()) _thread.join();
 
@@ -264,7 +283,7 @@ void Camera::grab(const size_t frames){
                 CGrabResultPtr grabResult;
                 size_t delivered = 0;
 
-                while(_isRunning.load(std::memory_order_acquire) && _currentCamera.IsGrabbing()){
+                while(_isRunning.load(std::memory_order_acquire) && _deviceAvailable.load(std::memory_order_acquire) && _currentCamera.IsGrabbing()){
                     if(_currentCamera.RetrieveResult(1000, grabResult, Pylon::TimeoutHandling_Return)){
                         if(grabResult->GrabSucceeded()){
                             if(!triggerMode){
@@ -306,11 +325,16 @@ void Camera::grab(const size_t frames){
 
 void Camera::stop(){
     try{
-        _isRunning.store(false, std::memory_order_release);
-        _permitCondition.notify_all();
+        requestStop();
 
-        if(_thread.joinable()) _thread.join();
+        if(_thread.joinable() && _thread.get_id() != std::this_thread::get_id()) _thread.join();
     }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
+}
+
+void Camera::requestStop()
+{
+    _isRunning.store(false, std::memory_order_release);
+    _permitCondition.notify_all();
 }
 
 std::vector<string> Camera::getUpdatedCameraList() const {
@@ -338,7 +362,7 @@ void Camera::clearNodeUpdatedCallbacks()
 }
 
 void Camera::OnAttached(CInstantCamera &camera){
-    auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
+    auto from = "[Info " + to_string(_allottedNumber)  +"] " + safeCameraName(camera, _connectedCameraName);
     CameraSystem::syslog(from + " attached.");
 }
 
@@ -354,72 +378,86 @@ void Camera::OnDestroyed(CInstantCamera &camera){
 }
 
 void Camera::OnOpened(CInstantCamera &camera){
-    _connectedCameraName = camera.GetDeviceInfo().GetFriendlyName();
-    auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
+    _connectedCameraName = safeCameraName(camera, {});
+    _deviceAvailable.store(true, std::memory_order_release);
+    auto from = "[Info " + to_string(_allottedNumber)  +"] " + _connectedCameraName;
     CameraSystem::syslog(from + " opened.");
     dispatchCallbacks(_statusMutex, _statusObservers, ConnectionStatus, true);
 }
 
 void Camera::OnClosed(CInstantCamera &camera){
+    _deviceAvailable.store(false, std::memory_order_release);
+    const auto cameraName = safeCameraName(camera, _connectedCameraName);
     _connectedCameraName = "";
-    auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
+    auto from = "[Info " + to_string(_allottedNumber)  +"] " + cameraName;
     CameraSystem::syslog(from + " closed.");
     dispatchCallbacks(_statusMutex, _statusObservers, ConnectionStatus, false);
 }
 
 void Camera::OnCameraDeviceRemoved(CInstantCamera &camera){
+    requestStop();
+    _deviceAvailable.store(false, std::memory_order_release);
+    const auto cameraName = safeCameraName(camera, _connectedCameraName);
     _connectedCameraName = "";
-    auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
+    auto from = "[Info " + to_string(_allottedNumber)  +"] " + cameraName;
     CameraSystem::syslog(from + " removed physically.");
+    dispatchCallbacks(_statusMutex, _statusObservers, GrabbingStatus, false);
     dispatchCallbacks(_statusMutex, _statusObservers, ConnectionStatus, false);
 }
 
 void Camera::OnGrabStarted(CInstantCamera &camera){
-    auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
+    auto from = "[Info " + to_string(_allottedNumber)  +"] " + safeCameraName(camera, _connectedCameraName);
     CameraSystem::syslog(from + " started grabbing.");
     dispatchCallbacks(_statusMutex, _statusObservers, GrabbingStatus, true);
 }
 
 void Camera::OnGrabStopped(CInstantCamera &camera){
-    auto from = "[Info " + to_string(_allottedNumber)  +"] " + camera.GetDeviceInfo().GetFriendlyName().c_str();
+    auto from = "[Info " + to_string(_allottedNumber)  +"] " + safeCameraName(camera, _connectedCameraName);
     CameraSystem::syslog(from + " stopped grabbing.");
     dispatchCallbacks(_statusMutex, _statusObservers, GrabbingStatus, false);
 }
 
 void Camera::OnCameraEvent(CInstantCamera &camera, intptr_t userProvidedId, GenApi::INode *pNode){
     using namespace GenApi;
+    if(!pNode || !_deviceAvailable.load(std::memory_order_acquire)) return;
+
     std::string output = std::string("[Event ") + std::to_string(_allottedNumber) + "] ";
 
-    switch(pNode->GetPrincipalInterfaceType()){
-    case GenApi::intfIInteger:
-        output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + to_string(CIntegerPtr(pNode)->GetValue());
-        break;
-    case GenApi::intfIBoolean:
-        output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + to_string(CBooleanPtr(pNode)->GetValue());
-        break;
-    case GenApi::intfIFloat:
-        output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + to_string(CFloatPtr(pNode)->GetValue());
-        break;
-    case GenApi::intfIString:
-        output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + CStringPtr(pNode)->GetValue().c_str();
-        break;
-    case GenApi::intfIEnumeration:
-        output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + CEnumerationPtr(pNode)->GetCurrentEntry()->GetNode()->GetDisplayName().c_str();
-        break;
-    case GenApi::intfICommand:
-        output += std::string(CCommandPtr(pNode)->GetNode()->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + CCommandPtr(pNode)->ToString().c_str();
-        break;
-    case GenApi::intfIRegister:
-        output += CRegisterPtr(pNode)->GetNode()->GetDisplayName().c_str() + CRegisterPtr(pNode)->GetAddress();
-        break;
-    case GenApi::intfICategory:
-        // We are going to ignore the category events due to the meaningless data for users.
+    try{
+        switch(pNode->GetPrincipalInterfaceType()){
+        case GenApi::intfIInteger:
+            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + to_string(CIntegerPtr(pNode)->GetValue());
+            break;
+        case GenApi::intfIBoolean:
+            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + to_string(CBooleanPtr(pNode)->GetValue());
+            break;
+        case GenApi::intfIFloat:
+            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + to_string(CFloatPtr(pNode)->GetValue());
+            break;
+        case GenApi::intfIString:
+            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + CStringPtr(pNode)->GetValue().c_str();
+            break;
+        case GenApi::intfIEnumeration:
+            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + CEnumerationPtr(pNode)->GetCurrentEntry()->GetNode()->GetDisplayName().c_str();
+            break;
+        case GenApi::intfICommand:
+            output += std::string(CCommandPtr(pNode)->GetNode()->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + CCommandPtr(pNode)->ToString().c_str();
+            break;
+        case GenApi::intfIRegister:
+            output += CRegisterPtr(pNode)->GetNode()->GetDisplayName().c_str() + CRegisterPtr(pNode)->GetAddress();
+            break;
+        case GenApi::intfICategory:
+            // We are going to ignore the category events due to the meaningless data for users.
+            return;
+        case GenApi::intfIEnumEntry:
+        case GenApi::intfIPort:
+        case GenApi::intfIValue:
+        case GenApi::intfIBase:
+            break;
+        }
+    }catch(const GenericException &e){
+        CameraSystem::syslog(e.GetDescription(), true);
         return;
-    case GenApi::intfIEnumEntry:
-    case GenApi::intfIPort:
-    case GenApi::intfIValue:
-    case GenApi::intfIBase:
-        break;
     }
     CameraSystem::syslog(output);
 

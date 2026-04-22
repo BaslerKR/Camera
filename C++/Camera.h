@@ -133,6 +133,7 @@ private:
 
     std::thread _thread;
     std::atomic<bool> _isRunning=false;
+    std::atomic<bool> _deviceAvailable=false;
 
     std::mutex _statusMutex;
     std::unordered_map<size_t, StatusCallback> _statusObservers;
@@ -161,6 +162,7 @@ private:
     void configureStreamForConnectedCamera();
     void configureBlazeStream(GenApi::INodeMap& nodeMap);
     void configureStereoAceStream(GenApi::INodeMap& nodeMap);
+    void requestStop();
 
 
 protected:
