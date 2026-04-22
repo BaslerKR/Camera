@@ -43,6 +43,10 @@ public:
     void restoreExpandedNodeNames(QTreeWidgetItem* item, const QSet<QString>& expandedNodeNames);
 
 private:
+    bool isCameraReady() const;
+    GenApi::INode* resolveNode(const QString& nodeName) const;
+    void rebuildFeaturesIfReady();
+
     Camera *_camera;
     Camera::CallbackId _statusCallbackId = 0;
     Camera::CallbackId _nodeCallbackId = 0;

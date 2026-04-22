@@ -148,7 +148,7 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
                 guard->_toolGrabLive->setEnabled(on);
 
                 if(on){ // Camera Connected
-                    guard->generateFeaturesWidget(guard->_camera->getNodeMap());
+                    guard->rebuildFeaturesIfReady();
                 }else{ // Camera Disconnected
                     guard->_toolGrabLive->setChecked(false);
                     guard->_featuresWidget->clear();
@@ -158,14 +158,14 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
             }
         }, Qt::QueuedConnection);
     });
-    _nodeCallbackId = _camera->registerNodeUpdatedCallback([guard](GenApi::INode* node){
+    _nodeCallbackId = _camera->registerNodeUpdatedCallback([guard](const std::string& nodeName){
         if(!guard) return;
-        if(!node) return;
+        if(nodeName.empty()) return;
 
-        const QString nodeName = QString::fromStdString(node->GetName().c_str());
-        QMetaObject::invokeMethod(guard, [guard, nodeName]{
+        const QString qtNodeName = QString::fromStdString(nodeName);
+        QMetaObject::invokeMethod(guard, [guard, qtNodeName]{
             if(!guard) return;
-            guard->handleNodeUpdated(nodeName);
+            guard->handleNodeUpdated(qtNodeName);
         }, Qt::QueuedConnection);
     });
     connect(_toolConnect, &QToolButton::toggled, this, [=](bool toggled){
@@ -201,6 +201,33 @@ QCameraWidget::~QCameraWidget()
         if(_nodeCallbackId != 0){
             _camera->deregisterNodeUpdatedCallback(_nodeCallbackId);
         }
+    }
+}
+
+bool QCameraWidget::isCameraReady() const
+{
+    return _camera && _camera->isOpened();
+}
+
+GenApi::INode* QCameraWidget::resolveNode(const QString& nodeName) const
+{
+    if(nodeName.isEmpty() || !isCameraReady()) return nullptr;
+
+    try{
+        return _camera->getNodeMap().GetNode(nodeName.toStdString().c_str());
+    }catch(const Pylon::GenericException&){
+        return nullptr;
+    }
+}
+
+void QCameraWidget::rebuildFeaturesIfReady()
+{
+    if(!isCameraReady()) return;
+
+    try{
+        generateFeaturesWidget(_camera->getNodeMap());
+    }catch(const Pylon::GenericException&){
+        _featuresWidget->clear();
     }
 }
 
@@ -379,15 +406,13 @@ bool QCameraWidget::refreshNodeWidget(GenApi::INode *node)
 
 void QCameraWidget::handleNodeUpdated(const QString& nodeName)
 {
-    if(nodeName.isEmpty() || !_camera || !_camera->isOpened()) return;
-
-    auto* node = _camera->getNodeMap().GetNode(nodeName.toStdString().c_str());
-    if(!node || !GenApi::IsAvailable(node)){
-        scheduleFeaturesRebuild();
-        return;
-    }
-
     try{
+        auto* node = resolveNode(nodeName);
+        if(!node || !GenApi::IsAvailable(node)){
+            scheduleFeaturesRebuild();
+            return;
+        }
+
         if(!refreshNodeWidget(node)){
             scheduleFeaturesRebuild();
         }
@@ -398,13 +423,12 @@ void QCameraWidget::handleNodeUpdated(const QString& nodeName)
 
 void QCameraWidget::scheduleFeaturesRebuild()
 {
-    if(_rebuildScheduled || !_camera || !_camera->isOpened()) return;
+    if(_rebuildScheduled || !isCameraReady()) return;
 
     _rebuildScheduled = true;
     QTimer::singleShot(50, this, [this]{
         _rebuildScheduled = false;
-        if(!_camera || !_camera->isOpened()) return;
-        generateFeaturesWidget(_camera->getNodeMap());
+        rebuildFeaturesIfReady();
     });
 }
 
@@ -439,6 +463,7 @@ void QCameraWidget::restoreExpandedNodeNames(QTreeWidgetItem *item, const QSet<Q
 QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
 {
     QWidget *widget = nullptr;
+    const QString nodeName = QString::fromStdString(node->GetName().c_str());
     switch(node->GetPrincipalInterfaceType()){
     case GenApi::intfIInteger:{
         GenApi::CIntegerPtr ptr = node;
@@ -454,6 +479,10 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
             qWarning() << e.GetDescription() << node->GetName().c_str();
         }
         connect(spinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [=](int value){
+            auto* currentNode = resolveNode(nodeName);
+            if(!currentNode) return;
+
+            GenApi::CIntegerPtr ptr = currentNode;
             try{
                 QSignalBlocker block(spinBox);
                 ptr->SetValue(value);
@@ -466,7 +495,7 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
                     }
                 }catch(const Pylon::GenericException&){}
                 _statusBar->showMessage(e.GetDescription(), 5000);
-                qWarning() << e.GetDescription() << node->GetName().c_str();
+                qWarning() << e.GetDescription() << nodeName;
             }
         });
     } break;
@@ -484,6 +513,10 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
             qWarning() << e.GetDescription() << node->GetName().c_str() << "Float";
         }
         connect(spinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [=](double value){
+            auto* currentNode = resolveNode(nodeName);
+            if(!currentNode) return;
+
+            GenApi::CFloatPtr ptr = currentNode;
             try{
                 QSignalBlocker block(spinBox);
                 ptr->SetValue(value);
@@ -496,7 +529,7 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
                     }
                 }catch(const Pylon::GenericException&){}
                 _statusBar->showMessage(e.GetDescription(), 5000);
-                qWarning() << e.GetDescription() << node->GetName().c_str();
+                qWarning() << e.GetDescription() << nodeName;
             }
         });
     } break;
@@ -512,6 +545,10 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
             qWarning() << e.GetDescription() << node->GetName().c_str();
         }
         connect(checkBox, &QCheckBox::checkStateChanged, this, [=](Qt::CheckState state){
+            auto* currentNode = resolveNode(nodeName);
+            if(!currentNode) return;
+
+            GenApi::CBooleanPtr ptr = currentNode;
             try{
                 QSignalBlocker block(checkBox);
                 ptr->SetValue((state == Qt::CheckState::Checked) ? true : false);
@@ -524,7 +561,7 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
                     }
                 }catch(const Pylon::GenericException&){}
                 _statusBar->showMessage(e.GetDescription(), 5000);
-                qWarning() << e.GetDescription() << node->GetName().c_str();
+                qWarning() << e.GetDescription() << nodeName;
             }
         });
     } break;
@@ -541,6 +578,10 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
             qWarning() << e.GetDescription() << node->GetName().c_str();
         }
         connect(lineEdit, &QLineEdit::editingFinished, this, [=](){
+            auto* currentNode = resolveNode(nodeName);
+            if(!currentNode) return;
+
+            GenApi::CStringPtr ptr = currentNode;
             try{
                 QSignalBlocker block(lineEdit);
                 ptr->SetValue(lineEdit->text().toStdString().c_str());
@@ -553,7 +594,7 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
                     }
                 }catch(const Pylon::GenericException&){}
                 _statusBar->showMessage(e.GetDescription(), 5000);
-                qWarning() << e.GetDescription() << node->GetName().c_str();
+                qWarning() << e.GetDescription() << nodeName;
             }
         });
     } break;
@@ -576,6 +617,10 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
             qWarning() << e.GetDescription() << node->GetName().c_str();
         }
         connect(comboBox, &QComboBox::currentTextChanged, this, [=](QString){
+            auto* currentNode = resolveNode(nodeName);
+            if(!currentNode) return;
+
+            GenApi::CEnumerationPtr ptr = currentNode;
             try{
                 QSignalBlocker block(comboBox);
                 auto val = ptr->GetEntryByName(comboBox->currentData().toString().toStdString().c_str());
@@ -590,7 +635,7 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
                 }catch(const Pylon::GenericException&){}
 
                 _statusBar->showMessage(e.GetDescription(), 5000);
-                qWarning() << e.GetDescription() << node->GetName().c_str();
+                qWarning() << e.GetDescription() << nodeName;
             }
         });
     } break;
@@ -599,12 +644,16 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
         auto button = new QPushButton("Execute");
         widget = button;
         connect(button, &QPushButton::clicked, this, [=]{
+            auto* currentNode = resolveNode(nodeName);
+            if(!currentNode) return;
+
+            GenApi::CCommandPtr ptr = currentNode;
             try{
                 ptr->Execute();
                 scheduleFeaturesRebuild();
             }catch(const Pylon::GenericException &e){
                 _statusBar->showMessage(e.GetDescription(), 5000);
-                qWarning() << e.GetDescription() << node->GetName().c_str();
+                qWarning() << e.GetDescription() << nodeName;
             }
         });
     } break;

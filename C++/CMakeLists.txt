@@ -22,22 +22,6 @@ set(QT_SOURCES
 add_library(${PROJECT_NAME} STATIC ${HEADERS} ${SOURCES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-find_package(OpenMP QUIET)
-if(OpenMP_CXX_FOUND)
-    target_link_libraries(${PROJECT_NAME} PUBLIC OpenMP::OpenMP_CXX)
-endif()
-
-find_package(PCL QUIET COMPONENTS common)
-if(PCL_FOUND)
-    target_sources(${PROJECT_NAME} PRIVATE
-        Utility/PCL/PCLConverter.h
-        Utility/PCL/PCLConverter.cpp
-    )
-    target_link_libraries(${PROJECT_NAME} PUBLIC ${PCL_LIBRARIES})
-    target_include_directories(${PROJECT_NAME} PUBLIC ${PCL_INCLUDE_DIRS})
-    target_compile_definitions(${PROJECT_NAME} PUBLIC PCL_ENABLED)
-endif()
-
 find_package(QT NAMES Qt6 Qt5 QUIET)
 if(QT_FOUND)
     find_package(Qt${QT_VERSION_MAJOR} QUIET COMPONENTS Core Gui Widgets Xml)
@@ -50,7 +34,7 @@ if(QT_FOUND)
         Qt${QT_VERSION_MAJOR}::Widgets
         Qt${QT_VERSION_MAJOR}::Xml
     )
-message(STATUS "[${PROJECT_NAME}] QtConverter.h features will be enabled for users")
+    message(STATUS "[${PROJECT_NAME}] QtConverter.h features will be enabled for users")
 else()
     message(STATUS "[${PROJECT_NAME}] Qt Not Found")
     message(STATUS "[${PROJECT_NAME}] QtConverter.h features will be disabled")
@@ -78,45 +62,4 @@ if(NOT pylon_FOUND)
         target_link_libraries(${PROJECT_NAME} PUBLIC pylon::pylon)
         message(STATUS "[${PROJECT_NAME}] pylon SDK ${pylon_VERSION} found")
     endif()
-
-    # vTools
-    find_path(pylon_vTools FindpylonDataProcessing.cmake
-        HINTS "/opt/pylon/share/pylon/Samples/pylonDataProcessing/C++/cmake"
-        HINTS "$ENV{PYLON_DEV_DIR}/Samples/pylonDataProcessing/C++/cmake"
-    )
-    list(APPEND CMAKE_MODULE_PATH ${pylon_vTools})
-    find_package(pylonDataProcessing QUIET)
-    if(pylonDataProcessing_FOUND)
-        target_link_libraries(${PROJECT_NAME} PUBLIC pylon::DataProcessing)
-        message(STATUS "[${PROJECT_NAME}] pylonDataProcessing SDK found")
-    endif()
-
-    # find_path(OpenCV_DIR OpenCVConfig.cmake
-    #     HINTS "C:/dev/opencv/build"
-    # )
-    # find_package(OpenCV QUIET)
-    # if(OpenCV_FOUND)
-    #     message(STATUS "[${PROJECT_NAME}] OpenCV ${OpenCV_VERSION} found")
-    #     target_link_libraries(${PROJECT_NAME} PUBLIC ${OpenCV_LIBS})
-    #     target_include_directories(${PROJECT_NAME} PUBLIC ${OpenCV_INCLUDE_DIRS})
-    #     target_compile_definitions(${PROJECT_NAME} PUBLIC OPENCV_ENABLED)
-    # else()
-    #     message(WARNING "[${PROJECT_NAME}] OpenCV not found.")
-    # endif()
-
-    # # PCL Loading
-    # find_package(PCL QUIET COMPONENTS common io filters visualization)
-    # if(PCL_FOUND)
-    #     message(STATUS "PCL ${PCL_VERSION} found")
-    #     target_link_libraries(${PROJECT_NAME} PUBLIC ${PCL_LIBRARIES})
-    #     target_include_directories(${PROJECT_NAME} PUBLIC ${PCL_INCLUDE_DIRS})
-    #     target_compile_definitions(${PROJECT_NAME} PUBLIC PCL_ENABLED)
-    #     #VTK
-    #     find_package(VTK REQUIRED)
-    #     if(VTK_FOUND)
-    #         message(STATUS "VTK ${VTK_VERSION} found")
-    #         target_link_libraries(${PROJECT_NAME} PUBLIC ${VTK_LIBRARIES})
-    #         target_include_directories(${PROJECT_NAME} PUBLIC ${VTK_INCLUDE_DIRS})
-    #     endif()
-    # endif()
 endif()

@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <exception>
 #include <limits>
 #include <string>
 
@@ -150,7 +151,9 @@ bool Camera::open(const string& cameraName){
         }
         return true;
     }catch(const GenericException &e){
-CameraSystem::syslog(e.GetDescription(),true);
+        CameraSystem::syslog(e.GetDescription(), true);
+    }catch(const std::exception &e){
+        CameraSystem::syslog(e.what(), true);
     }
     return false;
 }
@@ -171,7 +174,6 @@ void Camera::close(){
             _currentCamera.Close();
         }
         if(_currentCamera.IsPylonDeviceAttached()){
-            _currentCamera.DetachDevice();
             _currentCamera.DestroyDevice();
         }
     }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
@@ -338,7 +340,6 @@ void Camera::requestStop()
 }
 
 std::vector<string> Camera::getUpdatedCameraList() const {
-    _system->updateCameraList();
     return _system->getCameraList();
 }
 
@@ -367,13 +368,17 @@ void Camera::OnAttached(CInstantCamera &camera){
 }
 
 void Camera::OnDetached(CInstantCamera &camera){
+    _deviceAvailable.store(false, std::memory_order_release);
     auto from = "[Info " + to_string(_allottedNumber)  +"] ";
     CameraSystem::syslog(from + "Detached.");
 }
 
 void Camera::OnDestroyed(CInstantCamera &camera){
+    requestStop();
+    _deviceAvailable.store(false, std::memory_order_release);
     auto from = "[Info " + to_string(_allottedNumber)  +"] ";
     CameraSystem::syslog(from + "Device destroyed.");
+    dispatchCallbacks(_statusMutex, _statusObservers, GrabbingStatus, false);
     dispatchCallbacks(_statusMutex, _statusObservers, ConnectionStatus, false);
 }
 
@@ -422,29 +427,47 @@ void Camera::OnCameraEvent(CInstantCamera &camera, intptr_t userProvidedId, GenA
     if(!pNode || !_deviceAvailable.load(std::memory_order_acquire)) return;
 
     std::string output = std::string("[Event ") + std::to_string(_allottedNumber) + "] ";
+    std::string nodeName;
+    bool hasReadableLogValue = false;
 
     try{
+        nodeName = pNode->GetName().c_str();
+
+        if(!GenApi::IsReadable(pNode)){
+            if(!nodeName.empty()){
+                dispatchCallbacks(_nodeCallbackMutex, _nodeCallbacks, nodeName);
+            }
+            return;
+        }
+
         switch(pNode->GetPrincipalInterfaceType()){
         case GenApi::intfIInteger:
-            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + to_string(CIntegerPtr(pNode)->GetValue());
+            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + nodeName +" ) : " + to_string(CIntegerPtr(pNode)->GetValue());
+            hasReadableLogValue = true;
             break;
         case GenApi::intfIBoolean:
-            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + to_string(CBooleanPtr(pNode)->GetValue());
+            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + nodeName +" ) : " + to_string(CBooleanPtr(pNode)->GetValue());
+            hasReadableLogValue = true;
             break;
         case GenApi::intfIFloat:
-            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + to_string(CFloatPtr(pNode)->GetValue());
+            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + nodeName +" ) : " + to_string(CFloatPtr(pNode)->GetValue());
+            hasReadableLogValue = true;
             break;
         case GenApi::intfIString:
-            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + CStringPtr(pNode)->GetValue().c_str();
+            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + nodeName +" ) : " + CStringPtr(pNode)->GetValue().c_str();
+            hasReadableLogValue = true;
             break;
         case GenApi::intfIEnumeration:
-            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + CEnumerationPtr(pNode)->GetCurrentEntry()->GetNode()->GetDisplayName().c_str();
+            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + nodeName +" ) : " + CEnumerationPtr(pNode)->GetCurrentEntry()->GetNode()->GetDisplayName().c_str();
+            hasReadableLogValue = true;
             break;
         case GenApi::intfICommand:
-            output += std::string(CCommandPtr(pNode)->GetNode()->GetDisplayName().c_str()) + " ( " + pNode->GetName().c_str() +" ) : " + CCommandPtr(pNode)->ToString().c_str();
+            output += std::string(CCommandPtr(pNode)->GetNode()->GetDisplayName().c_str()) + " ( " + nodeName +" ) : " + CCommandPtr(pNode)->ToString().c_str();
+            hasReadableLogValue = true;
             break;
         case GenApi::intfIRegister:
             output += CRegisterPtr(pNode)->GetNode()->GetDisplayName().c_str() + CRegisterPtr(pNode)->GetAddress();
+            hasReadableLogValue = true;
             break;
         case GenApi::intfICategory:
             // We are going to ignore the category events due to the meaningless data for users.
@@ -459,8 +482,13 @@ void Camera::OnCameraEvent(CInstantCamera &camera, intptr_t userProvidedId, GenA
         CameraSystem::syslog(e.GetDescription(), true);
         return;
     }
-    CameraSystem::syslog(output);
 
-    dispatchCallbacks(_nodeCallbackMutex, _nodeCallbacks, pNode);
+    if(hasReadableLogValue){
+        CameraSystem::syslog(output);
+    }
+
+    if(!nodeName.empty()){
+        dispatchCallbacks(_nodeCallbackMutex, _nodeCallbacks, nodeName);
+    }
 }
 

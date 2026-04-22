@@ -25,6 +25,8 @@ class CameraSystem;
 class Camera : public Pylon::CConfigurationEventHandler,
                public Pylon::CCameraEventHandler
 {
+    friend class CameraSystem;
+
 public:
     using CallbackId = size_t;
 
@@ -101,10 +103,10 @@ public:
     std::vector<std::string> getUpdatedCameraList() const;
     GenApi::INodeMap& getNodeMap();
 
-    using NodeCallback = std::function<void(GenApi::INode*)>;
+    using NodeCallback = std::function<void(const std::string& nodeName)>;
     /**
      * @brief Registers a callback for node updates emitted by camera events.
-     * @param cb Callback invoked when a camera node changes.
+     * @param cb Callback invoked with the node name when a camera node changes.
      * @return Callback identifier that can be passed to `deregisterNodeUpdatedCallback()`.
      */
     CallbackId registerNodeUpdatedCallback(NodeCallback cb);
