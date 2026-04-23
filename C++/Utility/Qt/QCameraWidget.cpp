@@ -544,14 +544,14 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
             _statusBar->showMessage(e.GetDescription(), 5000);
             qWarning() << e.GetDescription() << node->GetName().c_str();
         }
-        connect(checkBox, &QCheckBox::checkStateChanged, this, [=](Qt::CheckState state){
+        const auto updateBooleanNode = [=](const Qt::CheckState state){
             auto* currentNode = resolveNode(nodeName);
             if(!currentNode) return;
 
             GenApi::CBooleanPtr ptr = currentNode;
             try{
                 QSignalBlocker block(checkBox);
-                ptr->SetValue((state == Qt::CheckState::Checked) ? true : false);
+                ptr->SetValue((state == Qt::Checked) ? true : false);
                 scheduleFeaturesRebuild();
             }catch(const Pylon::GenericException &e){
                 QSignalBlocker block(checkBox);
@@ -563,7 +563,14 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
                 _statusBar->showMessage(e.GetDescription(), 5000);
                 qWarning() << e.GetDescription() << nodeName;
             }
+        };
+#if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
+        connect(checkBox, &QCheckBox::checkStateChanged, this, updateBooleanNode);
+#else
+        connect(checkBox, &QCheckBox::stateChanged, this, [=](const int state){
+            updateBooleanNode(static_cast<Qt::CheckState>(state));
         });
+#endif
     } break;
     case GenApi::intfIString:{
         GenApi::CStringPtr ptr = node;
