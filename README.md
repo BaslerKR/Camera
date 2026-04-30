@@ -1,112 +1,13 @@
-# Camera
+# Camera 사용 안내
 
-Basler pylon 기반 카메라 acquisition layer.
+Basler pylon 카메라를 C++에서 다루기 위한 작은 acquisition 라이브러리입니다.
 
-`Camera`는 장치 검색, 연결/해제, grab loop, callback dispatch, GenApi feature editing을 하나의 C++17 모듈로 묶는다. GraphicsEngine에서는 일반 2D Basler 카메라와 blaze/stereo ace 계열 multipart 3D 카메라 입력을 받아 2D image 또는 3D scene payload로 전달하는 역할을 맡는다.
+이 모듈은 카메라 검색, 연결, 프레임 수신, callback 전달을 담당합니다. 화면 표시, 저장, 분석, 다중 장치 동기화는 이 라이브러리를 쓰는 application에서 결정합니다.
 
-## Design Goals
-
-- pylon lifetime을 `CameraSystem` 한 곳에서 관리
-- 카메라별 grab thread와 callback registry 분리
-- 2D image path와 3D multipart path 명확히 분리
-- GenApi node pointer를 장시간 보관하지 않고 node name 기준으로 재해석
-- Qt UI는 optional utility로 유지
-- 외부 vision stack(PCL/OpenCV 등)은 core camera layer에서 제외
-
-## Capability Matrix
-
-| Area | Entry Point | Notes |
-| --- | --- | --- |
-| Runtime | `CameraSystem` | `PylonInitialize()` / `PylonTerminate()` 소유 |
-| Discovery | `CameraSystem::getCameraList()` | 호출 시점마다 최신 enumerate |
-| Device access | `Camera::open(name)` | pylon friendly name 기반 |
-| 2D acquisition | `registerGrabCallback()` | `Pylon::CPylonImage` 전달 |
-| 3D acquisition | `registerGrab3DCallback()` | `Pylon::CPylonDataContainer` 전달 |
-| Feature UI | `QCameraWidget` | Qt available 시 빌드 |
-| Image conversion | `QtConverter.h` | pylon image -> `QImage` |
-
-## Scope
-
-- pylon runtime 초기화/종료: `CameraSystem`
-- 전체 장치 조회/접근성 확인: `CameraSystem`
-- 카메라 인스턴스 생성/소유: `CameraSystem::addCamera()`
-- 단일 카메라 연결/해제/취득: `Camera`
-- 2D frame callback: `CPylonImage`
-- 3D multipart callback: `Pylon::CPylonDataContainer`
-- GenApi node 변경 callback: node name 전달
-- Qt feature tree/control widget: `QCameraWidget`
-- pylon image -> `QImage` 변환: `QtConverter.h`
-
-Out of scope:
-
-- PCL 변환 유틸
-- OpenCV 연동
-- pylonDataProcessing 연동
-- 앱 레벨 다중 화면/다중 dock 구성
-
-## Build
-
-루트 프로젝트에서 `Camera/C++`를 subdirectory로 추가한다.
-
-```cmake
-add_subdirectory(Camera/C++)
-target_link_libraries(${PROJECT_NAME} PRIVATE Camera)
-```
-
-Required:
-
-- C++17
-- Basler pylon SDK
-
-Optional:
-
-- Qt Core/Gui/Widgets/Xml
-- Qt가 있으면 `QCameraWidget`, `QtConverter.h` 기능이 같이 빌드된다.
-- Qt가 없으면 core camera wrapper만 빌드된다.
-
-## Layout
-
-```text
-Camera/
-  C++/
-    CameraSystem.h/.cpp        pylon runtime, device enumerate, Camera ownership
-    Camera.h/.cpp              one camera connection, grab thread, callbacks
-    Utility/Qt/QtConverter.h   CPylonImage -> QImage conversion
-    Utility/Qt/QCameraWidget.* Qt camera control + GenApi feature tree
-```
-
-## CameraSystem
-
-`CameraSystem`은 pylon runtime, device discovery, `Camera` 인스턴스 소유권을 관리한다.
-
-```cpp
-CameraSystem system;
-auto names = system.getCameraList();
-```
-
-Discovery contract:
-
-- `getCameraList()`는 호출 시점에 pylon enumerate를 수행하고 최신 friendly name 목록을 반환한다.
-- `getCameraInfo(name)`도 최신 enumerate 후 이름을 찾는다.
-- `isAccessible(name)`도 최신 enumerate 기준으로 접근 가능 여부를 반환한다.
-- 내부 `_devices`, `_cameraList` 접근은 mutex로 보호한다.
-- `addCamera()`는 제거/재생성 후에도 중복되지 않는 allotted number를 부여한다.
-- `getCamera(number)`는 vector index가 아니라 allotted number 기준으로 검색한다.
-
-Identity rule:
-
-- 반환되는 camera list key는 pylon friendly name이다.
-- 같은 friendly name이 중복될 수 있는 환경이면 serial 기반 API가 추가로 필요하다.
-
-## 2D Acquisition
+## 한눈에 보기
 
 ```cpp
 #include "CameraSystem.h"
-
-#include <pylon/PylonImage.h>
-#include <atomic>
-#include <condition_variable>
-#include <mutex>
 
 int main()
 {
@@ -117,112 +18,171 @@ int main()
         return 1;
     }
 
-    std::atomic<size_t> received = 0;
-    std::mutex mutex;
-    std::condition_variable done;
-
     const auto grabId = camera->registerGrabCallback(
-        [&](const Pylon::CPylonImage& image, size_t frame) {
-            // image.GetWidth(), image.GetHeight(), image.GetBuffer() 등 사용
-            if (++received >= 10) {
-                done.notify_one();
-            }
-
-            // 처리 완료 후 다음 non-trigger frame 허가
+        [camera](const Pylon::CPylonImage& image, size_t frame) {
+            // image.GetWidth(), image.GetHeight(), image.GetBuffer()
             camera->ready();
         });
 
-    camera->grab(10);
-    {
-        std::unique_lock<std::mutex> lock(mutex);
-        done.wait(lock, [&] { return received >= 10; });
-    }
-    camera->stop();
+    camera->grab();
+
+    // ...
 
     camera->deregisterGrabCallback(grabId);
+    camera->stop();
     camera->close();
-    return 0;
 }
 ```
 
-`grab(frames)`:
+기본 흐름은 다음과 같습니다.
 
-- `frames == 0`: 연속 취득
-- `frames > 0`: 지정 프레임 수 취득 후 자동 정지
-- 이미 grab 중이면 중복 시작하지 않는다.
+1. `CameraSystem`을 생성합니다.
+2. `addCamera()`로 `Camera` 인스턴스를 만듭니다.
+3. `open()` 또는 `open(name)`으로 장치를 연결합니다.
+4. frame callback을 등록합니다.
+5. `grab()`으로 수신을 시작합니다.
+6. callback 안에서 frame을 처리한 뒤 `ready()`를 호출합니다.
+7. 종료 시 callback 해제, `stop()`, `close()` 순서로 정리합니다.
 
-`ready()`:
+## 빌드
 
-- non-trigger mode에서 다음 frame 처리를 허가하는 backpressure 신호다.
-- callback 내부 처리나 GUI queue 반영이 끝난 뒤 호출한다.
-- 호출하지 않으면 다음 frame 전달이 대기할 수 있다.
+상위 CMake project에서 다음과 같이 연결합니다.
 
-## Device Selection
+```cmake
+add_subdirectory(Camera/C++)
+target_link_libraries(<target> PRIVATE Camera)
+```
+
+필수 항목:
+
+- CMake 3.16+
+- C++17
+- Basler pylon SDK
+
+선택 항목:
+
+- Qt5 또는 Qt6 `Core`, `Gui`, `Widgets`, `Xml`
+- Qt가 있으면 `QCameraWidget`, `QtConverter.h`가 함께 빌드됩니다.
+- Qt가 없으면 core camera wrapper만 빌드됩니다.
+
+pylon CMake module은 다음 경로에서 찾습니다.
+
+- `$PYLON_DEV_DIR/lib/cmake`
+- `$PYLON_ROOT/lib/cmake`
+- `$PYLON_ROOT/Development/lib/cmake`
+- `/opt/pylon/lib/cmake`
+- Windows pylon 7/8 기본 설치 경로
+
+## 구성
+
+```text
+Camera/
+  C++/
+    CameraSystem.h/.cpp
+    Camera.h/.cpp
+    Utility/Qt/QtConverter.h
+    Utility/Qt/QCameraWidget.h/.cpp
+```
+
+`CameraSystem`은 다음을 담당합니다.
+
+- pylon runtime 초기화와 종료
+- 장치 목록 갱신
+- `Camera` 인스턴스 소유
+
+`Camera`는 다음을 담당합니다.
+
+- 단일 장치 연결과 해제
+- 2D grab callback
+- 3D multipart grab callback
+- status callback
+- GenApi node update callback
+
+Qt utility는 다음 기능을 제공합니다.
+
+- `QCameraWidget`: 장치 선택, open/close, single/live grab, GenApi feature tree
+- `QtConverter.h`: `Pylon::CPylonImage`를 `QImage`로 변환
+
+## 장치 찾기
 
 ```cpp
 CameraSystem system;
-auto cameras = system.getCameraList();
 
-for (const auto& name : cameras) {
+auto names = system.getCameraList();
+for (const auto& name : names) {
     if (system.isAccessible(name)) {
-        auto* camera = system.addCamera();
-        if (camera->open(name)) {
-            // 연결 성공
-        }
+        auto info = system.getCameraInfo(name);
     }
 }
 ```
 
-`open(name)`:
+동작 기준은 다음과 같습니다.
 
-- 최신 장치 목록에서 `name`과 일치하는 friendly name을 찾는다.
-- 장치가 없거나 접근 불가면 실패한다.
-- 빈 이름 `open()`은 접근 가능한 장치 하나를 선택한다.
+- `getCameraList()`는 호출할 때마다 pylon enumerate를 다시 수행합니다.
+- 장치 이름은 pylon friendly name입니다.
+- 같은 friendly name이 여러 개이면 현재 API에서는 구분이 모호합니다.
+- 해당 환경에서는 serial number 기반 선택 API를 별도로 추가해야 합니다.
 
-## Multi-Camera Pattern
-
-```cpp
-CameraSystem system;
-
-std::vector<Camera*> cameras;
-for (const auto& name : system.getCameraList()) {
-    if (!system.isAccessible(name)) {
-        continue;
-    }
-
-    auto* camera = system.addCamera();
-    if (!camera->open(name)) {
-        continue;
-    }
-
-    camera->registerGrabCallback([camera, name](const Pylon::CPylonImage& image, size_t frame) {
-        // name 또는 camera 포인터 기준으로 frame routing
-        camera->ready();
-    });
-
-    cameras.push_back(camera);
-}
-
-for (auto* camera : cameras) {
-    camera->grab();
-}
-```
-
-Operational notes:
-
-- 각 `Camera`는 자체 grab thread와 callback registry를 가진다.
-- callback에서 공유 출력 버퍼/GUI/엔진에 접근하면 호출자 쪽에서 routing과 동기화가 필요하다.
-- 현재 GraphicsEngine `src/main.cpp`는 카메라 1개 dock과 중앙 `GraphicsEngine` 1개만 연결한다. 동시 다중 표시 UI는 앱 레벨 확장 사항이다.
-
-## 3D Multipart Acquisition
-
-blaze/stereo ace/STA 계열은 모델명 기준으로 3D multipart stream으로 route된다.
+## 장치 열기
 
 ```cpp
 auto* camera = system.addCamera();
-camera->open("Basler blaze ...");
 
-const auto grab3DId = camera->registerGrab3DCallback(
+if (!camera->open()) {
+    return;
+}
+```
+
+`open()`은 접근 가능한 첫 번째 장치를 엽니다.
+
+`open(name)`은 friendly name이 같은 장치를 찾아서 엽니다.
+
+연결 실패 조건은 다음과 같습니다.
+
+- 장치가 없습니다.
+- 장치에 접근할 수 없습니다.
+- pylon 예외가 발생했습니다.
+
+닫을 때는 다음 순서를 사용합니다.
+
+```cpp
+camera->stop();
+camera->close();
+```
+
+## 2D 프레임 받기
+
+```cpp
+const auto id = camera->registerGrabCallback(
+    [camera](const Pylon::CPylonImage& image, size_t frame) {
+        const auto width = image.GetWidth();
+        const auto height = image.GetHeight();
+        const void* data = image.GetBuffer();
+
+        // 여기서 복사, 변환, queue 전달 등을 처리합니다.
+
+        camera->ready();
+    });
+
+camera->grab();
+```
+
+`grab()` 동작은 다음과 같습니다.
+
+- `grab()` 또는 `grab(0)`: 계속 수신합니다.
+- `grab(n)`: n frame을 받은 뒤 정지합니다.
+- 이미 grab 중이면 다시 시작하지 않습니다.
+
+callback 안에서는 다음 흐름을 권장합니다.
+
+- frame 처리에 쓸 data만 복사하거나 queue로 넘깁니다.
+- 오래 걸리는 작업은 다른 thread나 queue로 넘깁니다.
+- frame 처리가 끝나면 `ready()`를 호출합니다.
+
+## 3D multipart 프레임 받기
+
+```cpp
+const auto id = camera->registerGrab3DCallback(
     [camera](const Pylon::CPylonDataContainer& container, size_t frame) {
         for (size_t i = 0; i < container.GetDataComponentCount(); ++i) {
             auto component = container.GetDataComponent(i);
@@ -230,8 +190,8 @@ const auto grab3DId = camera->registerGrab3DCallback(
                 continue;
             }
 
-            // ComponentType_Range, ComponentType_Intensity,
-            // ComponentType_Confidence 등 확인 후 변환
+            const auto type = component.GetComponentType();
+            // ComponentType_Range, ComponentType_Intensity 등으로 분기합니다.
         }
 
         camera->ready();
@@ -240,78 +200,51 @@ const auto grab3DId = camera->registerGrab3DCallback(
 camera->grab();
 ```
 
-Stream setup:
+3D stream 동작은 다음과 같습니다.
 
-- blaze: `Range` + `Coord3D_ABC32f`, `Intensity` + `Mono16`, `Confidence` + `Confidence16`
-- stereo ace/STA: `Intensity`, `Disparity`
-- 3D로 판별된 카메라는 2D callback으로 fallback하지 않고 `registerGrab3DCallback()`으로 전달한다.
+- 3D로 판별된 장치는 `registerGrab3DCallback()`으로 전달됩니다.
+- 3D stream 설정은 `Camera::configureStreamForConnectedCamera()` 내부에서 처리됩니다.
+- 3D stream은 2D callback으로 fallback하지 않습니다.
 
-## Qt Utilities
+## `ready()` 규칙
 
-### QCameraWidget
+`ready()`는 non-trigger continuous grab에서 다음 frame 처리를 허가하는 신호입니다.
 
-`QCameraWidget`은 카메라 선택, 연결, 단일 grab, live grab, GenApi feature tree 편집을 제공한다.
+다음 경우에는 반드시 호출합니다.
 
-```cpp
-CameraSystem system;
-auto* camera = system.addCamera();
+- frame 처리가 끝났습니다.
+- frame을 drop했습니다.
+- frame을 queue로 넘겼고 더 기다리지 않아도 됩니다.
+- 변환 실패로 frame을 버렸습니다.
 
-auto* dock = new QDockWidget("Camera", &mainWindow);
-auto* cameraWidget = new QCameraWidget(dock, camera);
-dock->setWidget(cameraWidget);
-mainWindow.addDockWidget(Qt::RightDockWidgetArea, dock);
-```
+호출하지 않으면 다음 문제가 생길 수 있습니다.
 
-Threading behavior:
+- 다음 frame 전달이 막힙니다.
+- live grab이 멈춘 것처럼 보입니다.
 
-- refresh 시 `Camera::getUpdatedCameraList()` 호출
-- 내부적으로 최신 enumerate 후 friendly name list 갱신
-- node update callback은 raw `GenApi::INode*`가 아니라 node name을 받는다.
-- GUI thread에서 현재 node map 기준으로 다시 resolve한다.
-- camera close/disconnect 후 남은 queued update가 detached node를 만지지 않게 guard한다.
-
-### CPylonImage -> QImage
+## 상태 받기
 
 ```cpp
-#include "Utility/Qt/QtConverter.h"
-
-camera->registerGrabCallback([camera](const Pylon::CPylonImage& pylonImage, size_t frame) {
-    QImage image = convertPylonImageToQImage(pylonImage);
-    if (!image.isNull()) {
-        // GraphicsEngine::setImage(image) 등
-    }
-    camera->ready();
-});
-```
-
-`QtConverter.h`는 Mono/RGB/Bayer/YUV 계열 pylon pixel type을 Qt에서 표시 가능한 `QImage`로 변환한다.
-
-## Status Callback
-
-```cpp
-const auto statusId = camera->registerStatusCallback(
+const auto id = camera->registerStatusCallback(
     [](Camera::Status status, bool on) {
         if (status == Camera::GrabbingStatus) {
-            // on=true: grabbing started, on=false: stopped
+            // on == true: grab 시작
+            // on == false: grab 정지
         }
+
         if (status == Camera::ConnectionStatus) {
-            // on=true: opened, on=false: closed/removed/destroyed
+            // on == true: 연결됨
+            // on == false: 닫힘, 제거됨, 파괴됨
         }
     });
 ```
 
-Physical disconnect handling:
+status callback은 UI 표시, log, reconnect 판단에 사용할 수 있습니다.
 
-- grab loop stop request
-- permit wait wake
-- `_deviceAvailable=false`
-- `GrabbingStatus=false`
-- `ConnectionStatus=false`
-
-## Node Callback
+## GenApi node 변경 받기
 
 ```cpp
-const auto nodeId = camera->registerNodeUpdatedCallback(
+const auto id = camera->registerNodeUpdatedCallback(
     [camera](const std::string& nodeName) {
         if (nodeName.empty() || !camera->isOpened()) {
             return;
@@ -322,17 +255,43 @@ const auto nodeId = camera->registerNodeUpdatedCallback(
             return;
         }
 
-        // 현재 node map 기준으로 값 재조회
+        // 현재 node map에서 값을 다시 읽습니다.
     });
 ```
 
-Rules:
+node callback 규칙은 다음과 같습니다.
 
-- callback은 node pointer가 아니라 node name만 전달한다.
-- queued UI나 다른 thread에서 raw `GenApi::INode*`를 보관하지 않는다.
-- 필요 시 호출 시점의 현재 node map에서 다시 resolve한다.
+- callback은 node pointer가 아니라 node name을 전달합니다.
+- `GenApi::INode*`를 queue나 다른 thread에 저장하지 않습니다.
+- 값을 읽을 때 현재 node map에서 다시 찾습니다.
 
-## Shutdown Sequence
+## Qt에서 쓰기
+
+### Camera control widget
+
+```cpp
+auto* widget = new QCameraWidget(parent, camera);
+```
+
+제공 기능은 다음과 같습니다.
+
+- 장치 목록 새로고침
+- open / close
+- single grab / live grab
+- GenApi feature tree
+- close/disconnect 뒤 남은 queued node update 방어
+
+### QImage 변환
+
+```cpp
+#include "Utility/Qt/QtConverter.h"
+
+QImage image = convertPylonImageToQImage(pylonImage);
+```
+
+Mono, RGB, Bayer, YUV 계열 pylon pixel format을 Qt 표시용 `QImage`로 변환합니다.
+
+## 종료 순서
 
 ```cpp
 camera->deregisterGrabCallback(grabId);
@@ -344,56 +303,49 @@ camera->stop();
 camera->close();
 ```
 
-`CameraSystem` destructor는 남은 `Camera` 인스턴스를 삭제하고 `PylonTerminate()`를 호출한다.
+정리 순서는 다음과 같습니다.
 
-## Constraints
+- callback을 먼저 해제합니다.
+- grab loop를 정지합니다.
+- 장치를 닫습니다.
+- 마지막에 `CameraSystem` lifetime을 끝냅니다.
 
-- public API에 pylon SDK 타입이 노출된다. 현재 Camera submodule 내부 용도라 허용한다.
-- friendly name 기반 연결은 중복 friendly name 환경에서 모호할 수 있다.
-- callback은 grab thread 또는 pylon event thread에서 호출될 수 있다.
-- GUI 조작은 반드시 Qt queued connection 등으로 GUI thread에서 수행한다.
-- `ready()` 호출 누락은 live grab 정체로 이어질 수 있다.
-- 현재 앱 main은 단일 카메라 표시 구조다. Camera submodule은 다중 인스턴스를 지원하지만, 동시 표시/저장/동기화 정책은 앱 레벨에서 구현해야 한다.
+## Threading 주의
 
-## GraphicsEngine Integration
+- grab callback은 내부 grab thread에서 호출될 수 있습니다.
+- pylon event callback은 GUI thread가 아닐 수 있습니다.
+- 공유 data 접근은 호출자 쪽에서 동기화합니다.
+- Qt widget update는 GUI thread로 넘깁니다.
+- callback 등록/해제 map은 내부 mutex로 보호됩니다.
 
-현재 `src/main.cpp`는 다음 흐름으로 Camera input을 GraphicsEngine에 연결한다.
+## 문제 확인
 
-```cpp
-CameraSystem sys;
-sys.updateCameraList();
-auto* cam = sys.addCamera();
+장치 목록이 비어 있으면 다음을 확인합니다.
 
-auto* cameraWidget = new QCameraWidget(dock, cam);
+- pylon SDK 설치 상태
+- camera 전원과 cable 연결 상태
+- pylon Viewer에서 장치가 보이는지 여부
+- `PYLON_ROOT` 또는 `PYLON_DEV_DIR` 설정
 
-cam->registerGrabCallback([engineGuard, cam](const Pylon::CPylonImage& pylonImage, size_t frame) {
-    QImage image = convertPylonImageToQImage(pylonImage);
-    QMetaObject::invokeMethod(engineGuard, [engineGuard, cam, image]() {
-        if (engineGuard) {
-            engineGuard->setImage(image);
-        }
-        cam->ready();
-    }, Qt::QueuedConnection);
-});
+`open(name)`이 실패하면 다음을 확인합니다.
 
-cam->registerGrab3DCallback([engineGuard, cam](const Pylon::CPylonDataContainer& container, size_t frame) {
-    auto payload = BlazeAdapter::toScenePayload(container, frame);
-    if (!payload.has_value()) {
-        cam->ready();
-        return;
-    }
+- friendly name이 실제 목록과 같은지 여부
+- 다른 process가 장치를 잡고 있는지 여부
+- `isAccessible(name)` 결과
 
-    QMetaObject::invokeMethod(engineGuard, [engineGuard, cam, payload = std::move(*payload)]() mutable {
-        if (engineGuard) {
-            engineGuard->setSceneData(payload);
-        }
-        cam->ready();
-    }, Qt::QueuedConnection);
-});
-```
+grab이 멈춘 것처럼 보이면 다음을 확인합니다.
 
-Integration rule:
+- callback에서 `ready()`를 호출하는지 여부
+- callback 안에서 오래 걸리는 작업을 실행하는지 여부
+- physical disconnect status callback 발생 여부
 
-- 2D path는 `setImage()`
-- 3D path는 `BlazeAdapter::toScenePayload()` 후 `setSceneData()`
-- GUI 반영 후 `ready()`
+Qt UI가 불안정하면 다음을 확인합니다.
+
+- GUI thread 밖에서 widget을 만지는지 여부
+- node pointer를 저장하지 않고 node name으로 다시 resolve하는지 여부
+
+## 제한
+
+- API에는 pylon SDK 타입이 노출됩니다.
+- friendly name 기반 선택은 중복 이름 환경에 약합니다.
+- 저장, 화면 표시, 후처리, 다중 장치 동기화는 이 모듈 밖의 책임입니다.
