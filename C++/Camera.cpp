@@ -423,68 +423,18 @@ void Camera::OnGrabStopped(CInstantCamera &camera){
 }
 
 void Camera::OnCameraEvent(CInstantCamera &camera, intptr_t userProvidedId, GenApi::INode *pNode){
-    using namespace GenApi;
     if(!pNode || !_deviceAvailable.load(std::memory_order_acquire)) return;
 
-    std::string output = std::string("[Event ") + std::to_string(_allottedNumber) + "] ";
     std::string nodeName;
-    bool hasReadableLogValue = false;
 
     try{
         nodeName = pNode->GetName().c_str();
-
-        if(!GenApi::IsReadable(pNode)){
-            if(!nodeName.empty()){
-                dispatchCallbacks(_nodeCallbackMutex, _nodeCallbacks, nodeName);
-            }
-            return;
-        }
-
-        switch(pNode->GetPrincipalInterfaceType()){
-        case GenApi::intfIInteger:
-            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + nodeName +" ) : " + to_string(CIntegerPtr(pNode)->GetValue());
-            hasReadableLogValue = true;
-            break;
-        case GenApi::intfIBoolean:
-            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + nodeName +" ) : " + to_string(CBooleanPtr(pNode)->GetValue());
-            hasReadableLogValue = true;
-            break;
-        case GenApi::intfIFloat:
-            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + nodeName +" ) : " + to_string(CFloatPtr(pNode)->GetValue());
-            hasReadableLogValue = true;
-            break;
-        case GenApi::intfIString:
-            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + nodeName +" ) : " + CStringPtr(pNode)->GetValue().c_str();
-            hasReadableLogValue = true;
-            break;
-        case GenApi::intfIEnumeration:
-            output += std::string(pNode->GetDisplayName().c_str()) + " ( " + nodeName +" ) : " + CEnumerationPtr(pNode)->GetCurrentEntry()->GetNode()->GetDisplayName().c_str();
-            hasReadableLogValue = true;
-            break;
-        case GenApi::intfICommand:
-            output += std::string(CCommandPtr(pNode)->GetNode()->GetDisplayName().c_str()) + " ( " + nodeName +" ) : " + CCommandPtr(pNode)->ToString().c_str();
-            hasReadableLogValue = true;
-            break;
-        case GenApi::intfIRegister:
-            output += CRegisterPtr(pNode)->GetNode()->GetDisplayName().c_str() + CRegisterPtr(pNode)->GetAddress();
-            hasReadableLogValue = true;
-            break;
-        case GenApi::intfICategory:
-            // We are going to ignore the category events due to the meaningless data for users.
-            return;
-        case GenApi::intfIEnumEntry:
-        case GenApi::intfIPort:
-        case GenApi::intfIValue:
-        case GenApi::intfIBase:
-            break;
-        }
     }catch(const GenericException &e){
         CameraSystem::syslog(e.GetDescription(), true);
         return;
-    }
-
-    if(hasReadableLogValue){
-        CameraSystem::syslog(output);
+    }catch(const std::exception &e){
+        CameraSystem::syslog(e.what(), true);
+        return;
     }
 
     if(!nodeName.empty()){
