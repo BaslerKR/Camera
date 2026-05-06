@@ -11,6 +11,7 @@
 #include <QSize>
 #include <QSizePolicy>
 #include <QVariant>
+#include <exception>
 
 QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent), _camera(camera)
 {
@@ -654,13 +655,23 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
             auto* currentNode = resolveNode(nodeName);
             if(!currentNode) return;
 
-            GenApi::CCommandPtr ptr = currentNode;
             try{
+                GenApi::CCommandPtr ptr = currentNode;
+                if(!GenApi::IsWritable(ptr)){
+                    button->setEnabled(false);
+                    scheduleFeaturesRebuild();
+                    return;
+                }
                 ptr->Execute();
                 scheduleFeaturesRebuild();
             }catch(const Pylon::GenericException &e){
+                scheduleFeaturesRebuild();
                 _statusBar->showMessage(e.GetDescription(), 5000);
                 qWarning() << e.GetDescription() << nodeName;
+            }catch(const std::exception &e){
+                scheduleFeaturesRebuild();
+                _statusBar->showMessage(e.what(), 5000);
+                qWarning() << e.what() << nodeName;
             }
         });
     } break;
