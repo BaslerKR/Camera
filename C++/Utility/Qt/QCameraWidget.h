@@ -24,6 +24,8 @@
 #include <QTimer>
 #include "Camera.h"
 
+class QThread;
+
 class QCameraWidget : public QWidget
 {
     Q_OBJECT
@@ -46,10 +48,15 @@ private:
     bool isCameraReady() const;
     GenApi::INode* resolveNode(const QString& nodeName) const;
     void rebuildFeaturesIfReady();
+    void startConnectionOperation(bool open, const QString& cameraName = {});
+    void setConnectionOperationActive(bool active);
+    void applyConnectionState(bool opened);
 
     Camera *_camera;
     Camera::CallbackId _statusCallbackId = 0;
     Camera::CallbackId _nodeCallbackId = 0;
+    QThread *_connectionThread = nullptr;
+    bool _connectionOperationActive = false;
     QTreeWidget *_featuresWidget;
     QComboBox *_cameraListComboBox;
 

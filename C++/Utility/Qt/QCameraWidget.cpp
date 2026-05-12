@@ -10,8 +10,23 @@
 #include <QSet>
 #include <QSize>
 #include <QSizePolicy>
+#include <QThread>
 #include <QVariant>
 #include <exception>
+#include <memory>
+
+namespace
+{
+void expandToDepth(QTreeWidgetItem* item, const int depth, const int maxExpandedDepth)
+{
+    if(!item) return;
+
+    item->setExpanded(depth <= maxExpandedDepth);
+    for(int childIndex = 0; childIndex < item->childCount(); ++childIndex){
+        expandToDepth(item->child(childIndex), depth + 1, maxExpandedDepth);
+    }
+}
+}
 
 QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent), _camera(camera)
 {
@@ -140,21 +155,8 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
                 }
             }break;
             case Camera::ConnectionStatus:{
-                QSignalBlocker connectBlock(guard->_toolConnect);
-                guard->_toolConnect->setChecked(on);
-
-                guard->_cameraListComboBox->setEnabled(!on);
-                guard->_toolRefresh->setEnabled(!on);
-                guard->_toolGrabOne->setEnabled(on);
-                guard->_toolGrabLive->setEnabled(on);
-
-                if(on){ // Camera Connected
-                    guard->rebuildFeaturesIfReady();
-                }else{ // Camera Disconnected
-                    guard->_toolGrabLive->setChecked(false);
-                    guard->_featuresWidget->clear();
-                }
-                if(!on) emit guard->_toolRefresh->clicked();
+                if(guard->_connectionOperationActive) return;
+                guard->applyConnectionState(on);
             }break;
             }
         }, Qt::QueuedConnection);
@@ -172,12 +174,9 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     connect(_toolConnect, &QToolButton::toggled, this, [=](bool toggled){
         // Request to open the camera
         if(toggled){
-            if(!_camera->open(_cameraListComboBox->currentText().toStdString())){
-                QSignalBlocker connectBlock(_toolConnect);
-                _toolConnect->setChecked(false);
-            }
+            startConnectionOperation(true, _cameraListComboBox->currentText());
         }else{
-            _camera->close();
+            startConnectionOperation(false);
         }
     });
     connect(_toolGrabOne, &QToolButton::clicked, this, [=]{
@@ -187,7 +186,7 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     connect(_toolGrabLive, &QToolButton::toggled, this, [=](bool toggled){
         // Request to start a continuous grabbing
         if(toggled) _camera->grab();
-        else _camera->stop();
+        else _camera->requestStop();
     });
 
     emit _toolRefresh->clicked();
@@ -195,6 +194,11 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
 
 QCameraWidget::~QCameraWidget()
 {
+    if(_connectionThread){
+        _connectionThread->wait();
+        _connectionThread = nullptr;
+    }
+
     if(_camera){
         if(_statusCallbackId != 0){
             _camera->deregisterStatusCallback(_statusCallbackId);
@@ -202,6 +206,85 @@ QCameraWidget::~QCameraWidget()
         if(_nodeCallbackId != 0){
             _camera->deregisterNodeUpdatedCallback(_nodeCallbackId);
         }
+    }
+}
+
+void QCameraWidget::startConnectionOperation(const bool open, const QString& cameraName)
+{
+    if(!_camera || _connectionThread) return;
+
+    const std::string selectedCameraName = cameraName.toStdString();
+    const auto result = std::make_shared<bool>(false);
+    auto* worker = QThread::create([camera = _camera, open, selectedCameraName, result]{
+        if(open){
+            *result = camera->open(selectedCameraName);
+        }else{
+            camera->close();
+            *result = true;
+        }
+    });
+
+    _connectionThread = worker;
+    worker->setParent(this);
+    setConnectionOperationActive(true);
+    _statusBar->showMessage(open ? tr("Connecting camera...") : tr("Disconnecting camera..."), 0);
+
+    QPointer<QCameraWidget> guard(this);
+    connect(worker, &QThread::finished, this, [guard, worker, open, result]{
+        if(!guard) return;
+
+        if(guard->_connectionThread == worker){
+            guard->_connectionThread = nullptr;
+        }
+        worker->deleteLater();
+
+        guard->setConnectionOperationActive(false);
+        const bool opened = guard->_camera && guard->_camera->isOpened();
+        guard->applyConnectionState(opened);
+
+        if(open && !*result && !opened){
+            guard->_statusBar->showMessage(tr("Camera connection failed."), 5000);
+        }else{
+            guard->_statusBar->clearMessage();
+        }
+    });
+    worker->start();
+}
+
+void QCameraWidget::setConnectionOperationActive(const bool active)
+{
+    _connectionOperationActive = active;
+
+    const bool opened = _camera && _camera->isOpened();
+    _toolConnect->setEnabled(!active);
+    _cameraListComboBox->setEnabled(!active && !opened);
+    _toolRefresh->setEnabled(!active && !opened);
+    _toolGrabOne->setEnabled(!active && opened);
+    _toolGrabLive->setEnabled(!active && opened);
+}
+
+void QCameraWidget::applyConnectionState(const bool opened)
+{
+    {
+        QSignalBlocker connectBlock(_toolConnect);
+        _toolConnect->setChecked(opened);
+    }
+
+    _cameraListComboBox->setEnabled(!opened);
+    _toolRefresh->setEnabled(!opened);
+    _toolConnect->setEnabled(true);
+    _toolGrabOne->setEnabled(opened);
+    _toolGrabLive->setEnabled(opened);
+
+    if(opened){
+        rebuildFeaturesIfReady();
+    }else{
+        {
+            QSignalBlocker grabBlock(_toolGrabLive);
+            _toolGrabLive->setChecked(false);
+        }
+        _featuresWidget->clear();
+        emit _toolRefresh->clicked();
     }
 }
 
@@ -270,7 +353,11 @@ void QCameraWidget::generateFeaturesWidget(GenApi::INodeMap &nodemap)
             cat->GetChildren(children);
             generateChildrenItem(item, children);
         }
-        restoreExpandedNodeNames(cameraFeatures, expandedNodeNames);
+        if(expandedNodeNames.isEmpty()){
+            expandToDepth(cameraFeatures, 0, 0);
+        }else{
+            restoreExpandedNodeNames(cameraFeatures, expandedNodeNames);
+        }
 
         if(selectedNodeName.isEmpty()){
             _featuresWidget->setCurrentItem(cameraFeatures);
@@ -298,7 +385,7 @@ void QCameraWidget::generateChildrenItem(QTreeWidgetItem *parent, GenApi::NodeLi
         const int rowHeight = nodeWidget->sizeHint().height();
         subItem->setSizeHint(0, QSize(0, rowHeight));
         subItem->setSizeHint(1, QSize(0, rowHeight));
-        _featuresWidget->setItemWidget(subItem, parent->columnCount(), nodeWidget);
+        _featuresWidget->setItemWidget(subItem, 1, nodeWidget);
     }
 }
 

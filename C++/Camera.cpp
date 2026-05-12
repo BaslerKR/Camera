@@ -103,7 +103,7 @@ Camera::Camera(CameraSystem *parent, const int allottedNumber) : _system(parent)
 
 Camera::~Camera()
 {
-    stop();
+    close();
     _system->removeCamera(this);
 }
 
