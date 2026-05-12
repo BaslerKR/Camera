@@ -99,6 +99,7 @@ public:
 
     void grab(size_t frames=0);
     void stop();
+    void requestStop();
 
     std::vector<std::string> getUpdatedCameraList() const;
     GenApi::INodeMap& getNodeMap();
@@ -164,7 +165,6 @@ private:
     void configureStreamForConnectedCamera();
     void configureBlazeStream(GenApi::INodeMap& nodeMap);
     void configureStereoAceStream(GenApi::INodeMap& nodeMap);
-    void requestStop();
 
 
 protected:
