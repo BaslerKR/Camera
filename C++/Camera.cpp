@@ -125,30 +125,15 @@ void Camera::clearStatusCallbacks()
 bool Camera::open(const string& cameraName){
     try{
         _deviceAvailable.store(false, std::memory_order_release);
+        clearNodeEventHandlers();
         CameraSystem::syslog("Try to open " + (cameraName.empty() ? "any one of the cameras on this system" : cameraName) + ".");
         _currentCamera.Attach(_system->createDevice(cameraName), Cleanup_Delete);
         _currentCamera.Open();
-        configureStreamForConnectedCamera();
-
-        // Registering event handlers
-        GenApi::NodeList_t nodes;
-        _currentCamera.GetNodeMap().GetNodes(nodes);
-        for(const auto cur : nodes){
-            if(cur->GetName() == "Root") continue;
-            if(cur->GetPrincipalInterfaceType() != GenApi::intfICategory) continue;
-            if(!GenApi::IsAvailable(cur)) continue;
-
-            GenApi::NodeList_t children;
-            cur->GetChildren(children);
-
-            for(const auto child : children){
-                if(!GenApi::IsReadable(child)) continue;
-                try{
-                    String_t nodeName = child->GetName();
-                    _currentCamera.RegisterCameraEventHandler(this, nodeName, _allottedNumber, ERegistrationMode::RegistrationMode_Append, ECleanup::Cleanup_None);
-                }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
-            }
+        if(_currentCamera.IsOpen()){
+            markOpened(_currentCamera);
         }
+        configureStreamForConnectedCamera();
+        registerNodeEventHandlers();
         return true;
     }catch(const GenericException &e){
         CameraSystem::syslog(e.GetDescription(), true);
@@ -168,8 +153,9 @@ bool Camera::isOpened() const {
 void Camera::close(){
     try{
         stop();
+        clearNodeEventHandlers();
         _deviceAvailable.store(false, std::memory_order_release);
-        _streamKind = StreamKind::Image2D;
+        _streamKind.store(StreamKind::Image2D, std::memory_order_release);
         if(_currentCamera.IsOpen()){
             _currentCamera.Close();
         }
@@ -217,7 +203,7 @@ void Camera::ready()
 
 void Camera::configureStreamForConnectedCamera()
 {
-    _streamKind = StreamKind::Image2D;
+    _streamKind.store(StreamKind::Image2D, std::memory_order_release);
 
     auto& nodeMap = _currentCamera.GetNodeMap();
     const auto modelName = toLowerCopy(_currentCamera.GetDeviceInfo().GetModelName().c_str());
@@ -228,7 +214,8 @@ void Camera::configureStreamForConnectedCamera()
         configureStereoAceStream(nodeMap);
     }
 
-    const auto* routeText = _streamKind == StreamKind::MultiPart3D ? "3D-only" : "2D";
+    const auto streamKind = _streamKind.load(std::memory_order_acquire);
+    const auto* routeText = streamKind == StreamKind::MultiPart3D ? "3D-only" : "2D";
     CameraSystem::syslog("[Info " + to_string(_allottedNumber) + "] model="
                          + modelName
                          + " route=" + routeText);
@@ -236,7 +223,7 @@ void Camera::configureStreamForConnectedCamera()
 
 void Camera::configureBlazeStream(GenApi::INodeMap& nodeMap)
 {
-    _streamKind = StreamKind::MultiPart3D;
+    _streamKind.store(StreamKind::MultiPart3D, std::memory_order_release);
     enableComponent(nodeMap, "Range", "Coord3D_ABC32f");
     enableComponent(nodeMap, "Intensity", "Mono16");
     enableComponent(nodeMap, "Confidence", "Confidence16");
@@ -255,7 +242,7 @@ void Camera::configureBlazeStream(GenApi::INodeMap& nodeMap)
 
 void Camera::configureStereoAceStream(GenApi::INodeMap& nodeMap)
 {
-    _streamKind = StreamKind::MultiPart3D;
+    _streamKind.store(StreamKind::MultiPart3D, std::memory_order_release);
     enableComponent(nodeMap, "Intensity");
     enableComponent(nodeMap, "Disparity");
 }
@@ -299,7 +286,7 @@ void Camera::grab(const size_t frames){
                             }
 
                             auto seq = _frameSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
-                            if(_streamKind == StreamKind::MultiPart3D){
+                            if(_streamKind.load(std::memory_order_acquire) == StreamKind::MultiPart3D){
                                 auto container = grabResult->GetDataContainer();
                                 dispatchCallbacks(_grab3DCallbackMutex, _grab3DCallbacks, container, seq);
                             }else{
@@ -383,11 +370,7 @@ void Camera::OnDestroyed(CInstantCamera &camera){
 }
 
 void Camera::OnOpened(CInstantCamera &camera){
-    _connectedCameraName = safeCameraName(camera, {});
-    _deviceAvailable.store(true, std::memory_order_release);
-    auto from = "[Info " + to_string(_allottedNumber)  +"] " + _connectedCameraName;
-    CameraSystem::syslog(from + " opened.");
-    dispatchCallbacks(_statusMutex, _statusObservers, ConnectionStatus, true);
+    markOpened(camera);
 }
 
 void Camera::OnClosed(CInstantCamera &camera){
@@ -440,5 +423,59 @@ void Camera::OnCameraEvent(CInstantCamera &camera, intptr_t userProvidedId, GenA
     if(!nodeName.empty()){
         dispatchCallbacks(_nodeCallbackMutex, _nodeCallbacks, nodeName);
     }
+}
+
+void Camera::markOpened(CInstantCamera& camera)
+{
+    _connectedCameraName = safeCameraName(camera, {});
+    const bool wasAvailable = _deviceAvailable.exchange(true, std::memory_order_acq_rel);
+    if(wasAvailable) return;
+
+    auto from = "[Info " + to_string(_allottedNumber)  +"] " + _connectedCameraName;
+    CameraSystem::syslog(from + " opened.");
+    dispatchCallbacks(_statusMutex, _statusObservers, ConnectionStatus, true);
+}
+
+void Camera::registerNodeEventHandlers()
+{
+    clearNodeEventHandlers();
+
+    GenApi::NodeList_t nodes;
+    _currentCamera.GetNodeMap().GetNodes(nodes);
+    for(const auto cur : nodes){
+        if(cur->GetName() == "Root") continue;
+        if(cur->GetPrincipalInterfaceType() != GenApi::intfICategory) continue;
+        if(!GenApi::IsAvailable(cur)) continue;
+
+        GenApi::NodeList_t children;
+        cur->GetChildren(children);
+
+        for(const auto child : children){
+            if(!GenApi::IsReadable(child)) continue;
+
+            try{
+                std::string nodeName = child->GetName().c_str();
+                if(std::find(_registeredNodeEventNames.begin(), _registeredNodeEventNames.end(), nodeName) != _registeredNodeEventNames.end()) continue;
+
+                _currentCamera.RegisterCameraEventHandler(this,
+                                                         nodeName.c_str(),
+                                                         _allottedNumber,
+                                                         ERegistrationMode::RegistrationMode_Append,
+                                                         ECleanup::Cleanup_None,
+                                                         CameraEventAvailability_Optional);
+                _registeredNodeEventNames.push_back(std::move(nodeName));
+            }catch(const GenericException &e){
+                CameraSystem::syslog(e.GetDescription(), true);
+            }
+        }
+    }
+}
+
+void Camera::clearNodeEventHandlers()
+{
+    for(const auto& nodeName : _registeredNodeEventNames){
+        _currentCamera.DeregisterCameraEventHandler(this, nodeName.c_str());
+    }
+    _registeredNodeEventNames.clear();
 }
 

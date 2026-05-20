@@ -17,6 +17,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <unordered_map>
+#include <vector>
 
 using namespace Pylon;
 using namespace std;
@@ -160,11 +161,15 @@ private:
 
     std::atomic<size_t> _frameSeq{0};
     std::atomic<size_t> _frameTarget{0};
-    StreamKind _streamKind = StreamKind::Image2D;
+    std::atomic<StreamKind> _streamKind{StreamKind::Image2D};
+    std::vector<std::string> _registeredNodeEventNames;
 
     void configureStreamForConnectedCamera();
     void configureBlazeStream(GenApi::INodeMap& nodeMap);
     void configureStereoAceStream(GenApi::INodeMap& nodeMap);
+    void markOpened(Pylon::CInstantCamera& camera);
+    void registerNodeEventHandlers();
+    void clearNodeEventHandlers();
 
 
 protected:
