@@ -194,6 +194,13 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
 
 QCameraWidget::~QCameraWidget()
 {
+    prepareForShutdown();
+}
+
+void QCameraWidget::prepareForShutdown()
+{
+    _shuttingDown = true;
+
     if(_connectionThread){
         _connectionThread->wait();
         _connectionThread = nullptr;
@@ -202,16 +209,19 @@ QCameraWidget::~QCameraWidget()
     if(_camera){
         if(_statusCallbackId != 0){
             _camera->deregisterStatusCallback(_statusCallbackId);
+            _statusCallbackId = 0;
         }
         if(_nodeCallbackId != 0){
             _camera->deregisterNodeUpdatedCallback(_nodeCallbackId);
+            _nodeCallbackId = 0;
         }
     }
+    _camera = nullptr;
 }
 
 void QCameraWidget::startConnectionOperation(const bool open, const QString& cameraName)
 {
-    if(!_camera || _connectionThread) return;
+    if(!_camera || _shuttingDown || _connectionThread) return;
 
     const std::string selectedCameraName = cameraName.toStdString();
     const auto result = std::make_shared<bool>(false);
@@ -253,6 +263,8 @@ void QCameraWidget::startConnectionOperation(const bool open, const QString& cam
 
 void QCameraWidget::setConnectionOperationActive(const bool active)
 {
+    if(_shuttingDown) return;
+
     _connectionOperationActive = active;
 
     const bool opened = _camera && _camera->isOpened();
@@ -265,6 +277,8 @@ void QCameraWidget::setConnectionOperationActive(const bool active)
 
 void QCameraWidget::applyConnectionState(const bool opened)
 {
+    if(_shuttingDown) return;
+
     {
         QSignalBlocker connectBlock(_toolConnect);
         _toolConnect->setChecked(opened);
@@ -290,7 +304,7 @@ void QCameraWidget::applyConnectionState(const bool opened)
 
 bool QCameraWidget::isCameraReady() const
 {
-    return _camera && _camera->isOpened();
+    return _camera && !_shuttingDown && _camera->isOpened();
 }
 
 GenApi::INode* QCameraWidget::resolveNode(const QString& nodeName) const
@@ -511,10 +525,11 @@ void QCameraWidget::handleNodeUpdated(const QString& nodeName)
 
 void QCameraWidget::scheduleFeaturesRebuild()
 {
-    if(_rebuildScheduled || !isCameraReady()) return;
+    if(_shuttingDown || _rebuildScheduled || !isCameraReady()) return;
 
     _rebuildScheduled = true;
     QTimer::singleShot(50, this, [this]{
+        if(_shuttingDown) return;
         _rebuildScheduled = false;
         rebuildFeaturesIfReady();
     });

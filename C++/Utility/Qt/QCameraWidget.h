@@ -32,6 +32,7 @@ class QCameraWidget : public QWidget
 public:
     QCameraWidget(QWidget *parent=nullptr, Camera *camera=nullptr);
     ~QCameraWidget();
+    void prepareForShutdown();
 
     void generateFeaturesWidget(GenApi::INodeMap& nodemap);
     void generateChildrenItem(QTreeWidgetItem *parent, GenApi::NodeList_t children);
@@ -57,6 +58,7 @@ private:
     Camera::CallbackId _nodeCallbackId = 0;
     QThread *_connectionThread = nullptr;
     bool _connectionOperationActive = false;
+    bool _shuttingDown = false;
     QTreeWidget *_featuresWidget;
     QComboBox *_cameraListComboBox;
 
