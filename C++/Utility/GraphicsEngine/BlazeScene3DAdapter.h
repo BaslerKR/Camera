@@ -5,7 +5,7 @@
  * @brief Basler blaze 3D source adapter for neutral GraphicsEngine scene data.
  */
 
-#include "engine/adapters/Scene3DAdapter.h"
+#include "engine/Scene3DAdapter.h"
 #include "engine/GraphicsSceneTypes.h"
 
 #include <pylon/PylonIncludes.h>
