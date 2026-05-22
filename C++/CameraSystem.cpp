@@ -15,6 +15,7 @@ CameraSystem::~CameraSystem(){
             std::lock_guard<std::mutex> lock(_mutex);
             if(_cameraList.empty()) break;
             camera = _cameraList.back();
+            _cameraList.pop_back();
         }
         delete camera;
     }
@@ -98,9 +99,14 @@ Camera *CameraSystem::addCamera()
 
 void CameraSystem::removeCamera(Camera *camera)
 {
+    if (!camera) return;
     std::lock_guard<std::mutex> lock(_mutex);
-    _cameraList.erase(std::remove(_cameraList.begin(), _cameraList.end(), camera), _cameraList.end());
-    syslog("This camera instance was removed.");
+    auto it = std::remove(_cameraList.begin(), _cameraList.end(), camera);
+    if (it != _cameraList.end()) {
+        _cameraList.erase(it, _cameraList.end());
+        delete camera;
+        syslog("This camera instance was removed.");
+    }
 }
 
 Camera *CameraSystem::getCamera(const int allottedNumber) const {
