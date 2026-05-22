@@ -66,3 +66,13 @@ if(NOT pylon_FOUND)
         message(STATUS "[${PROJECT_NAME}] pylon SDK ${pylon_VERSION} found")
     endif()
 endif()
+
+if(TARGET GraphicsEngine)
+    message(STATUS "[Camera] GraphicsEngine target detected. Enabling BlazeScene3DAdapter.")
+    target_sources(Camera PRIVATE
+        Utility/GraphicsEngine/BlazeScene3DAdapter.h
+        Utility/GraphicsEngine/BlazeScene3DAdapter.cpp
+    )
+    target_link_libraries(Camera PUBLIC GraphicsEngine::GraphicsEngine)
+    target_include_directories(Camera PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/Utility/GraphicsEngine)
+endif()
