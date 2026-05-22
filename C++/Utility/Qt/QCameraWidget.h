@@ -59,6 +59,7 @@ private:
     QThread *_connectionThread = nullptr;
     bool _connectionOperationActive = false;
     bool _shuttingDown = false;
+    bool _grabbing = false;
     QTreeWidget *_featuresWidget;
     QComboBox *_cameraListComboBox;
 
@@ -69,6 +70,13 @@ private:
 
     QStatusBar *_statusBar;
     bool _rebuildScheduled = false;
+    QLabel *_messageLabel = nullptr;
+    QLabel *_statusLabel = nullptr;
+    QTimer *_messageTimer = nullptr;
+
+    void showStatusMessage(const QString& msg, bool isError = false, int timeout = 0);
+    void updateGrabState(bool grabbing);
+    void updateStatusBubble();
 };
 #endif
 #endif // QCAMERAWIDGET_H

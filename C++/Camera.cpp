@@ -104,7 +104,6 @@ Camera::Camera(CameraSystem *parent, const int allottedNumber) : _system(parent)
 Camera::~Camera()
 {
     close();
-    _system->removeCamera(this);
 }
 
 Camera::CallbackId Camera::registerStatusCallback(StatusCallback cb)
@@ -153,12 +152,13 @@ bool Camera::isOpened() const {
 void Camera::close(){
     try{
         stop();
-        clearNodeEventHandlers();
         _deviceAvailable.store(false, std::memory_order_release);
         _streamKind.store(StreamKind::Image2D, std::memory_order_release);
         if(_currentCamera.IsOpen()){
             _currentCamera.Close();
         }
+        _currentCamera.DeregisterConfiguration(this);
+        clearNodeEventHandlers();
         if(_currentCamera.IsPylonDeviceAttached()){
             _currentCamera.DestroyDevice();
         }

@@ -131,7 +131,6 @@ private:
     };
 
     CameraSystem *_system;
-    CBaslerUniversalInstantCamera _currentCamera;
     std::string _connectedCameraName;
     int _allottedNumber = 0;
 
@@ -163,6 +162,8 @@ private:
     std::atomic<size_t> _frameTarget{0};
     std::atomic<StreamKind> _streamKind{StreamKind::Image2D};
     std::vector<std::string> _registeredNodeEventNames;
+
+    CBaslerUniversalInstantCamera _currentCamera;
 
     void configureStreamForConnectedCamera();
     void configureBlazeStream(GenApi::INodeMap& nodeMap);

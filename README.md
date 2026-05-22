@@ -8,6 +8,8 @@
 - **카메라 제어**: Basler Pylon SDK를 래핑하여 검색, 연결 수립, Single/Continuous Grabbing을 관리합니다.
 - **3D 멀티파트 스트림 지원**: pylon 3D 데이터 수신을 위한 3D grab 콜백 인터페이스를 제공합니다.
 - **Qt 확장 위젯 제공**: 장치 선택, 연결 및 파라미터 튜닝이 가능한 `QCameraWidget` 위젯과 Pylon 이미지를 `QImage`로 고속 변환하는 `QtConverter`를 내장하고 있습니다.
+- **Runtime logging**: `CameraSystem::syslog()` emits `[Camera System]` messages through standard streams so host apps can redirect logs without coupling to Qt logging APIs.
+- **Lifecycle ownership**: `CameraSystem` owns `Camera` instances; host windows should remove cameras through `CameraSystem::removeCamera()` instead of deleting them directly.
 
 ## 🛠️ 요구 사양 및 의존성
 - **OS**: macOS / Windows
@@ -52,3 +54,4 @@ int main()
 ## ⚠️ 개발 주의사항
 - **`ready()` 호출**: 실시간 Grabbing 루프의 백프레셔 제어를 위해 콜백 내부 처리가 끝나면 반드시 `camera->ready()`를 호출해야 합니다.
 - **스레드 안전성**: 프레임 취득 콜백은 내부 Grab 스레드에서 직접 실행되므로 GUI 리소스 수정 시 Qt 스레드 큐잉(`QMetaObject::invokeMethod`) 처리가 필요합니다.
+- **Shutdown order**: Deregister UI callbacks and remove cameras while `CameraSystem` is still alive. Parent hosts should destroy device windows before destroying the `CameraSystem`.
