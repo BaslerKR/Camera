@@ -265,6 +265,7 @@ void QCameraWidget::startConnectionOperation(const bool open, const QString& cam
 
     _connectionThread = worker;
     worker->setParent(this);
+    _connectionAttempted = true;
     setConnectionOperationActive(true);
     showStatusMessage(open ? tr("Connecting camera...") : tr("Disconnecting camera..."), false, 0);
 
@@ -311,6 +312,10 @@ void QCameraWidget::setConnectionOperationActive(const bool active)
 void QCameraWidget::applyConnectionState(const bool opened)
 {
     if(_shuttingDown) return;
+
+    if(opened){
+        _connectionAttempted = true;
+    }
 
     {
         QSignalBlocker connectBlock(_toolConnect);
@@ -896,7 +901,10 @@ void QCameraWidget::updateStatusBubble()
 
     const bool opened = _camera && _camera->isOpened();
 
-    if (!opened) {
+    if (!opened && !_connectionAttempted) {
+        _statusLabel->setText(tr("Idle"));
+        _statusLabel->setProperty("status", "idle");
+    } else if (!opened) {
         _statusLabel->setText(tr("Disconnected"));
         _statusLabel->setProperty("status", "disconnected");
     } else if (_grabbing) {
