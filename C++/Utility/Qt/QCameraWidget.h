@@ -58,6 +58,7 @@ private:
     Camera::CallbackId _nodeCallbackId = 0;
     QThread *_connectionThread = nullptr;
     bool _connectionOperationActive = false;
+    bool _connectionAttempted = false;
     bool _shuttingDown = false;
     bool _grabbing = false;
     QTreeWidget *_featuresWidget;
