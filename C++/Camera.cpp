@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <cctype>
 #include <exception>
+#include <initializer_list>
 #include <limits>
+#include <optional>
 #include <string>
 
 namespace {
@@ -62,25 +64,60 @@ string toLowerCopy(string value)
     return value;
 }
 
-void enableComponent(GenApi::INodeMap& nodeMap, const char* componentName, const char* pixelFormat = nullptr)
+std::string enableComponent(GenApi::INodeMap& nodeMap,
+                            const char* componentName,
+                            const std::initializer_list<const char*> pixelFormats = {},
+                            const char* sourceName = nullptr)
 {
     auto* componentSelectorNode = nodeMap.GetNode("ComponentSelector");
     auto* componentEnableNode = nodeMap.GetNode("ComponentEnable");
-    if(!componentSelectorNode || !componentEnableNode) return;
-    if(!GenApi::IsWritable(componentSelectorNode) || !GenApi::IsWritable(componentEnableNode)) return;
+    if(!componentSelectorNode || !componentEnableNode) return {};
+    if(!GenApi::IsWritable(componentSelectorNode) || !GenApi::IsWritable(componentEnableNode)) return {};
+
+    if(sourceName){
+        auto* sourceSelectorNode = nodeMap.GetNode("SourceSelector");
+        if(sourceSelectorNode && GenApi::IsWritable(sourceSelectorNode)){
+            Pylon::CEnumParameter(nodeMap, "SourceSelector").TrySetValue(sourceName);
+        }
+    }
 
     auto componentSelector = Pylon::CEnumParameter(nodeMap, "ComponentSelector");
     auto componentEnable = Pylon::CBooleanParameter(nodeMap, "ComponentEnable");
-    componentSelector.SetValue(componentName);
+    if(!componentSelector.TrySetValue(componentName)) return {};
     componentEnable.SetValue(true);
 
-    if(pixelFormat){
-        auto* pixelFormatNode = nodeMap.GetNode("PixelFormat");
-        if(pixelFormatNode && GenApi::IsWritable(pixelFormatNode)){
-            auto pixelFormatParam = Pylon::CEnumParameter(nodeMap, "PixelFormat");
-            pixelFormatParam.TrySetValue(pixelFormat);
+    auto* pixelFormatNode = nodeMap.GetNode("PixelFormat");
+    if(pixelFormatNode && GenApi::IsReadable(pixelFormatNode)){
+        auto pixelFormatParam = Pylon::CEnumParameter(nodeMap, "PixelFormat");
+        if(GenApi::IsWritable(pixelFormatNode)){
+            for(const char* pixelFormat : pixelFormats){
+                if(pixelFormatParam.TrySetValue(pixelFormat)) break;
+            }
         }
+        return pixelFormatParam.GetValue().c_str();
     }
+
+    return {};
+}
+
+std::optional<double> readFloatParameter(GenApi::INodeMap& nodeMap, const char* name)
+{
+    auto* node = nodeMap.GetNode(name);
+    if(!node || !GenApi::IsReadable(node)) return std::nullopt;
+    return Pylon::CFloatParameter(nodeMap, name).GetValue();
+}
+
+bool isColorPixelFormat(const std::string& value)
+{
+    const auto lower = toLowerCopy(value);
+    return lower.find("rgb") != std::string::npos || lower.find("bgr") != std::string::npos;
+}
+
+bool setComponentMappingMode(GenApi::INodeMap& nodeMap, const char* mappingMode)
+{
+    auto* node = nodeMap.GetNode("BslComponentMappingMode");
+    return node && GenApi::IsWritable(node)
+        && Pylon::CEnumParameter(nodeMap, "BslComponentMappingMode").TrySetValue(mappingMode);
 }
 
 std::string safeCameraName(Pylon::CInstantCamera& camera, const std::string& fallback)
@@ -154,6 +191,10 @@ void Camera::close(){
         stop();
         _deviceAvailable.store(false, std::memory_order_release);
         _streamKind.store(StreamKind::Image2D, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(_scene3DProfileMutex);
+            _scene3DProfile = {};
+        }
         if(_currentCamera.IsOpen()){
             _currentCamera.Close();
         }
@@ -204,13 +245,25 @@ void Camera::ready()
 void Camera::configureStreamForConnectedCamera()
 {
     _streamKind.store(StreamKind::Image2D, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(_scene3DProfileMutex);
+        _scene3DProfile = {};
+    }
 
     auto& nodeMap = _currentCamera.GetNodeMap();
     const auto modelName = toLowerCopy(_currentCamera.GetDeviceInfo().GetModelName().c_str());
+    const auto deviceClass = toLowerCopy(_currentCamera.GetDeviceInfo().GetDeviceClass().c_str());
 
-    if(modelName.find("blaze") != string::npos){
+    if(deviceClass.find("blaze") != string::npos || modelName.find("blaze") != string::npos){
         configureBlazeStream(nodeMap);
-    }else if(modelName.find("stereo ace") != string::npos || modelName.find("sta") != string::npos){
+    }else if(deviceClass.find("/stereo_mini") != string::npos
+             || modelName.find("stereo mini") != string::npos
+             || modelName.find("stereomini") != string::npos
+             || modelName.find("stm-") != string::npos){
+        configureStereoMiniStream(nodeMap);
+    }else if(deviceClass.find("/basler_xw") != string::npos
+             || modelName.find("stereo ace") != string::npos
+             || modelName.find("sta-") != string::npos){
         configureStereoAceStream(nodeMap);
     }
 
@@ -224,9 +277,9 @@ void Camera::configureStreamForConnectedCamera()
 void Camera::configureBlazeStream(GenApi::INodeMap& nodeMap)
 {
     _streamKind.store(StreamKind::MultiPart3D, std::memory_order_release);
-    enableComponent(nodeMap, "Range", "Coord3D_ABC32f");
-    enableComponent(nodeMap, "Intensity", "Mono16");
-    enableComponent(nodeMap, "Confidence", "Confidence16");
+    enableComponent(nodeMap, "Range", {"Coord3D_ABC32f"});
+    enableComponent(nodeMap, "Intensity", {"Mono16"});
+    enableComponent(nodeMap, "Confidence", {"Confidence16"});
 
     auto* coordinateSelectorNode = _currentCamera.Scan3dCoordinateSelector.GetNode();
     auto* invalidDataValueNode = _currentCamera.Scan3dInvalidDataValue.GetNode();
@@ -238,13 +291,50 @@ void Camera::configureBlazeStream(GenApi::INodeMap& nodeMap)
             _currentCamera.Scan3dInvalidDataValue.SetValue(std::numeric_limits<float>::quiet_NaN());
         }
     }
+
+    std::lock_guard<std::mutex> lock(_scene3DProfileMutex);
+    _scene3DProfile.family = PylonScene3DProfile::DeviceFamily::Blaze;
+    _scene3DProfile.geometry = PylonScene3DProfile::GeometryKind::DirectXyzRange;
 }
 
 void Camera::configureStereoAceStream(GenApi::INodeMap& nodeMap)
 {
     _streamKind.store(StreamKind::MultiPart3D, std::memory_order_release);
-    enableComponent(nodeMap, "Intensity");
-    enableComponent(nodeMap, "Disparity");
+    const auto intensityFormat = enableComponent(nodeMap, "Intensity", {"RGB8", "Mono8"});
+    enableComponent(nodeMap, "Disparity", {"Coord3D_C16"});
+
+    PylonScene3DProfile profile;
+    profile.family = PylonScene3DProfile::DeviceFamily::StereoAce;
+    profile.geometry = PylonScene3DProfile::GeometryKind::DisparityReconstruction;
+    profile.colorRegisteredToRange = isColorPixelFormat(intensityFormat);
+    profile.coordinateScale = readFloatParameter(nodeMap, "Scan3dCoordinateScale").value_or(0.0);
+    profile.coordinateOffset = readFloatParameter(nodeMap, "Scan3dCoordinateOffset").value_or(0.0);
+    profile.baseline = readFloatParameter(nodeMap, "Scan3dBaseline").value_or(0.0);
+    profile.focalLength = readFloatParameter(nodeMap, "Scan3dFocalLength").value_or(0.0);
+    profile.principalPointU = readFloatParameter(nodeMap, "Scan3dPrincipalPointU").value_or(0.0);
+    profile.principalPointV = readFloatParameter(nodeMap, "Scan3dPrincipalPointV").value_or(0.0);
+
+    std::lock_guard<std::mutex> lock(_scene3DProfileMutex);
+    _scene3DProfile = std::move(profile);
+}
+
+void Camera::configureStereoMiniStream(GenApi::INodeMap& nodeMap)
+{
+    _streamKind.store(StreamKind::MultiPart3D, std::memory_order_release);
+    enableComponent(
+        nodeMap, "Intensity", {"RGBA8", "RGBA8packed", "RGB8", "Mono8"}, "Source3");
+    enableComponent(nodeMap, "Range", {"Coord3D_ABC32f"}, "Source1");
+
+    auto* chunkModeNode = nodeMap.GetNode("ChunkModeActive");
+    if(chunkModeNode && GenApi::IsWritable(chunkModeNode)){
+        Pylon::CBooleanParameter(nodeMap, "ChunkModeActive").TrySetValue(false);
+    }
+    setComponentMappingMode(nodeMap, "None");
+
+    std::lock_guard<std::mutex> lock(_scene3DProfileMutex);
+    _scene3DProfile.family = PylonScene3DProfile::DeviceFamily::StereoMini;
+    _scene3DProfile.geometry = PylonScene3DProfile::GeometryKind::DirectXyzRange;
+    _scene3DProfile.colorRegisteredToRange = false;
 }
 
 void Camera::grab(const size_t frames){
@@ -332,6 +422,12 @@ std::vector<string> Camera::getUpdatedCameraList() const {
 
 GenApi::INodeMap &Camera::getNodeMap(){
     return _currentCamera.GetNodeMap();
+}
+
+PylonScene3DProfile Camera::scene3DProfile() const
+{
+    std::lock_guard<std::mutex> lock(_scene3DProfileMutex);
+    return _scene3DProfile;
 }
 
 Camera::CallbackId Camera::registerNodeUpdatedCallback(NodeCallback cb)

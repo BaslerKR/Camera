@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(HEADERS
     Camera.h
     CameraSystem.h
+    PylonScene3DProfile.h
 )
 set(SOURCES
     Camera.cpp
@@ -68,10 +69,12 @@ if(NOT pylon_FOUND)
 endif()
 
 if(TARGET GraphicsEngine)
-    message(STATUS "[Camera] GraphicsEngine target detected. Enabling BlazeScene3DAdapter.")
+    message(STATUS "[Camera] GraphicsEngine target detected. Enabling pylon Scene3D adapters.")
     target_sources(Camera PRIVATE
         Utility/GraphicsEngine/BlazeScene3DAdapter.h
         Utility/GraphicsEngine/BlazeScene3DAdapter.cpp
+        Utility/GraphicsEngine/PylonScene3DAdapter.h
+        Utility/GraphicsEngine/PylonScene3DAdapter.cpp
     )
     target_link_libraries(Camera PUBLIC GraphicsEngine::GraphicsEngine)
     target_include_directories(Camera PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/Utility/GraphicsEngine)

@@ -11,6 +11,7 @@
 
 #include <pylon/PylonIncludes.h>
 #include <pylon/BaslerUniversalInstantCamera.h>
+#include "PylonScene3DProfile.h"
 #include <thread>
 #include <atomic>
 #include <functional>
@@ -104,6 +105,7 @@ public:
 
     std::vector<std::string> getUpdatedCameraList() const;
     GenApi::INodeMap& getNodeMap();
+    [[nodiscard]] PylonScene3DProfile scene3DProfile() const;
 
     using NodeCallback = std::function<void(const std::string& nodeName)>;
     /**
@@ -162,12 +164,15 @@ private:
     std::atomic<size_t> _frameTarget{0};
     std::atomic<StreamKind> _streamKind{StreamKind::Image2D};
     std::vector<std::string> _registeredNodeEventNames;
+    mutable std::mutex _scene3DProfileMutex;
+    PylonScene3DProfile _scene3DProfile;
 
     CBaslerUniversalInstantCamera _currentCamera;
 
     void configureStreamForConnectedCamera();
     void configureBlazeStream(GenApi::INodeMap& nodeMap);
     void configureStereoAceStream(GenApi::INodeMap& nodeMap);
+    void configureStereoMiniStream(GenApi::INodeMap& nodeMap);
     void markOpened(Pylon::CInstantCamera& camera);
     void registerNodeEventHandlers();
     void clearNodeEventHandlers();
