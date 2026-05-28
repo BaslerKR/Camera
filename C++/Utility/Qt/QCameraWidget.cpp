@@ -27,6 +27,14 @@ void expandToDepth(QTreeWidgetItem* item, const int depth, const int maxExpanded
         expandToDepth(item->child(childIndex), depth + 1, maxExpandedDepth);
     }
 }
+
+void repolish(QWidget* widget)
+{
+    if(!widget) return;
+    widget->style()->unpolish(widget);
+    widget->style()->polish(widget);
+    widget->update();
+}
 }
 
 QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent), _camera(camera)
@@ -127,7 +135,7 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     _messageLabel = new QLabel(this);
     _messageLabel->setObjectName(QStringLiteral("CameraMessageLabel"));
     _messageLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    _messageLabel->setStyleSheet(QStringLiteral("color: #425467; background: transparent; border: none; padding: 0; margin-left: 10px;"));
+    _messageLabel->setProperty("messageState", "normal");
     _statusBar->addWidget(_messageLabel, 1);
 
     _messageTimer = new QTimer(this);
@@ -859,30 +867,8 @@ void QCameraWidget::showStatusMessage(const QString& msg, bool isError, int time
 
     _messageTimer->stop();
     _messageLabel->setText(msg);
-
-    if (isError) {
-        _messageLabel->setStyleSheet(QStringLiteral(
-            "QLabel {"
-            "  color: #c62828;"
-            "  font-weight: bold;"
-            "  background: transparent;"
-            "  border: none;"
-            "  padding: 0;"
-            "  margin-left: 6px;"
-            "}"
-        ));
-    } else {
-        _messageLabel->setStyleSheet(QStringLiteral(
-            "QLabel {"
-            "  color: #354657;"
-            "  font-weight: normal;"
-            "  background: transparent;"
-            "  border: none;"
-            "  padding: 0;"
-            "  margin-left: 6px;"
-            "}"
-        ));
-    }
+    _messageLabel->setProperty("messageState", isError ? "error" : "normal");
+    repolish(_messageLabel);
 
     if (timeout > 0) {
         _messageTimer->start(timeout);
