@@ -40,6 +40,7 @@ void repolish(QWidget* widget)
 QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent), _camera(camera)
 {
     setWindowTitle("Basler pylon Camera Configuration");
+    setMinimumSize(300, 350);
     // Create the camera list combobox
     _cameraListComboBox = new QComboBox;
     _cameraListComboBox->setMinimumWidth(120);
