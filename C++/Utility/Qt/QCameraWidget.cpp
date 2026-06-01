@@ -165,11 +165,7 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
 
     // Configure the details of toolbuttons
     connect(_toolRefresh, &QToolButton::clicked, this, [=]{
-        _cameraListComboBox->clear();
-        for(const auto &camera: _camera->getUpdatedCameraList()){
-            _cameraListComboBox->addItem(camera.c_str());
-        }
-        if(_camera->isOpened()) _cameraListComboBox->setCurrentText(_camera->getConnectedCameraName().c_str());
+        startRefreshOperation();
     });
     _statusCallbackId = _camera->registerStatusCallback([guard](Camera::Status status, bool on){
         if(!guard) return;
@@ -227,7 +223,7 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
         }
     });
 
-    emit _toolRefresh->clicked();
+    startRefreshOperation();
 }
 
 QCameraWidget::~QCameraWidget()
@@ -242,6 +238,11 @@ void QCameraWidget::prepareForShutdown()
     if(_connectionThread){
         _connectionThread->wait();
         _connectionThread = nullptr;
+    }
+
+    if(_refreshThread){
+        _refreshThread->wait();
+        _refreshThread = nullptr;
     }
 
     if(_camera){
@@ -316,6 +317,70 @@ void QCameraWidget::setConnectionOperationActive(const bool active)
     _toolRefresh->setEnabled(!active && !opened);
     _toolGrabOne->setEnabled(!active && opened);
     _toolGrabLive->setEnabled(!active && opened);
+}
+
+void QCameraWidget::startRefreshOperation()
+{
+    if (!_camera || _shuttingDown || _refreshThread) return;
+
+    setRefreshOperationActive(true);
+    showStatusMessage(tr("Scanning for cameras..."), false, 0);
+
+    struct RefreshResult {
+        std::vector<std::string> cameraList;
+        std::string connectedName;
+        bool isOpened = false;
+    };
+    const auto result = std::make_shared<RefreshResult>();
+
+    auto* worker = QThread::create([camera = _camera, result] {
+        if (camera) {
+            result->cameraList = camera->getUpdatedCameraList();
+            result->isOpened = camera->isOpened();
+            if (result->isOpened) {
+                result->connectedName = camera->getConnectedCameraName();
+            }
+        }
+    });
+
+    _refreshThread = worker;
+    worker->setParent(this);
+
+    QPointer<QCameraWidget> guard(this);
+    connect(worker, &QThread::finished, this, [guard, worker, result] {
+        if (!guard) return;
+
+        if (guard->_refreshThread == worker) {
+            guard->_refreshThread = nullptr;
+        }
+        worker->deleteLater();
+
+        if (guard->_camera) {
+            guard->_cameraListComboBox->clear();
+            for (const auto& cameraName : result->cameraList) {
+                guard->_cameraListComboBox->addItem(QString::fromStdString(cameraName));
+            }
+            if (result->isOpened) {
+                guard->_cameraListComboBox->setCurrentText(QString::fromStdString(result->connectedName));
+            }
+        }
+
+        guard->setRefreshOperationActive(false);
+        guard->showStatusMessage(tr("Camera list updated."), false, 3000);
+    });
+    worker->start();
+}
+
+void QCameraWidget::setRefreshOperationActive(const bool active)
+{
+    if (_shuttingDown) return;
+
+    _refreshOperationActive = active;
+
+    const bool opened = _camera && _camera->isOpened();
+    _toolRefresh->setEnabled(!active);
+    _cameraListComboBox->setEnabled(!active && !opened);
+    _toolConnect->setEnabled(!active);
 }
 
 void QCameraWidget::applyConnectionState(const bool opened)

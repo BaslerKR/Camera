@@ -52,12 +52,16 @@ private:
     void startConnectionOperation(bool open, const QString& cameraName = {});
     void setConnectionOperationActive(bool active);
     void applyConnectionState(bool opened);
+    void startRefreshOperation();
+    void setRefreshOperationActive(bool active);
 
     Camera *_camera;
     Camera::CallbackId _statusCallbackId = 0;
     Camera::CallbackId _nodeCallbackId = 0;
     QThread *_connectionThread = nullptr;
+    QThread *_refreshThread = nullptr;
     bool _connectionOperationActive = false;
+    bool _refreshOperationActive = false;
     bool _connectionAttempted = false;
     bool _shuttingDown = false;
     bool _grabbing = false;
