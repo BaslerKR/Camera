@@ -54,6 +54,18 @@ std::vector<string> CameraSystem::getCameraList() {
     return list;
 }
 
+std::vector<string> CameraSystem::getCachedCameraList() const {
+    std::vector<std::string> list;
+    try{
+        std::lock_guard<std::mutex> lock(_mutex);
+        for(const auto &cur : _devices)
+            list.emplace_back(cur.GetFriendlyName().c_str());
+    }catch(const GenericException &e) {
+        syslog(e.what(), true);
+    }
+    return list;
+}
+
 bool CameraSystem::isAccessible(const string &camera){
     try{
         std::lock_guard<std::mutex> lock(_mutex);

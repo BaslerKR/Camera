@@ -104,6 +104,7 @@ public:
     void requestStop();
 
     std::vector<std::string> getUpdatedCameraList() const;
+    std::vector<std::string> getCachedCameraList() const;
     GenApi::INodeMap& getNodeMap();
     [[nodiscard]] PylonScene3DProfile scene3DProfile() const;
 
