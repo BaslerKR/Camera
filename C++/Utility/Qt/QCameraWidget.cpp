@@ -50,6 +50,7 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     _featuresWidget = new QTreeWidget;
     _featuresWidget->setHeaderLabels(QStringList() << "Feature" << "Value");
     _featuresWidget->setObjectName(QStringLiteral("CameraFeaturesTree"));
+    _featuresWidget->setProperty("treeRole", QStringLiteral("DeviceFeatureTree"));
     _featuresWidget->setRootIsDecorated(true);
     _featuresWidget->setAnimated(false);
     _featuresWidget->setAlternatingRowColors(true);
@@ -95,38 +96,32 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     }
 
     QHBoxLayout *cameraListLayout = new QHBoxLayout;
-    cameraListLayout->setContentsMargins(0, 0, 0, 0);
-    cameraListLayout->setSpacing(8);
+    cameraListLayout->setObjectName(QStringLiteral("DeviceSelectorLayout"));
     cameraListLayout->addWidget(_cameraListComboBox);
     cameraListLayout->addWidget(_toolRefresh);
 
     QHBoxLayout *toolButtonLayout = new QHBoxLayout;
-    toolButtonLayout->setContentsMargins(0, 0, 0, 0);
-    toolButtonLayout->setSpacing(6);
+    toolButtonLayout->setObjectName(QStringLiteral("DeviceToolLayout"));
     toolButtonLayout->addWidget(_toolConnect);
     toolButtonLayout->addWidget(_toolGrabOne);
     toolButtonLayout->addWidget(_toolGrabLive);
 
     auto *listAndButtonLayout = new QHBoxLayout;
-    listAndButtonLayout->setContentsMargins(12, 12, 12, 12);
-    listAndButtonLayout->setSpacing(10);
+    listAndButtonLayout->setObjectName(QStringLiteral("DeviceTopBarLayout"));
     listAndButtonLayout->addLayout(cameraListLayout);
     listAndButtonLayout->addLayout(toolButtonLayout);
 
     auto *featuresWidgetLayout = new QVBoxLayout;
-    featuresWidgetLayout->setContentsMargins(12, 0, 12, 12);
-    featuresWidgetLayout->setSpacing(8);
+    featuresWidgetLayout->setObjectName(QStringLiteral("DeviceTreePanelLayout"));
     featuresWidgetLayout->addWidget(_featuresWidget);
 
     auto *layout = new QVBoxLayout;
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
+    layout->setObjectName(QStringLiteral("DeviceRootLayout"));
     layout->addLayout(listAndButtonLayout);
     layout->addLayout(featuresWidgetLayout);
 
     _statusBar = new QStatusBar(this);
     _statusBar->setObjectName(QStringLiteral("CameraStatusBar"));
-    _statusBar->setContentsMargins(0, 0, 0, 0);
 
     _statusLabel = new QLabel(this);
     _statusLabel->setObjectName(QStringLiteral("CameraStatusLabel"));
