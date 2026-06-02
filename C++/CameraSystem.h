@@ -25,6 +25,7 @@ public:
 
     void updateCameraList();
     std::vector<std::string> getCameraList();
+    std::vector<std::string> getCachedCameraList() const;
     bool isAccessible(const std::string &camera);
 
     CDeviceInfo getCameraInfo(const std::string &cameraName);

@@ -218,7 +218,15 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
         }
     });
 
-    startRefreshOperation();
+    if (_camera) {
+        _cameraListComboBox->clear();
+        for (const auto& cameraName : _camera->getCachedCameraList()) {
+            _cameraListComboBox->addItem(QString::fromStdString(cameraName));
+        }
+        if (_camera->isOpened()) {
+            _cameraListComboBox->setCurrentText(QString::fromStdString(_camera->getConnectedCameraName()));
+        }
+    }
 }
 
 QCameraWidget::~QCameraWidget()

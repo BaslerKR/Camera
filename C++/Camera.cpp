@@ -420,6 +420,10 @@ std::vector<string> Camera::getUpdatedCameraList() const {
     return _system->getCameraList();
 }
 
+std::vector<string> Camera::getCachedCameraList() const {
+    return _system->getCachedCameraList();
+}
+
 GenApi::INodeMap &Camera::getNodeMap(){
     return _currentCamera.GetNodeMap();
 }
