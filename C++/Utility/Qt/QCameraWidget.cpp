@@ -122,6 +122,7 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
 
     _statusBar = new QStatusBar(this);
     _statusBar->setObjectName(QStringLiteral("CameraStatusBar"));
+    _statusBar->setSizeGripEnabled(false);
 
     _statusLabel = new QLabel(this);
     _statusLabel->setObjectName(QStringLiteral("CameraStatusLabel"));
