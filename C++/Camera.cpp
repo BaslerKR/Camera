@@ -395,7 +395,13 @@ void Camera::grab(const size_t frames){
                     }
                 }
                 if(_currentCamera.IsGrabbing()) _currentCamera.StopGrabbing();
-            }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
+            }catch(const GenericException &e){ 
+                CameraSystem::syslog(e.GetDescription(),true); 
+            }catch(const std::exception &e){ 
+                CameraSystem::syslog(e.what(),true); 
+            }catch(...){
+                CameraSystem::syslog("Unknown exception in Camera::grab thread.", true);
+            }
             _isRunning.store(false, std::memory_order_release);
             _permitCondition.notify_all();
         });

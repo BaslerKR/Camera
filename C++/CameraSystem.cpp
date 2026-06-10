@@ -38,6 +38,10 @@ void CameraSystem::updateCameraList(){
         updateCameraListLocked();
     }catch(const GenericException &e){
         syslog(e.what(), true);
+    }catch(const std::exception &e){
+        syslog(e.what(), true);
+    }catch(...){
+        syslog("Unknown exception in updateCameraList", true);
     }
 }
 
@@ -50,6 +54,10 @@ std::vector<string> CameraSystem::getCameraList() {
             list.emplace_back(cur.GetFriendlyName().c_str());
     }catch(const GenericException &e) {
         syslog(e.what(), true);
+    }catch(const std::exception &e){
+        syslog(e.what(), true);
+    }catch(...){
+        syslog("Unknown exception in getCameraList", true);
     }
     return list;
 }
@@ -62,6 +70,10 @@ std::vector<string> CameraSystem::getCachedCameraList() const {
             list.emplace_back(cur.GetFriendlyName().c_str());
     }catch(const GenericException &e) {
         syslog(e.what(), true);
+    }catch(const std::exception &e){
+        syslog(e.what(), true);
+    }catch(...){
+        syslog("Unknown exception in getCachedCameraList", true);
     }
     return list;
 }
@@ -77,6 +89,10 @@ bool CameraSystem::isAccessible(const string &camera){
         }
     }catch(const GenericException &e){
         syslog(e.what(), true);
+    }catch(const std::exception &e){
+        syslog(e.what(), true);
+    }catch(...){
+        syslog("Unknown exception in isAccessible", true);
     }
     return false;
 }
@@ -94,6 +110,10 @@ CDeviceInfo CameraSystem::getCameraInfo(const string &cameraName) {
         }
     }catch(const GenericException &e){
         syslog(e.what(), true);
+    }catch(const std::exception &e){
+        syslog(e.what(), true);
+    }catch(...){
+        syslog("Unknown exception in getCameraInfo", true);
     }
     syslog("No matched information found. ", true);
     return {};

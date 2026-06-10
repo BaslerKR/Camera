@@ -53,16 +53,32 @@ if(POLICY CMP0144)
     cmake_policy(SET CMP0144 NEW)
 endif()
 if(NOT pylon_FOUND)
-    find_path(pylon_cmake Findpylon.cmake
-        HINTS "$ENV{PYLON_DEV_DIR}/lib/cmake"
-        "$ENV{PYLON_ROOT}/lib/cmake"
-        "$ENV{PYLON_ROOT}/Development/lib/cmake"
-        "$ENV{ProgramFiles}/Basler/pylon 8/Development/lib/cmake"
-        "$ENV{ProgramFiles}/Basler/pylon 7/Development/lib/cmake"
-        "/opt/pylon/lib/cmake"
-    )
-    list(APPEND CMAKE_MODULE_PATH ${pylon_cmake})
-    find_package(pylon REQUIRED)
+    if(APPLE)
+        find_path(pylon_cmake
+            NAMES pylon-targets.cmake
+            HINTS "${pylon_DIR}"
+                  "$ENV{PYLON_ROOT}/Resources/CMake"
+                  "/Library/Frameworks/pylon.framework/Resources/CMake"
+            REQUIRED
+        )
+        file(REAL_PATH "${pylon_cmake}" pylon_cmake_real)
+        include("${pylon_cmake_real}/pylon-config-version.cmake")
+        include("${pylon_cmake_real}/genicam-targets.cmake")
+        include("${pylon_cmake_real}/pylon-targets.cmake")
+        set(pylon_FOUND TRUE)
+        set(pylon_VERSION "${PACKAGE_VERSION}")
+    else()
+        find_path(pylon_cmake Findpylon.cmake
+            HINTS "$ENV{PYLON_DEV_DIR}/lib/cmake"
+            "$ENV{PYLON_ROOT}/lib/cmake"
+            "$ENV{PYLON_ROOT}/Development/lib/cmake"
+            "$ENV{ProgramFiles}/Basler/pylon 8/Development/lib/cmake"
+            "$ENV{ProgramFiles}/Basler/pylon 7/Development/lib/cmake"
+            "/opt/pylon/lib/cmake"
+        )
+        list(APPEND CMAKE_MODULE_PATH ${pylon_cmake})
+        find_package(pylon REQUIRED)
+    endif()
     if(pylon_FOUND)
         get_target_property(PYLON_LIBS pylon::pylon INTERFACE_LINK_LIBRARIES)
         string(REPLACE "-Wl,--enable-new-dtags" "" PYLON_LIBS_CLEAN "${PYLON_LIBS}")
