@@ -8,6 +8,8 @@
 class PylonScene3DAdapter final
 {
 public:
+    PylonScene3DAdapter() = default;
+
     [[nodiscard]] std::optional<GraphicsScene3D> convert(
         const Pylon::CPylonDataContainer& container,
         const GraphicsScene3DRequest& request,
