@@ -509,6 +509,7 @@ void QCameraWidget::generateChildrenItem(QTreeWidgetItem *parent, GenApi::NodeLi
 {
     for(auto sub : children){
         if(!GenApi::IsAvailable(sub)) continue;
+        if(sub->GetAccessMode() == GenApi::WO && sub->GetPrincipalInterfaceType() != GenApi::intfICommand) continue;
 
         auto nodeWidget = createNodeWidget(sub);
         if(!nodeWidget) continue;
