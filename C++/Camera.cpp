@@ -557,6 +557,8 @@ void Camera::registerNodeEventHandlers()
         cur->GetChildren(children);
 
         for(const auto child : children){
+            const auto accessMode = child->GetAccessMode();
+            if(accessMode != GenApi::RO && accessMode != GenApi::RW) continue;
             if(!GenApi::IsReadable(child)) continue;
 
             try{
