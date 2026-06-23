@@ -110,10 +110,6 @@ inline bool shouldConvertToColor(const Pylon::EPixelType pixelType)
     case Pylon::PixelType_BayerRG16:
     case Pylon::PixelType_BayerGB16:
     case Pylon::PixelType_BayerBG16:
-    case Pylon::PixelType_RGB8packed:
-    case Pylon::PixelType_BGR8packed:
-    case Pylon::PixelType_RGBA8packed:
-    case Pylon::PixelType_BGRA8packed:
     case Pylon::PixelType_RGB10packed:
     case Pylon::PixelType_BGR10packed:
     case Pylon::PixelType_RGB12packed:
@@ -164,7 +160,7 @@ inline QImage convertViaPylon(const Pylon::CPylonImage& pylonImg,
     return outImage;
 }
 
-inline QImage copyMonoImage(const Pylon::CPylonImage& pylonImg, const QImage::Format format)
+inline QImage copyRawImage(const Pylon::CPylonImage& pylonImg, const QImage::Format format)
 {
     QImage outImage(pylonImg.GetWidth(), pylonImg.GetHeight(), format);
     std::memcpy(outImage.bits(), pylonImg.GetBuffer(), static_cast<size_t>(outImage.sizeInBytes()));
@@ -184,11 +180,26 @@ inline QImage convertPylonImageToQImage(Pylon::CPylonImage pylonImg)
 
     const auto pixelType = pylonImg.GetPixelType();
     if(QtConverterDetail::isDirectMono8CopyPixelType(pixelType)){
-        return QtConverterDetail::copyMonoImage(pylonImg, QImage::Format_Grayscale8);
+        return QtConverterDetail::copyRawImage(pylonImg, QImage::Format_Grayscale8);
     }
     if(QtConverterDetail::isDirectMono16CopyPixelType(pixelType)){
-        return QtConverterDetail::copyMonoImage(pylonImg, QImage::Format_Grayscale16);
+        return QtConverterDetail::copyRawImage(pylonImg, QImage::Format_Grayscale16);
     }
+
+    // Direct copy for common color formats
+    if(pixelType == Pylon::PixelType_RGB8packed){
+        return QtConverterDetail::copyRawImage(pylonImg, QImage::Format_RGB888);
+    }
+    if(pixelType == Pylon::PixelType_BGR8packed){
+        return QtConverterDetail::copyRawImage(pylonImg, QImage::Format_BGR888);
+    }
+    if(pixelType == Pylon::PixelType_RGBA8packed){
+        return QtConverterDetail::copyRawImage(pylonImg, QImage::Format_RGBA8888);
+    }
+    if(pixelType == Pylon::PixelType_BGRA8packed){
+        return QtConverterDetail::copyRawImage(pylonImg, QImage::Format_ARGB32);
+    }
+
     if(QtConverterDetail::shouldConvertToMono8(pixelType)){
         return QtConverterDetail::convertViaPylon(
             pylonImg, converter, Pylon::PixelType_Mono8, QImage::Format_Grayscale8);
@@ -199,12 +210,12 @@ inline QImage convertPylonImageToQImage(Pylon::CPylonImage pylonImg)
     }
     if(QtConverterDetail::shouldConvertToColor(pixelType)){
         return QtConverterDetail::convertViaPylon(
-            pylonImg, converter, Pylon::PixelType_BGRA8packed, QImage::Format_ARGB32);
+            pylonImg, converter, Pylon::PixelType_BGR8packed, QImage::Format_BGR888);
     }
 
     try{
         return QtConverterDetail::convertViaPylon(
-            pylonImg, converter, Pylon::PixelType_BGRA8packed, QImage::Format_ARGB32);
+            pylonImg, converter, Pylon::PixelType_BGR8packed, QImage::Format_BGR888);
     }catch(const Pylon::GenericException&){
     }
     try{
