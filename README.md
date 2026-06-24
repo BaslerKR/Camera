@@ -1,7 +1,7 @@
 # 📷 Camera Module
 
 [![C++ Standard](https://img.shields.io/badge/C%2B%2B-17%20%2F%2020-blue.svg?style=flat-square)](https://en.cppreference.com/w/cpp/compiler_support)
-[![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows-lightgrey.svg?style=flat-square)](#)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg?style=flat-square)](#)
 [![Dependency](https://img.shields.io/badge/SDK-Basler%20Pylon%2011.4+-orange.svg?style=flat-square)](https://www.baslerweb.com/)
 [![UI Integration](https://img.shields.io/badge/UI-Qt5%20%7C%20Qt6-green.svg?style=flat-square)](https://www.qt.io/)
 
@@ -86,7 +86,7 @@ int main()
     }
 
     // 2D 이미지 Grab 콜백 등록
-    camera->registerGrabCallback([](const Pylon::CPylonImage& image, size_t frameNo) {
+    camera->registerGrabCallback([camera](const Pylon::CPylonImage& image, size_t frameNo) {
         std::cout << "Acquired Frame: " << frameNo << std::endl;
         
         // 중요: 처리가 완료되면 다음 프레임을 수신할 수 있도록 ready 신호를 보냅니다.
