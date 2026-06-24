@@ -517,7 +517,7 @@ void QCameraWidget::generateChildrenItem(QTreeWidgetItem *parent, GenApi::NodeLi
         QTreeWidgetItem* subItem = new QTreeWidgetItem(parent, QStringList() << sub->GetDisplayName().c_str());
         subItem->setData(0, Qt::UserRole, QString::fromStdString(sub->GetName().c_str()));
         nodeWidget->ensurePolished();
-        const int rowHeight = qMin(nodeWidget->sizeHint().height(), nodeWidget->maximumHeight());
+        const int rowHeight = qMin(nodeWidget->sizeHint().height(), nodeWidget->maximumHeight()) + 2;
         subItem->setSizeHint(0, QSize(0, rowHeight));
         subItem->setSizeHint(1, QSize(0, rowHeight));
         _featuresWidget->setItemWidget(subItem, 1, nodeWidget);
