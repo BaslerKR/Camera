@@ -115,6 +115,76 @@ bool isColorPixelFormat(const std::string& value)
     return lower.find("rgb") != std::string::npos || lower.find("bgr") != std::string::npos;
 }
 
+bool trySelectEnumValue(GenApi::INodeMap& nodeMap, const char* parameterName, const char* value)
+{
+    auto* node = nodeMap.GetNode(parameterName);
+    return node && GenApi::IsWritable(node)
+        && Pylon::CEnumParameter(nodeMap, parameterName).TrySetValue(value);
+}
+
+bool hasStereoMiniShape(GenApi::INodeMap& nodeMap)
+{
+    return trySelectEnumValue(nodeMap, "SourceSelector", "Source3")
+        && trySelectEnumValue(nodeMap, "ComponentSelector", "Intensity")
+        && trySelectEnumValue(nodeMap, "SourceSelector", "Source1")
+        && trySelectEnumValue(nodeMap, "ComponentSelector", "Range");
+}
+
+bool hasStereoAceShape(GenApi::INodeMap& nodeMap)
+{
+    return trySelectEnumValue(nodeMap, "ComponentSelector", "Disparity");
+}
+
+bool hasBlazeShape(GenApi::INodeMap& nodeMap)
+{
+    return trySelectEnumValue(nodeMap, "ComponentSelector", "Confidence")
+        && nodeMap.GetNode("Scan3dInvalidDataValue")
+        && nodeMap.GetNode("Scan3dCoordinateSelector");
+}
+
+PylonScene3DProfile::DeviceFamily detect3DDeviceFamily(
+    GenApi::INodeMap& nodeMap,
+    const std::string& deviceClass)
+{
+    const auto lowerDeviceClass = toLowerCopy(deviceClass);
+    if(lowerDeviceClass.find("stereo_mini") != std::string::npos){
+        return PylonScene3DProfile::DeviceFamily::StereoMini;
+    }
+    if(lowerDeviceClass.find("basler_xw") != std::string::npos){
+        return PylonScene3DProfile::DeviceFamily::StereoAce;
+    }
+    if(lowerDeviceClass.find("blaze") != std::string::npos){
+        return PylonScene3DProfile::DeviceFamily::Blaze;
+    }
+
+    if(hasStereoMiniShape(nodeMap)){
+        return PylonScene3DProfile::DeviceFamily::StereoMini;
+    }
+    if(hasStereoAceShape(nodeMap)){
+        return PylonScene3DProfile::DeviceFamily::StereoAce;
+    }
+    if(hasBlazeShape(nodeMap)){
+        return PylonScene3DProfile::DeviceFamily::Blaze;
+    }
+
+    return PylonScene3DProfile::DeviceFamily::Image2D;
+}
+
+const char* deviceFamilyName(PylonScene3DProfile::DeviceFamily family)
+{
+    switch(family){
+    case PylonScene3DProfile::DeviceFamily::Blaze:
+        return "blaze";
+    case PylonScene3DProfile::DeviceFamily::StereoAce:
+        return "stereo-ace";
+    case PylonScene3DProfile::DeviceFamily::StereoMini:
+        return "stereo-mini";
+    case PylonScene3DProfile::DeviceFamily::Image2D:
+        break;
+    }
+    return "2d";
+}
+
 bool setComponentMappingMode(GenApi::INodeMap& nodeMap, const char* mappingMode)
 {
     auto* node = nodeMap.GetNode("BslComponentMappingMode");
@@ -270,11 +340,13 @@ void Camera::configureStreamForConnectedCamera()
 
     applyGenDcContainerDefaults(nodeMap, instantCameraNodeMap);
 
-    if(nodeMap.GetNode("Scan3dCoordinateScale") && nodeMap.GetNode("Scan3dBaseline")){
+    const auto deviceClass = _currentCamera.GetDeviceInfo().GetDeviceClass().c_str();
+    const auto family = detect3DDeviceFamily(nodeMap, deviceClass);
+    if(family == PylonScene3DProfile::DeviceFamily::StereoAce){
         configureStereoAceStream(nodeMap);
-    }else if(nodeMap.GetNode("ChunkModeActive") && nodeMap.GetNode("ComponentSelector")){
+    }else if(family == PylonScene3DProfile::DeviceFamily::StereoMini){
         configureStereoMiniStream(nodeMap);
-    }else if(nodeMap.GetNode("Scan3dInvalidDataValue") && nodeMap.GetNode("Scan3dCoordinateSelector")){
+    }else if(family == PylonScene3DProfile::DeviceFamily::Blaze){
         configureBlazeStream(nodeMap);
     }
 
@@ -283,6 +355,7 @@ void Camera::configureStreamForConnectedCamera()
     const auto modelName = toLowerCopy(_currentCamera.GetDeviceInfo().GetModelName().c_str());
     CameraSystem::syslog("[Info " + to_string(_allottedNumber) + "] model="
                          + modelName
+                         + " family=" + deviceFamilyName(family)
                          + " route=" + routeText);
 }
 
@@ -352,8 +425,7 @@ void Camera::configureStereoMiniStream(GenApi::INodeMap& nodeMap)
     if(chunkModeNode && GenApi::IsWritable(chunkModeNode)){
         Pylon::CBooleanParameter(nodeMap, "ChunkModeActive").TrySetValue(false);
     }
-
-    _currentCamera.ChunkNodeMapsEnable.SetValue(true);
+    _currentCamera.ChunkNodeMapsEnable.SetValue(false);
 
     PylonScene3DProfile profile;
     profile.family = PylonScene3DProfile::DeviceFamily::StereoMini;
