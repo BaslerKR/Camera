@@ -118,6 +118,7 @@ int main()
 > Stereo mini multipart component는 `GetPaddingX()`/`GetStride()`에 component raw buffer에 포함되지 않은 padding을 보고할 수 있으므로, adapter는 `GetDataSize()`로 row stride를 검증하고 packed buffer로 fallback합니다.
 > Stereo mini `RGBA8` intensity의 alpha는 유효 color 투명도 계약으로 사용하지 않습니다. 공식 sample과 같이 RGB 바이트만 2D 표시와 점군 색에 사용합니다.
 > 점군 RGB 작성 여부는 profile 문자열 snapshot이 아니라 수신 frame의 실제 `RGB8`/`RGBA8` component를 기준으로 판정합니다.
+> Stereo mini direct XYZ scene은 Reset View가 이전 센서 hint에 끌려가지 않도록 sensor-facing `InitialView3D`를 제공합니다.
 
 > [!WARNING]
 > **스레드 안전성 및 GUI 업데이트**
