@@ -1,6 +1,8 @@
 #include "Camera.h"
 #include "CameraSystem.h"
 
+#include <pylon/ConfigurationHelper.h>
+
 #include <algorithm>
 #include <cctype>
 #include <exception>
@@ -131,6 +133,19 @@ std::string safeCameraName(Pylon::CInstantCamera& camera, const std::string& fal
     }
 }
 
+void applyGenDcContainerDefaults(GenApi::INodeMap& nodeMap, GenApi::INodeMap& instantCameraNodeMap)
+{
+    auto* genDCStreamingModeNode = nodeMap.GetNode("GenDCStreamingMode");
+    if(genDCStreamingModeNode && GenApi::IsWritable(genDCStreamingModeNode)){
+        Pylon::CEnumParameter(nodeMap, "GenDCStreamingMode").TrySetValue("On");
+    }
+
+    auto* useExtendedIdNode = instantCameraNodeMap.GetNode("UseExtendedIdIfAvailable");
+    if(useExtendedIdNode && GenApi::IsWritable(useExtendedIdNode)){
+        Pylon::CBooleanParameter(instantCameraNodeMap, "UseExtendedIdIfAvailable").TrySetValue(true);
+    }
+}
+
 }
 
 Camera::Camera(CameraSystem *parent, const int allottedNumber) : _system(parent), _allottedNumber(allottedNumber)
@@ -251,24 +266,21 @@ void Camera::configureStreamForConnectedCamera()
     }
 
     auto& nodeMap = _currentCamera.GetNodeMap();
-    const auto modelName = toLowerCopy(_currentCamera.GetDeviceInfo().GetModelName().c_str());
-    const auto deviceClass = toLowerCopy(_currentCamera.GetDeviceInfo().GetDeviceClass().c_str());
+    auto& instantCameraNodeMap = _currentCamera.GetInstantCameraNodeMap();
 
-    if(deviceClass.find("blaze") != string::npos || modelName.find("blaze") != string::npos){
-        configureBlazeStream(nodeMap);
-    }else if(deviceClass.find("/stereo_mini") != string::npos
-             || modelName.find("stereo mini") != string::npos
-             || modelName.find("stereomini") != string::npos
-             || modelName.find("stm-") != string::npos){
-        configureStereoMiniStream(nodeMap);
-    }else if(deviceClass.find("/basler_xw") != string::npos
-             || modelName.find("stereo ace") != string::npos
-             || modelName.find("sta-") != string::npos){
+    applyGenDcContainerDefaults(nodeMap, instantCameraNodeMap);
+
+    if(nodeMap.GetNode("Scan3dCoordinateScale") && nodeMap.GetNode("Scan3dBaseline")){
         configureStereoAceStream(nodeMap);
+    }else if(nodeMap.GetNode("ChunkModeActive") && nodeMap.GetNode("ComponentSelector")){
+        configureStereoMiniStream(nodeMap);
+    }else if(nodeMap.GetNode("Scan3dInvalidDataValue") && nodeMap.GetNode("Scan3dCoordinateSelector")){
+        configureBlazeStream(nodeMap);
     }
 
     const auto streamKind = _streamKind.load(std::memory_order_acquire);
     const auto* routeText = streamKind == StreamKind::MultiPart3D ? "3D-only" : "2D";
+    const auto modelName = toLowerCopy(_currentCamera.GetDeviceInfo().GetModelName().c_str());
     CameraSystem::syslog("[Info " + to_string(_allottedNumber) + "] model="
                          + modelName
                          + " route=" + routeText);
@@ -277,6 +289,17 @@ void Camera::configureStreamForConnectedCamera()
 void Camera::configureBlazeStream(GenApi::INodeMap& nodeMap)
 {
     _streamKind.store(StreamKind::MultiPart3D, std::memory_order_release);
+
+    auto* triggerModeNode = nodeMap.GetNode("TriggerMode");
+    bool isHardwareTrigger = false;
+    if(triggerModeNode && GenApi::IsReadable(triggerModeNode)){
+        isHardwareTrigger = (Pylon::CEnumParameter(nodeMap, "TriggerMode").GetValue() == "On");
+    }
+
+    if(!isHardwareTrigger){
+        Pylon::CConfigurationHelper::DisableAllTriggers(nodeMap);
+    }
+
     enableComponent(nodeMap, "Range", {"Coord3D_ABC32f"});
     enableComponent(nodeMap, "Intensity", {"Mono16"});
     enableComponent(nodeMap, "Confidence", {"Confidence16"});
@@ -323,18 +346,28 @@ void Camera::configureStereoMiniStream(GenApi::INodeMap& nodeMap)
     _streamKind.store(StreamKind::MultiPart3D, std::memory_order_release);
     enableComponent(
         nodeMap, "Intensity", {"RGBA8", "RGBA8packed", "RGB8", "Mono8"}, "Source3");
-    enableComponent(nodeMap, "Range", {"Coord3D_ABC32f"}, "Source1");
+    enableComponent(nodeMap, "Range", {"Coord3D_ABC32f", "Coord3D_C16"}, "Source1");
 
     auto* chunkModeNode = nodeMap.GetNode("ChunkModeActive");
     if(chunkModeNode && GenApi::IsWritable(chunkModeNode)){
         Pylon::CBooleanParameter(nodeMap, "ChunkModeActive").TrySetValue(false);
     }
-    setComponentMappingMode(nodeMap, "None");
+
+    _currentCamera.ChunkNodeMapsEnable.SetValue(true);
+
+    PylonScene3DProfile profile;
+    profile.family = PylonScene3DProfile::DeviceFamily::StereoMini;
+    profile.geometry = PylonScene3DProfile::GeometryKind::DirectXyzRange;
+    profile.colorRegisteredToRange = false;
+    profile.coordinateScale = readFloatParameter(nodeMap, "Scan3dCoordinateScale").value_or(1.0);
+    profile.coordinateOffset = readFloatParameter(nodeMap, "Scan3dCoordinateOffset").value_or(0.0);
+    profile.baseline = readFloatParameter(nodeMap, "Scan3dBaseline").value_or(0.0);
+    profile.focalLength = readFloatParameter(nodeMap, "Scan3dFocalLength").value_or(0.0);
+    profile.principalPointU = readFloatParameter(nodeMap, "Scan3dPrincipalPointU").value_or(0.0);
+    profile.principalPointV = readFloatParameter(nodeMap, "Scan3dPrincipalPointV").value_or(0.0);
 
     std::lock_guard<std::mutex> lock(_scene3DProfileMutex);
-    _scene3DProfile.family = PylonScene3DProfile::DeviceFamily::StereoMini;
-    _scene3DProfile.geometry = PylonScene3DProfile::GeometryKind::DirectXyzRange;
-    _scene3DProfile.colorRegisteredToRange = false;
+    _scene3DProfile = std::move(profile);
 }
 
 void Camera::grab(const size_t frames){
@@ -377,8 +410,16 @@ void Camera::grab(const size_t frames){
 
                             auto seq = _frameSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
                             if(_streamKind.load(std::memory_order_acquire) == StreamKind::MultiPart3D){
-                                auto container = grabResult->GetDataContainer();
-                                dispatchCallbacks(_grab3DCallbackMutex, _grab3DCallbacks, container, seq);
+                                try{
+                                    auto container = grabResult->GetDataContainer();
+                                    dispatchCallbacks(_grab3DCallbackMutex, _grab3DCallbacks, container, seq);
+                                }catch(const GenericException &e){
+                                    CameraSystem::syslog(std::string("[WARN] [Camera System] GetDataContainer exception: ") + e.GetDescription(), true);
+                                }catch(const std::exception &e){
+                                    CameraSystem::syslog(std::string("[WARN] [Camera System] GetDataContainer std::exception: ") + e.what(), true);
+                                }catch(...){
+                                    CameraSystem::syslog("[WARN] [Camera System] GetDataContainer unknown exception", true);
+                                }
                             }else{
                                 CPylonImage image;
                                 image.AttachGrabResultBuffer(grabResult);

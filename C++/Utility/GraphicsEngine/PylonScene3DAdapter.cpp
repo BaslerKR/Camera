@@ -294,7 +294,13 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
     }
 
     const auto range = componentByType(container, Pylon::ComponentType_Range);
-    if (!range.IsValid() || range.GetPixelType() != Pylon::PixelType_Coord3D_ABC32f || range.GetData() == nullptr)
+    if (!range.IsValid() || range.GetData() == nullptr)
+    {
+        return scene.content == GraphicsScene3DContent::None ? std::nullopt : std::optional<GraphicsScene3D>(std::move(scene));
+    }
+
+    const auto pixelType = range.GetPixelType();
+    if (pixelType != Pylon::PixelType_Coord3D_ABC32f && pixelType != Pylon::PixelType_Coord3D_C16)
     {
         return scene.content == GraphicsScene3DContent::None ? std::nullopt : std::optional<GraphicsScene3D>(std::move(scene));
     }
@@ -315,21 +321,55 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
     frame.zValues.resize(count);
     frame.validMask.resize(count);
     const auto* data = static_cast<const std::uint8_t*>(range.GetData());
-    for (int y = 0; y < frame.height; ++y)
+
+    if (pixelType == Pylon::PixelType_Coord3D_ABC32f)
     {
-        const auto* row = reinterpret_cast<const Coord3DPoint*>(data + static_cast<std::size_t>(y) * stride);
-        for (int x = 0; x < frame.width; ++x)
+        for (int y = 0; y < frame.height; ++y)
         {
-            const std::size_t index = static_cast<std::size_t>(y) * static_cast<std::size_t>(frame.width)
-                                    + static_cast<std::size_t>(x);
-            const Coord3DPoint& point = row[x];
-            frame.xValues[index] = point.x;
-            frame.yValues[index] = point.y;
-            frame.zValues[index] = point.z;
-            frame.validMask[index] = std::isfinite(point.x)
-                && std::isfinite(point.y)
-                && std::isfinite(point.z)
-                && point.z > 0.0F ? 1U : 0U;
+            const auto* row = reinterpret_cast<const Coord3DPoint*>(data + static_cast<std::size_t>(y) * stride);
+            for (int x = 0; x < frame.width; ++x)
+            {
+                const std::size_t index = static_cast<std::size_t>(y) * static_cast<std::size_t>(frame.width)
+                                        + static_cast<std::size_t>(x);
+                const Coord3DPoint& point = row[x];
+                frame.xValues[index] = point.x;
+                frame.yValues[index] = point.y;
+                frame.zValues[index] = point.z;
+                frame.validMask[index] = std::isfinite(point.x)
+                    && std::isfinite(point.y)
+                    && std::isfinite(point.z)
+                    && point.z > 0.0F ? 1U : 0U;
+            }
+        }
+    }
+    else if (pixelType == Pylon::PixelType_Coord3D_C16)
+    {
+        for (int y = 0; y < frame.height; ++y)
+        {
+            const auto* row = reinterpret_cast<const std::uint16_t*>(data + static_cast<std::size_t>(y) * stride);
+            for (int x = 0; x < frame.width; ++x)
+            {
+                const std::size_t index = static_cast<std::size_t>(y) * static_cast<std::size_t>(frame.width)
+                                        + static_cast<std::size_t>(x);
+                const std::uint16_t raw = row[x];
+                const double z = static_cast<double>(raw) * profile.coordinateScale + profile.coordinateOffset;
+
+                if (raw == 0U || z <= 0.0 || profile.focalLength == 0.0)
+                {
+                    frame.xValues[index] = std::numeric_limits<float>::quiet_NaN();
+                    frame.yValues[index] = std::numeric_limits<float>::quiet_NaN();
+                    frame.zValues[index] = std::numeric_limits<float>::quiet_NaN();
+                    frame.validMask[index] = 0U;
+                    continue;
+                }
+
+                frame.xValues[index] = static_cast<float>((static_cast<double>(x) - profile.principalPointU)
+                                                           * z / profile.focalLength);
+                frame.yValues[index] = static_cast<float>((static_cast<double>(y) - profile.principalPointV)
+                                                           * z / profile.focalLength);
+                frame.zValues[index] = static_cast<float>(z);
+                frame.validMask[index] = 1U;
+            }
         }
     }
 
