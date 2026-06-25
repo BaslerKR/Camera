@@ -278,6 +278,13 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
     GraphicsScene3D scene;
     scene.content = GraphicsScene3DContent::None;
     scene.meta.sourceName = sourceName;
+    InitialView3D view;
+    view.lookDirection = {0.0, 0.0, 1.0};
+    view.viewUp = {0.0, -1.0, 0.0};
+    view.parallelProjection = false;
+    view.distanceScale = 1.15;
+    scene.surfaceInitialView = view;
+    scene.pointCloudInitialView = view;
 
     const auto intensity = componentByType(container, Pylon::ComponentType_Intensity);
     appendColorImage(intensity, request, profile, scene);
