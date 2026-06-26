@@ -122,8 +122,42 @@ bool trySelectEnumValue(GenApi::INodeMap& nodeMap, const char* parameterName, co
         && Pylon::CEnumParameter(nodeMap, parameterName).TrySetValue(value);
 }
 
+class ScopedEnumValueRestore
+{
+public:
+    ScopedEnumValueRestore(GenApi::INodeMap& nodeMap, const char* parameterName)
+        : _nodeMap(nodeMap)
+        , _parameterName(parameterName)
+    {
+        auto* node = _nodeMap.GetNode(_parameterName);
+        if(node && GenApi::IsReadable(node) && GenApi::IsWritable(node)){
+            _originalValue = Pylon::CEnumParameter(_nodeMap, _parameterName).GetValue().c_str();
+        }
+    }
+
+    ~ScopedEnumValueRestore()
+    {
+        if(!_originalValue) return;
+
+        auto* node = _nodeMap.GetNode(_parameterName);
+        if(node && GenApi::IsWritable(node)){
+            Pylon::CEnumParameter(_nodeMap, _parameterName).TrySetValue(_originalValue->c_str());
+        }
+    }
+
+    ScopedEnumValueRestore(const ScopedEnumValueRestore&) = delete;
+    ScopedEnumValueRestore& operator=(const ScopedEnumValueRestore&) = delete;
+
+private:
+    GenApi::INodeMap& _nodeMap;
+    const char* _parameterName = nullptr;
+    std::optional<std::string> _originalValue;
+};
+
 bool hasStereoMiniShape(GenApi::INodeMap& nodeMap)
 {
+    ScopedEnumValueRestore sourceRestore(nodeMap, "SourceSelector");
+    ScopedEnumValueRestore componentRestore(nodeMap, "ComponentSelector");
     return trySelectEnumValue(nodeMap, "SourceSelector", "Source3")
         && trySelectEnumValue(nodeMap, "ComponentSelector", "Intensity")
         && trySelectEnumValue(nodeMap, "SourceSelector", "Source1")
@@ -132,11 +166,13 @@ bool hasStereoMiniShape(GenApi::INodeMap& nodeMap)
 
 bool hasStereoAceShape(GenApi::INodeMap& nodeMap)
 {
+    ScopedEnumValueRestore componentRestore(nodeMap, "ComponentSelector");
     return trySelectEnumValue(nodeMap, "ComponentSelector", "Disparity");
 }
 
 bool hasBlazeShape(GenApi::INodeMap& nodeMap)
 {
+    ScopedEnumValueRestore componentRestore(nodeMap, "ComponentSelector");
     return trySelectEnumValue(nodeMap, "ComponentSelector", "Confidence")
         && nodeMap.GetNode("Scan3dInvalidDataValue")
         && nodeMap.GetNode("Scan3dCoordinateSelector");
@@ -244,6 +280,29 @@ void Camera::clearStatusCallbacks()
 }
 
 bool Camera::open(const string& cameraName){
+    const auto cleanupFailedOpen = [this]{
+        try{
+            requestStop();
+            _deviceAvailable.store(false, std::memory_order_release);
+            _streamKind.store(StreamKind::Image2D, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> lock(_scene3DProfileMutex);
+                _scene3DProfile = {};
+            }
+            clearNodeEventHandlers();
+            if(_currentCamera.IsOpen()){
+                _currentCamera.Close();
+            }
+            if(_currentCamera.IsPylonDeviceAttached()){
+                _currentCamera.DestroyDevice();
+            }
+        }catch(const GenericException &e){
+            CameraSystem::syslog(e.GetDescription(), true);
+        }catch(const std::exception &e){
+            CameraSystem::syslog(e.what(), true);
+        }
+    };
+
     try{
         _deviceAvailable.store(false, std::memory_order_release);
         clearNodeEventHandlers();
@@ -261,6 +320,7 @@ bool Camera::open(const string& cameraName){
     }catch(const std::exception &e){
         CameraSystem::syslog(e.what(), true);
     }
+    cleanupFailedOpen();
     return false;
 }
 
@@ -338,10 +398,11 @@ void Camera::configureStreamForConnectedCamera()
     auto& nodeMap = _currentCamera.GetNodeMap();
     auto& instantCameraNodeMap = _currentCamera.GetInstantCameraNodeMap();
 
-    applyGenDcContainerDefaults(nodeMap, instantCameraNodeMap);
-
     const auto deviceClass = _currentCamera.GetDeviceInfo().GetDeviceClass().c_str();
     const auto family = detect3DDeviceFamily(nodeMap, deviceClass);
+    if(family != PylonScene3DProfile::DeviceFamily::StereoMini){
+        applyGenDcContainerDefaults(nodeMap, instantCameraNodeMap);
+    }
     if(family == PylonScene3DProfile::DeviceFamily::StereoAce){
         configureStereoAceStream(nodeMap);
     }else if(family == PylonScene3DProfile::DeviceFamily::StereoMini){
@@ -417,15 +478,8 @@ void Camera::configureStereoAceStream(GenApi::INodeMap& nodeMap)
 void Camera::configureStereoMiniStream(GenApi::INodeMap& nodeMap)
 {
     _streamKind.store(StreamKind::MultiPart3D, std::memory_order_release);
-    enableComponent(
-        nodeMap, "Intensity", {"RGBA8", "RGBA8packed", "RGB8", "Mono8"}, "Source3");
-    enableComponent(nodeMap, "Range", {"Coord3D_ABC32f", "Coord3D_C16"}, "Source1");
-
-    auto* chunkModeNode = nodeMap.GetNode("ChunkModeActive");
-    if(chunkModeNode && GenApi::IsWritable(chunkModeNode)){
-        Pylon::CBooleanParameter(nodeMap, "ChunkModeActive").TrySetValue(false);
-    }
-    _currentCamera.ChunkNodeMapsEnable.SetValue(false);
+    enableComponent(nodeMap, "Intensity");
+    enableComponent(nodeMap, "Range", {"Coord3D_ABC32f", "Coord3D_C16"});
 
     PylonScene3DProfile profile;
     profile.family = PylonScene3DProfile::DeviceFamily::StereoMini;
