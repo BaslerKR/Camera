@@ -417,7 +417,6 @@ void QCameraWidget::applyConnectionState(const bool opened)
         }
         updateGrabState(false);
         _featuresWidget->clear();
-        emit _toolRefresh->clicked();
     }
 }
 

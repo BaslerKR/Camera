@@ -152,7 +152,6 @@ Camera *CameraSystem::getCamera(const int allottedNumber) const {
 IPylonDevice* CameraSystem::createDevice(const string &cameraName)
 {
     std::lock_guard<std::mutex> lock(_mutex);
-    updateCameraListLocked();
 
     if(cameraName.empty()){
         for(const auto& device : _devices){
@@ -160,7 +159,7 @@ IPylonDevice* CameraSystem::createDevice(const string &cameraName)
                 return _tlFactory->CreateDevice(device);
             }
         }
-        throw std::runtime_error("No accessible camera device found.");
+        throw std::runtime_error("No cached accessible camera device found. Refresh the camera list first.");
     }
 
     for(const auto& device : _devices){
@@ -172,7 +171,7 @@ IPylonDevice* CameraSystem::createDevice(const string &cameraName)
         }
     }
 
-    throw std::runtime_error("Camera device not found: " + cameraName);
+    throw std::runtime_error("Camera device not found in cached list: " + cameraName);
 }
 
 void CameraSystem::syslog(const string &message, const bool warning)
