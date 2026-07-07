@@ -12,7 +12,6 @@
 #include <QSizePolicy>
 #include <QThread>
 #include <QVariant>
-#include <QStyle>
 #include <exception>
 #include <memory>
 
@@ -128,6 +127,11 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     _statusLabel->setObjectName(QStringLiteral("CameraStatusLabel"));
     _statusLabel->setAlignment(Qt::AlignCenter);
     _statusBar->addWidget(_statusLabel);
+
+    _loadingLabel = new QLabel(this);
+    _loadingLabel->setObjectName(QStringLiteral("DeviceLoadingLabel"));
+    _loadingLabel->hide();
+    _statusBar->addPermanentWidget(_loadingLabel);
 
     _messageLabel = new QLabel(this);
     _messageLabel->setObjectName(QStringLiteral("CameraMessageLabel"));
@@ -326,6 +330,8 @@ void QCameraWidget::setConnectionOperationActive(const bool active)
     _toolRefresh->setEnabled(!active && !opened);
     _toolGrabOne->setEnabled(!active && opened);
     _toolGrabLive->setEnabled(!active && opened);
+
+    updateStatusBubble();
 }
 
 void QCameraWidget::startRefreshOperation()
@@ -390,6 +396,8 @@ void QCameraWidget::setRefreshOperationActive(const bool active)
     _toolRefresh->setEnabled(!active);
     _cameraListComboBox->setEnabled(!active && !opened);
     _toolConnect->setEnabled(!active);
+
+    updateStatusBubble();
 }
 
 void QCameraWidget::applyConnectionState(const bool opened)
@@ -707,25 +715,42 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
             qWarning() << e.GetDescription() << node->GetName().c_str();
         }
         connect(spinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [=](int value){
-            auto* currentNode = resolveNode(nodeName);
-            if(!currentNode) return;
-
-            GenApi::CIntegerPtr ptr = currentNode;
-            try{
-                QSignalBlocker block(spinBox);
-                ptr->SetValue(value);
-                showStatusMessage(tr("Parameter '%1' updated to %2.").arg(nodeName).arg(value), false, 3000);
-                scheduleFeaturesRebuild();
-            }catch(const Pylon::GenericException &e){
-                QSignalBlocker block(spinBox);
-                try{
-                    if(GenApi::IsReadable(ptr)){
-                        spinBox->setValue(ptr->GetValue());
+            spinBox->setEnabled(false);
+            auto* errorMsg = new QString();
+            runAsyncWrite(
+                [=]() {
+                    auto* currentNode = resolveNode(nodeName);
+                    if(!currentNode) return false;
+                    try {
+                        GenApi::CIntegerPtr ptr = currentNode;
+                        ptr->SetValue(value);
+                        return true;
+                    } catch(const Pylon::GenericException &e) {
+                        *errorMsg = QString::fromStdString(e.GetDescription());
+                        return false;
                     }
-                }catch(const Pylon::GenericException&){}
-                showStatusMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(e.GetDescription()), true, 5000);
-                qWarning() << e.GetDescription() << nodeName;
-            }
+                },
+                [=](bool success) {
+                    spinBox->setEnabled(true);
+                    if (!success) {
+                        QSignalBlocker block(spinBox);
+                        auto* currentNode = resolveNode(nodeName);
+                        if (currentNode) {
+                            try {
+                                GenApi::CIntegerPtr ptr = currentNode;
+                                if (GenApi::IsReadable(ptr)) {
+                                    spinBox->setValue(ptr->GetValue());
+                                }
+                            } catch(...) {}
+                        }
+                        showStatusMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(*errorMsg), true, 5000);
+                    } else {
+                        showStatusMessage(tr("Parameter '%1' updated to %2.").arg(nodeName).arg(value), false, 3000);
+                        scheduleFeaturesRebuild();
+                    }
+                    delete errorMsg;
+                }
+            );
         });
     } break;
     case GenApi::intfIFloat:{
@@ -742,25 +767,42 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
             qWarning() << e.GetDescription() << node->GetName().c_str() << "Float";
         }
         connect(spinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [=](double value){
-            auto* currentNode = resolveNode(nodeName);
-            if(!currentNode) return;
-
-            GenApi::CFloatPtr ptr = currentNode;
-            try{
-                QSignalBlocker block(spinBox);
-                ptr->SetValue(value);
-                showStatusMessage(tr("Parameter '%1' updated to %2.").arg(nodeName).arg(value), false, 3000);
-                scheduleFeaturesRebuild();
-            }catch(const Pylon::GenericException &e){
-                QSignalBlocker block(spinBox);
-                try{
-                    if(GenApi::IsReadable(ptr)){
-                        spinBox->setValue(ptr->GetValue());
+            spinBox->setEnabled(false);
+            auto* errorMsg = new QString();
+            runAsyncWrite(
+                [=]() {
+                    auto* currentNode = resolveNode(nodeName);
+                    if(!currentNode) return false;
+                    try {
+                        GenApi::CFloatPtr ptr = currentNode;
+                        ptr->SetValue(value);
+                        return true;
+                    } catch(const Pylon::GenericException &e) {
+                        *errorMsg = QString::fromStdString(e.GetDescription());
+                        return false;
                     }
-                }catch(const Pylon::GenericException&){}
-                showStatusMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(e.GetDescription()), true, 5000);
-                qWarning() << e.GetDescription() << nodeName;
-            }
+                },
+                [=](bool success) {
+                    spinBox->setEnabled(true);
+                    if (!success) {
+                        QSignalBlocker block(spinBox);
+                        auto* currentNode = resolveNode(nodeName);
+                        if (currentNode) {
+                            try {
+                                GenApi::CFloatPtr ptr = currentNode;
+                                if (GenApi::IsReadable(ptr)) {
+                                    spinBox->setValue(ptr->GetValue());
+                                }
+                            } catch(...) {}
+                        }
+                        showStatusMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(*errorMsg), true, 5000);
+                    } else {
+                        showStatusMessage(tr("Parameter '%1' updated to %2.").arg(nodeName).arg(value), false, 3000);
+                        scheduleFeaturesRebuild();
+                    }
+                    delete errorMsg;
+                }
+            );
         });
     } break;
     case GenApi::intfIBoolean:{
@@ -775,26 +817,43 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
             qWarning() << e.GetDescription() << node->GetName().c_str();
         }
         const auto updateBooleanNode = [=](const Qt::CheckState state){
-            auto* currentNode = resolveNode(nodeName);
-            if(!currentNode) return;
-
-            GenApi::CBooleanPtr ptr = currentNode;
-            try{
-                QSignalBlocker block(checkBox);
-                bool val = (state == Qt::Checked) ? true : false;
-                ptr->SetValue(val);
-                showStatusMessage(tr("Parameter '%1' updated to %2.").arg(nodeName).arg(val ? "True" : "False"), false, 3000);
-                scheduleFeaturesRebuild();
-            }catch(const Pylon::GenericException &e){
-                QSignalBlocker block(checkBox);
-                try{
-                    if(GenApi::IsReadable(ptr)){
-                        checkBox->setChecked(ptr->GetValue());
+            checkBox->setEnabled(false);
+            bool val = (state == Qt::Checked) ? true : false;
+            auto* errorMsg = new QString();
+            runAsyncWrite(
+                [=]() {
+                    auto* currentNode = resolveNode(nodeName);
+                    if(!currentNode) return false;
+                    try {
+                        GenApi::CBooleanPtr ptr = currentNode;
+                        ptr->SetValue(val);
+                        return true;
+                    } catch(const Pylon::GenericException &e) {
+                        *errorMsg = QString::fromStdString(e.GetDescription());
+                        return false;
                     }
-                }catch(const Pylon::GenericException&){}
-                showStatusMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(e.GetDescription()), true, 5000);
-                qWarning() << e.GetDescription() << nodeName;
-            }
+                },
+                [=](bool success) {
+                    checkBox->setEnabled(true);
+                    if (!success) {
+                        QSignalBlocker block(checkBox);
+                        auto* currentNode = resolveNode(nodeName);
+                        if (currentNode) {
+                            try {
+                                GenApi::CBooleanPtr ptr = currentNode;
+                                if (GenApi::IsReadable(ptr)) {
+                                    checkBox->setChecked(ptr->GetValue());
+                                }
+                            } catch(...) {}
+                        }
+                        showStatusMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(*errorMsg), true, 5000);
+                    } else {
+                        showStatusMessage(tr("Parameter '%1' updated to %2.").arg(nodeName).arg(val ? "True" : "False"), false, 3000);
+                        scheduleFeaturesRebuild();
+                    }
+                    delete errorMsg;
+                }
+            );
         };
 #if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
         connect(checkBox, &QCheckBox::checkStateChanged, this, updateBooleanNode);
@@ -817,26 +876,43 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
             qWarning() << e.GetDescription() << node->GetName().c_str();
         }
         connect(lineEdit, &QLineEdit::editingFinished, this, [=](){
-            auto* currentNode = resolveNode(nodeName);
-            if(!currentNode) return;
-
-            GenApi::CStringPtr ptr = currentNode;
-            try{
-                QSignalBlocker block(lineEdit);
-                QString text = lineEdit->text();
-                ptr->SetValue(text.toStdString().c_str());
-                showStatusMessage(tr("Parameter '%1' updated to '%2'.").arg(nodeName).arg(text), false, 3000);
-                scheduleFeaturesRebuild();
-            }catch(const Pylon::GenericException &e){
-                QSignalBlocker block(lineEdit);
-                try{
-                    if(GenApi::IsReadable(ptr)){
-                        lineEdit->setText(ptr->GetValue().c_str());
+            lineEdit->setEnabled(false);
+            QString text = lineEdit->text();
+            auto* errorMsg = new QString();
+            runAsyncWrite(
+                [=]() {
+                    auto* currentNode = resolveNode(nodeName);
+                    if(!currentNode) return false;
+                    try {
+                        GenApi::CStringPtr ptr = currentNode;
+                        ptr->SetValue(text.toStdString().c_str());
+                        return true;
+                    } catch(const Pylon::GenericException &e) {
+                        *errorMsg = QString::fromStdString(e.GetDescription());
+                        return false;
                     }
-                }catch(const Pylon::GenericException&){}
-                showStatusMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(e.GetDescription()), true, 5000);
-                qWarning() << e.GetDescription() << nodeName;
-            }
+                },
+                [=](bool success) {
+                    lineEdit->setEnabled(true);
+                    if (!success) {
+                        QSignalBlocker block(lineEdit);
+                        auto* currentNode = resolveNode(nodeName);
+                        if (currentNode) {
+                            try {
+                                GenApi::CStringPtr ptr = currentNode;
+                                if (GenApi::IsReadable(ptr)) {
+                                    lineEdit->setText(ptr->GetValue().c_str());
+                                }
+                            } catch(...) {}
+                        }
+                        showStatusMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(*errorMsg), true, 5000);
+                    } else {
+                        showStatusMessage(tr("Parameter '%1' updated to '%2'.").arg(nodeName).arg(text), false, 3000);
+                        scheduleFeaturesRebuild();
+                    }
+                    delete errorMsg;
+                }
+            );
         });
     } break;
     case GenApi::intfIEnumeration:{
@@ -864,27 +940,44 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
             qWarning() << e.GetDescription() << node->GetName().c_str();
         }
         connect(comboBox, &QComboBox::currentTextChanged, this, [=](QString text){
-            auto* currentNode = resolveNode(nodeName);
-            if(!currentNode) return;
-
-            GenApi::CEnumerationPtr ptr = currentNode;
-            try{
-                QSignalBlocker block(comboBox);
-                auto val = ptr->GetEntryByName(comboBox->currentData().toString().toStdString().c_str());
-                ptr->SetIntValue(val->GetNumericValue());
-                showStatusMessage(tr("Parameter '%1' updated to '%2'.").arg(nodeName).arg(text), false, 3000);
-                scheduleFeaturesRebuild();
-            }catch(const Pylon::GenericException &e){
-                QSignalBlocker block(comboBox);
-                try{
-                    if(GenApi::IsReadable(ptr) && ptr->GetCurrentEntry()){
-                        comboBox->setCurrentText(ptr->GetCurrentEntry()->GetNode()->GetDisplayName().c_str());
+            comboBox->setEnabled(false);
+            auto* errorMsg = new QString();
+            QString comboData = comboBox->currentData().toString();
+            runAsyncWrite(
+                [=]() {
+                    auto* currentNode = resolveNode(nodeName);
+                    if(!currentNode) return false;
+                    try {
+                        GenApi::CEnumerationPtr ptr = currentNode;
+                        auto val = ptr->GetEntryByName(comboData.toStdString().c_str());
+                        ptr->SetIntValue(val->GetNumericValue());
+                        return true;
+                    } catch(const Pylon::GenericException &e) {
+                        *errorMsg = QString::fromStdString(e.GetDescription());
+                        return false;
                     }
-                }catch(const Pylon::GenericException&){}
-
-                showStatusMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(e.GetDescription()), true, 5000);
-                qWarning() << e.GetDescription() << nodeName;
-            }
+                },
+                [=](bool success) {
+                    comboBox->setEnabled(true);
+                    if (!success) {
+                        QSignalBlocker block(comboBox);
+                        auto* currentNode = resolveNode(nodeName);
+                        if (currentNode) {
+                            try {
+                                GenApi::CEnumerationPtr ptr = currentNode;
+                                if (GenApi::IsReadable(ptr) && ptr->GetCurrentEntry()) {
+                                    comboBox->setCurrentText(ptr->GetCurrentEntry()->GetNode()->GetDisplayName().c_str());
+                                }
+                            } catch(...) {}
+                        }
+                        showStatusMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(*errorMsg), true, 5000);
+                    } else {
+                        showStatusMessage(tr("Parameter '%1' updated to '%2'.").arg(nodeName).arg(text), false, 3000);
+                        scheduleFeaturesRebuild();
+                    }
+                    delete errorMsg;
+                }
+            );
         });
     } break;
     case GenApi::intfICommand:{
@@ -892,29 +985,42 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
         auto button = new QPushButton("Execute");
         widget = button;
         connect(button, &QPushButton::clicked, this, [=]{
-            auto* currentNode = resolveNode(nodeName);
-            if(!currentNode) return;
-
-            try{
-                GenApi::CCommandPtr ptr = currentNode;
-                if(!GenApi::IsWritable(ptr)){
-                    button->setEnabled(false);
+            button->setEnabled(false);
+            auto* errorMsg = new QString();
+            showStatusMessage(tr("Executing command '%1'...").arg(nodeName), false, 0);
+            
+            runAsyncWrite(
+                [=]() {
+                    auto* currentNode = resolveNode(nodeName);
+                    if(!currentNode) return false;
+                    try {
+                        GenApi::CCommandPtr ptr = currentNode;
+                        if(!GenApi::IsWritable(ptr)) return false;
+                        ptr->Execute();
+                        return true;
+                    } catch(const Pylon::GenericException &e) {
+                        *errorMsg = QString::fromStdString(e.GetDescription());
+                        return false;
+                    } catch(const std::exception &e) {
+                        *errorMsg = QString::fromStdString(e.what());
+                        return false;
+                    }
+                },
+                [=](bool success) {
+                    button->setEnabled(true);
                     scheduleFeaturesRebuild();
-                    return;
+                    if (!success) {
+                        if (errorMsg->isEmpty()) {
+                            showStatusMessage(tr("Failed to execute command '%1'.").arg(nodeName), true, 5000);
+                        } else {
+                            showStatusMessage(tr("Failed to execute command '%1': %2").arg(nodeName).arg(*errorMsg), true, 5000);
+                        }
+                    } else {
+                        showStatusMessage(tr("Command '%1' executed successfully.").arg(nodeName), false, 3000);
+                    }
+                    delete errorMsg;
                 }
-                showStatusMessage(tr("Executing command '%1'...").arg(nodeName), false, 0);
-                ptr->Execute();
-                showStatusMessage(tr("Command '%1' executed successfully.").arg(nodeName), false, 3000);
-                scheduleFeaturesRebuild();
-            }catch(const Pylon::GenericException &e){
-                scheduleFeaturesRebuild();
-                showStatusMessage(tr("Failed to execute command '%1': %2").arg(nodeName).arg(e.GetDescription()), true, 5000);
-                qWarning() << e.GetDescription() << nodeName;
-            }catch(const std::exception &e){
-                scheduleFeaturesRebuild();
-                showStatusMessage(tr("Failed to execute command '%1': %2").arg(nodeName).arg(e.what()), true, 5000);
-                qWarning() << e.what() << nodeName;
-            }
+            );
         });
     } break;
     case GenApi::intfIRegister:{
@@ -965,18 +1071,37 @@ void QCameraWidget::updateStatusBubble()
 
     const bool opened = _camera && _camera->isOpened();
 
-    if (!opened && !_connectionAttempted) {
-        _statusLabel->setText(tr("Idle"));
+    const bool busy = _connectionOperationActive || _refreshOperationActive || _parameterWriteActive;
+    if (busy) {
+        if (_connectionOperationActive) {
+            _statusLabel->setText(tr("Connecting"));
+        } else if (_refreshOperationActive) {
+            _statusLabel->setText(tr("Scanning"));
+        } else {
+            _statusLabel->setText(tr("Updating"));
+        }
         _statusLabel->setProperty("status", "idle");
-    } else if (!opened) {
-        _statusLabel->setText(tr("Disconnected"));
-        _statusLabel->setProperty("status", "disconnected");
-    } else if (_grabbing) {
-        _statusLabel->setText(tr("Live"));
-        _statusLabel->setProperty("status", "grabbing");
+        if (_loadingLabel) {
+            _loadingLabel->show();
+        }
     } else {
-        _statusLabel->setText(tr("Connected"));
-        _statusLabel->setProperty("status", "connected");
+        if (_loadingLabel) {
+            _loadingLabel->hide();
+        }
+
+        if (!opened && !_connectionAttempted) {
+            _statusLabel->setText(tr("Idle"));
+            _statusLabel->setProperty("status", "idle");
+        } else if (!opened) {
+            _statusLabel->setText(tr("Disconnected"));
+            _statusLabel->setProperty("status", "disconnected");
+        } else if (_grabbing) {
+            _statusLabel->setText(tr("Live"));
+            _statusLabel->setProperty("status", "grabbing");
+        } else {
+            _statusLabel->setText(tr("Connected"));
+            _statusLabel->setProperty("status", "connected");
+        }
     }
     _statusLabel->style()->unpolish(_statusLabel);
     _statusLabel->style()->polish(_statusLabel);

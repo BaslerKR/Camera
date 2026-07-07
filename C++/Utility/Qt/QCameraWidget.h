@@ -24,7 +24,7 @@
 #include <QTimer>
 #include "Camera.h"
 
-class QThread;
+#include <QThread>
 
 class QCameraWidget : public QWidget
 {
@@ -62,6 +62,7 @@ private:
     QThread *_refreshThread = nullptr;
     bool _connectionOperationActive = false;
     bool _refreshOperationActive = false;
+    bool _parameterWriteActive = false;
     bool _connectionAttempted = false;
     bool _shuttingDown = false;
     bool _grabbing = false;
@@ -77,11 +78,30 @@ private:
     bool _rebuildScheduled = false;
     QLabel *_messageLabel = nullptr;
     QLabel *_statusLabel = nullptr;
+    QLabel *_loadingLabel = nullptr;
     QTimer *_messageTimer = nullptr;
 
     void showStatusMessage(const QString& msg, bool isError = false, int timeout = 0);
     void updateGrabState(bool grabbing);
     void updateStatusBubble();
+
+    template <typename Func, typename Cleanup>
+    void runAsyncWrite(Func&& writeFunc, Cleanup&& cleanupFunc) {
+        _parameterWriteActive = true;
+        updateStatusBubble();
+        auto* success = new bool(false);
+        QThread* worker = QThread::create([writeFunc, success]() {
+            *success = writeFunc();
+        });
+        connect(worker, &QThread::finished, this, [this, success, cleanupFunc, worker]() {
+            _parameterWriteActive = false;
+            updateStatusBubble();
+            cleanupFunc(*success);
+            delete success;
+            worker->deleteLater();
+        });
+        worker->start();
+    }
 };
 #endif
 #endif // QCAMERAWIDGET_H
