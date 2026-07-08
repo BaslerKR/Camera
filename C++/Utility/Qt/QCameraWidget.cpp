@@ -3,7 +3,6 @@
 #include <QToolButton>
 #include <QAction>
 #include <QHBoxLayout>
-#include <QHeaderView>
 #include <QMetaObject>
 #include <QPointer>
 #include <QScrollBar>
@@ -50,17 +49,6 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     _featuresWidget->setHeaderLabels(QStringList() << "Feature" << "Value");
     _featuresWidget->setObjectName(QStringLiteral("CameraFeaturesTree"));
     _featuresWidget->setProperty("treeRole", QStringLiteral("DeviceFeatureTree"));
-    _featuresWidget->setRootIsDecorated(true);
-    _featuresWidget->setAnimated(false);
-    _featuresWidget->setAlternatingRowColors(true);
-    _featuresWidget->setUniformRowHeights(false);
-    _featuresWidget->setIndentation(18);
-    _featuresWidget->header()->setStretchLastSection(true);
-    _featuresWidget->header()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    _featuresWidget->header()->setSectionResizeMode(0, QHeaderView::Interactive);
-    _featuresWidget->header()->setSectionResizeMode(1, QHeaderView::Stretch);
-    _featuresWidget->header()->setMinimumSectionSize(60);
-    _featuresWidget->header()->resizeSection(0, 200);
 
     // Create the toolbuttons
     _toolRefresh = new QToolButton(this);
@@ -480,8 +468,6 @@ void QCameraWidget::generateFeaturesWidget(GenApi::INodeMap &nodemap)
 
         QTreeWidgetItem *cameraFeatures = new QTreeWidgetItem(_featuresWidget, QStringList() << _camera->getConnectedCameraName().c_str());
         cameraFeatures->setData(0, Qt::UserRole, QStringLiteral("__camera_root__"));
-        cameraFeatures->setSizeHint(0, QSize(0, 22));
-        cameraFeatures->setSizeHint(1, QSize(0, 22));
         for(auto cat : nodes){
             if(cat->GetName() == "Root") continue;
             if(!GenApi::IsAvailable(cat)) continue;
@@ -528,10 +514,6 @@ void QCameraWidget::generateChildrenItem(QTreeWidgetItem *parent, GenApi::NodeLi
 
         QTreeWidgetItem* subItem = new QTreeWidgetItem(parent, QStringList() << sub->GetDisplayName().c_str());
         subItem->setData(0, Qt::UserRole, QString::fromStdString(sub->GetName().c_str()));
-        nodeWidget->ensurePolished();
-        const int rowHeight = qMin(nodeWidget->sizeHint().height(), nodeWidget->maximumHeight()) + 2;
-        subItem->setSizeHint(0, QSize(0, rowHeight));
-        subItem->setSizeHint(1, QSize(0, rowHeight));
         _featuresWidget->setItemWidget(subItem, 1, nodeWidget);
     }
 }
