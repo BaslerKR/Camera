@@ -116,11 +116,6 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     _statusLabel->setAlignment(Qt::AlignCenter);
     _statusBar->addWidget(_statusLabel);
 
-    _loadingLabel = new QLabel(this);
-    _loadingLabel->setObjectName(QStringLiteral("DeviceLoadingLabel"));
-    _loadingLabel->hide();
-    _statusBar->addPermanentWidget(_loadingLabel);
-
     _messageLabel = new QLabel(this);
     _messageLabel->setObjectName(QStringLiteral("CameraMessageLabel"));
     _messageLabel->setProperty("statusRole", "message");
@@ -319,7 +314,7 @@ void QCameraWidget::setConnectionOperationActive(const bool active)
     _toolGrabOne->setEnabled(!active && opened);
     _toolGrabLive->setEnabled(!active && opened);
 
-    updateStatusBubble();
+    updateStatusLabel();
 }
 
 void QCameraWidget::startRefreshOperation()
@@ -385,7 +380,7 @@ void QCameraWidget::setRefreshOperationActive(const bool active)
     _cameraListComboBox->setEnabled(!active && !opened);
     _toolConnect->setEnabled(!active);
 
-    updateStatusBubble();
+    updateStatusLabel();
 }
 
 void QCameraWidget::applyConnectionState(const bool opened)
@@ -407,7 +402,7 @@ void QCameraWidget::applyConnectionState(const bool opened)
     _toolGrabOne->setEnabled(opened);
     _toolGrabLive->setEnabled(opened);
 
-    updateStatusBubble();
+    updateStatusLabel();
 
     if(opened){
         rebuildFeaturesIfReady();
@@ -1044,10 +1039,10 @@ void QCameraWidget::showStatusMessage(const QString& msg, bool isError, int time
 void QCameraWidget::updateGrabState(bool grabbing)
 {
     _grabbing = grabbing;
-    updateStatusBubble();
+    updateStatusLabel();
 }
 
-void QCameraWidget::updateStatusBubble()
+void QCameraWidget::updateStatusLabel()
 {
     if (!_statusLabel || _shuttingDown) return;
 
@@ -1063,14 +1058,7 @@ void QCameraWidget::updateStatusBubble()
             _statusLabel->setText(tr("Updating"));
         }
         _statusLabel->setProperty("status", "idle");
-        if (_loadingLabel) {
-            _loadingLabel->show();
-        }
     } else {
-        if (_loadingLabel) {
-            _loadingLabel->hide();
-        }
-
         if (!opened && !_connectionAttempted) {
             _statusLabel->setText(tr("Idle"));
             _statusLabel->setProperty("status", "idle");
