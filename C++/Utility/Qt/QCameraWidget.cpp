@@ -241,6 +241,14 @@ void QCameraWidget::prepareForShutdown()
         _refreshThread = nullptr;
     }
 
+    const auto parameterThreads = _parameterThreads;
+    for(QThread* worker : parameterThreads){
+        if(worker){
+            worker->wait();
+        }
+    }
+    _parameterThreads.clear();
+
     if(_camera){
         if(_statusCallbackId != 0){
             _camera->deregisterStatusCallback(_statusCallbackId);

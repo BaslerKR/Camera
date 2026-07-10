@@ -22,9 +22,12 @@
 #include <QCheckBox>
 #include <QLineEdit>
 #include <QTimer>
+#include <QSet>
 #include "Camera.h"
 
 #include <QThread>
+
+#include <memory>
 
 class QCameraWidget : public QWidget
 {
@@ -60,6 +63,7 @@ private:
     Camera::CallbackId _nodeCallbackId = 0;
     QThread *_connectionThread = nullptr;
     QThread *_refreshThread = nullptr;
+    QSet<QThread*> _parameterThreads;
     bool _connectionOperationActive = false;
     bool _refreshOperationActive = false;
     bool _parameterWriteActive = false;
@@ -90,18 +94,22 @@ private:
         ++_pendingParameterWrites;
         _parameterWriteActive = true;
         updateStatusLabel();
-        auto* success = new bool(false);
+        const auto success = std::make_shared<bool>(false);
         QThread* worker = QThread::create([writeFunc, success]() {
             *success = writeFunc();
         });
+        worker->setParent(this);
+        _parameterThreads.insert(worker);
         connect(worker, &QThread::finished, this, [this, success, cleanupFunc, worker]() {
+            _parameterThreads.remove(worker);
             if (_pendingParameterWrites > 0) {
                 --_pendingParameterWrites;
             }
             _parameterWriteActive = _pendingParameterWrites > 0;
-            updateStatusLabel();
-            cleanupFunc(*success);
-            delete success;
+            if (!_shuttingDown) {
+                updateStatusLabel();
+                cleanupFunc(*success);
+            }
             worker->deleteLater();
         });
         worker->start();

@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.16)
 project(Camera LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+option(CAMERA_BUILD_GRAPHICSENGINE_ADAPTER
+    "Build the optional Camera-to-GraphicsEngine adapter target."
+    OFF
+)
 set(HEADERS
     Camera.h
     CameraSystem.h
@@ -96,14 +100,30 @@ if(NOT pylon_FOUND)
     endif()
 endif()
 
-if(TARGET GraphicsEngine)
-    message(STATUS "[Camera] GraphicsEngine target detected. Enabling pylon Scene3D adapters.")
-    target_sources(Camera PRIVATE
+if(CAMERA_BUILD_GRAPHICSENGINE_ADAPTER)
+    if(NOT TARGET GraphicsEngine::GraphicsEngine)
+        message(FATAL_ERROR
+            "[Camera] CAMERA_BUILD_GRAPHICSENGINE_ADAPTER=ON requires "
+            "GraphicsEngine::GraphicsEngine. Add GraphicsEngine first or disable the adapter."
+        )
+    endif()
+
+    add_library(CameraGraphicsEngineAdapter STATIC
         Utility/GraphicsEngine/BlazeScene3DAdapter.h
         Utility/GraphicsEngine/BlazeScene3DAdapter.cpp
         Utility/GraphicsEngine/PylonScene3DAdapter.h
         Utility/GraphicsEngine/PylonScene3DAdapter.cpp
     )
-    target_link_libraries(Camera PUBLIC GraphicsEngine::GraphicsEngine)
-    target_include_directories(Camera PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/Utility/GraphicsEngine)
+    add_library(Camera::GraphicsEngineAdapter ALIAS CameraGraphicsEngineAdapter)
+    target_compile_features(CameraGraphicsEngineAdapter PUBLIC cxx_std_17)
+    target_include_directories(CameraGraphicsEngineAdapter
+        PUBLIC
+            "${CMAKE_CURRENT_SOURCE_DIR}/Utility/GraphicsEngine"
+    )
+    target_link_libraries(CameraGraphicsEngineAdapter
+        PUBLIC
+            Camera
+            GraphicsEngine::GraphicsEngine
+    )
+    message(STATUS "[Camera] Camera::GraphicsEngineAdapter enabled.")
 endif()

@@ -70,6 +70,11 @@ add_subdirectory(modules/Camera/C++)
 target_link_libraries(YourHostApp PRIVATE Camera)
 ```
 
+Hosts that need the optional Scene3D conversion layer add GraphicsEngine first,
+set `CAMERA_BUILD_GRAPHICSENGINE_ADAPTER=ON`, and link
+`Camera::GraphicsEngineAdapter` explicitly. The `Camera` core target does not link
+GraphicsEngine or VTK.
+
 ### 2. Basic Example
 ```cpp
 #include "CameraSystem.h"

@@ -262,6 +262,11 @@ Camera::Camera(CameraSystem *parent, const int allottedNumber) : _system(parent)
 Camera::~Camera()
 {
     close();
+    try{
+        _currentCamera.DeregisterConfiguration(this);
+    }catch(const GenericException &e){
+        CameraSystem::syslog(e.GetDescription(), true);
+    }
 }
 
 Camera::CallbackId Camera::registerStatusCallback(StatusCallback cb)
@@ -343,7 +348,6 @@ void Camera::close(){
         if(_currentCamera.IsOpen()){
             _currentCamera.Close();
         }
-        _currentCamera.DeregisterConfiguration(this);
         clearNodeEventHandlers();
         if(_currentCamera.IsPylonDeviceAttached()){
             _currentCamera.DestroyDevice();
