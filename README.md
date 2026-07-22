@@ -13,8 +13,8 @@ Basler pylon 카메라를 C++ 환경에서 고속으로 제어하고, 실시간 
 
 * **강력한 카메라 생명주기 관리**: Basler Pylon SDK를 래핑하여 장치 검색, 연결 수립, Single/Continuous Grabbing을 안전하게 핸들링합니다.
 * **3D 멀티파트 스트림 지원**: Blaze, Stereo mini direct XYZ, Stereo ace disparity/calibration 경로를 family-aware Scene3D adapter로 변환하며 mono/color 입력을 보존합니다.
-* **고속 Qt 통합 위젯**: 장치 탐색, 연결 및 실시간 파라미터 튜닝이 가능한 `QCameraWidget`과 Pylon 버퍼를 `QImage`로 고속 복사하는 `QtConverter`를 기본 내장하고 있습니다.
 * **독립적 로깅 프레임워크**: `CameraSystem::syslog()`를 통해 Qt 로깅 엔진에 커플링되지 않는 표준 스트림 기반 로깅을 제공하여 호스트에서 가볍게 리다이렉트할 수 있습니다.
+* **Qt 통합 지원 (선택)**: Qt 환경이 구성된 호스트 프로젝트에서는 장치 탐색, 연결 및 실시간 파라미터 튜닝이 가능한 `QCameraWidget`과 `QtConverter`를 제공합니다.
 
 ---
 
@@ -70,10 +70,7 @@ add_subdirectory(modules/Camera/C++)
 target_link_libraries(YourHostApp PRIVATE Camera)
 ```
 
-Hosts that need the optional Scene3D conversion layer add GraphicsEngine first,
-set `CAMERA_BUILD_GRAPHICSENGINE_ADAPTER=ON`, and link
-`Camera::GraphicsEngineAdapter` explicitly. The `Camera` core target does not link
-GraphicsEngine or VTK.
+> **Scene3D 어댑터 연동 (선택)**: 중립적 3D 점군 변환 레이어가 필요한 호스트 애플리케이션은 `GraphicsEngine` 타겟을 먼저 추가한 후 `CAMERA_BUILD_GRAPHICSENGINE_ADAPTER=ON`을 설정하고 `Camera::GraphicsEngineAdapter`를 명시적으로 링크합니다. `Camera` 핵심 타겟은 `GraphicsEngine`이나 VTK에 직접 링크되지 않습니다.
 
 ### 2. Basic Example
 ```cpp
@@ -107,6 +104,45 @@ int main()
     camera->stop();
     camera->close();
 }
+```
+
+### 3. OpenCV (`cv::Mat`) Integration
+Pylon SDK의 `Pylon::CPylonImage` 버퍼와 포맷 정보를 활용하여 복사 없이 `cv::Mat`으로 직접 래핑할 수 있습니다.
+
+```cpp
+camera->registerGrabCallback([camera](const Pylon::CPylonImage& image, size_t frameNo) {
+    if (!image.IsValid()) return;
+
+    cv::Mat mat;
+    int width = static_cast<int>(image.GetWidth());
+    int height = static_cast<int>(image.GetHeight());
+    size_t paddingX = image.GetPaddingX();
+    size_t stride = width * image.GetPixelBytes() + paddingX;
+
+    switch (image.GetPixelType()) {
+    case Pylon::PixelType_Mono8:
+        mat = cv::Mat(height, width, CV_8UC1, 
+                      const_cast<void*>(image.GetBuffer()), stride);
+        break;
+    case Pylon::PixelType_BGR8packed:
+        mat = cv::Mat(height, width, CV_8UC3, 
+                      const_cast<void*>(image.GetBuffer()), stride);
+        break;
+    case Pylon::PixelType_RGB8packed: {
+        cv::Mat rgb(height, width, CV_8UC3, 
+                    const_cast<void*>(image.GetBuffer()), stride);
+        cv::cvtColor(rgb, mat, cv::COLOR_RGB2BGR);
+        break;
+    }
+    default:
+        break;
+    }
+
+    // OpenCV 처리 (예: cv::imshow, cv::imwrite 등)
+
+    // 처리 완료 후 ready 신호 전송
+    camera->ready();
+});
 ```
 
 ---
