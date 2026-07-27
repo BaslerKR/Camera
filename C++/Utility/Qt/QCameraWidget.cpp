@@ -227,6 +227,14 @@ QCameraWidget::~QCameraWidget()
     prepareForShutdown();
 }
 
+void QCameraWidget::setDiscoveredCameraNames(const QStringList& cameraNames)
+{
+    if (_shuttingDown || !_cameraListComboBox) return;
+    const QSignalBlocker blocker(_cameraListComboBox);
+    _cameraListComboBox->clear();
+    _cameraListComboBox->addItems(cameraNames);
+}
+
 void QCameraWidget::prepareForShutdown()
 {
     _shuttingDown = true;

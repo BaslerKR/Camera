@@ -36,6 +36,7 @@ public:
     QCameraWidget(QWidget *parent=nullptr, Camera *camera=nullptr);
     ~QCameraWidget();
     void prepareForShutdown();
+    void setDiscoveredCameraNames(const QStringList& cameraNames);
 
     void generateFeaturesWidget(GenApi::INodeMap& nodemap);
     void generateChildrenItem(QTreeWidgetItem *parent, GenApi::NodeList_t children);
