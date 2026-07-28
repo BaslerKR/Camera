@@ -60,7 +60,7 @@ public:
     bool open(const std::string& cameraName="");
     bool isOpened() const;
     void close();
-    std::string getConnectedCameraName(){ return _connectedCameraName; }
+    std::string getConnectedCameraName() const;
 
     using GrabCallback = std::function<void(const CPylonImage&, size_t frame)>;
     /**
@@ -134,6 +134,7 @@ private:
     };
 
     CameraSystem *_system;
+    mutable std::mutex _connectionStateMutex;
     std::string _connectedCameraName;
     int _allottedNumber = 0;
 

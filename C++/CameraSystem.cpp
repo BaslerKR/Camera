@@ -19,7 +19,15 @@ CameraSystem::~CameraSystem(){
         }
         delete camera;
     }
-    PylonTerminate();
+    try{
+        PylonTerminate();
+    }catch(const GenericException &e){
+        syslog(e.GetDescription(), true);
+    }catch(const std::exception &e){
+        syslog(e.what(), true);
+    }catch(...){
+        syslog("Unknown exception while terminating pylon", true);
+    }
 }
 
 void CameraSystem::updateCameraListLocked()
@@ -132,13 +140,19 @@ Camera *CameraSystem::addCamera()
 void CameraSystem::removeCamera(Camera *camera)
 {
     if (!camera) return;
-    std::lock_guard<std::mutex> lock(_mutex);
-    auto it = std::remove(_cameraList.begin(), _cameraList.end(), camera);
-    if (it != _cameraList.end()) {
-        _cameraList.erase(it, _cameraList.end());
-        delete camera;
-        syslog("This camera instance was removed.");
+    bool removed = false;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        auto it = std::remove(_cameraList.begin(), _cameraList.end(), camera);
+        if (it != _cameraList.end()) {
+            _cameraList.erase(it, _cameraList.end());
+            removed = true;
+        }
     }
+    if (!removed) return;
+
+    delete camera;
+    syslog("This camera instance was removed.");
 }
 
 Camera *CameraSystem::getCamera(const int allottedNumber) const {

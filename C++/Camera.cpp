@@ -261,11 +261,15 @@ Camera::Camera(CameraSystem *parent, const int allottedNumber) : _system(parent)
 
 Camera::~Camera()
 {
-    close();
     try{
+        close();
         _currentCamera.DeregisterConfiguration(this);
     }catch(const GenericException &e){
         CameraSystem::syslog(e.GetDescription(), true);
+    }catch(const std::exception &e){
+        CameraSystem::syslog(e.what(), true);
+    }catch(...){
+        CameraSystem::syslog("Unknown exception while destroying camera", true);
     }
 }
 
@@ -353,6 +357,14 @@ void Camera::close(){
             _currentCamera.DestroyDevice();
         }
     }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
+    catch(const std::exception &e){ CameraSystem::syslog(e.what(),true); }
+    catch(...){ CameraSystem::syslog("Unknown exception while closing camera", true); }
+}
+
+std::string Camera::getConnectedCameraName() const
+{
+    std::lock_guard<std::mutex> lock(_connectionStateMutex);
+    return _connectedCameraName;
 }
 
 Camera::CallbackId Camera::registerGrabCallback(GrabCallback cb)
@@ -627,7 +639,7 @@ void Camera::clearNodeUpdatedCallbacks()
 }
 
 void Camera::OnAttached(CInstantCamera &camera){
-    auto from = "[Info " + to_string(_allottedNumber)  +"] " + safeCameraName(camera, _connectedCameraName);
+    auto from = "[Info " + to_string(_allottedNumber)  +"] " + safeCameraName(camera, getConnectedCameraName());
     CameraSystem::syslog(from + " attached.");
 }
 
@@ -652,8 +664,11 @@ void Camera::OnOpened(CInstantCamera &camera){
 
 void Camera::OnClosed(CInstantCamera &camera){
     _deviceAvailable.store(false, std::memory_order_release);
-    const auto cameraName = safeCameraName(camera, _connectedCameraName);
-    _connectedCameraName = "";
+    const auto cameraName = safeCameraName(camera, getConnectedCameraName());
+    {
+        std::lock_guard<std::mutex> lock(_connectionStateMutex);
+        _connectedCameraName.clear();
+    }
     auto from = "[Info " + to_string(_allottedNumber)  +"] " + cameraName;
     CameraSystem::syslog(from + " closed.");
     dispatchCallbacks(_statusMutex, _statusObservers, ConnectionStatus, false);
@@ -662,8 +677,11 @@ void Camera::OnClosed(CInstantCamera &camera){
 void Camera::OnCameraDeviceRemoved(CInstantCamera &camera){
     requestStop();
     _deviceAvailable.store(false, std::memory_order_release);
-    const auto cameraName = safeCameraName(camera, _connectedCameraName);
-    _connectedCameraName = "";
+    const auto cameraName = safeCameraName(camera, getConnectedCameraName());
+    {
+        std::lock_guard<std::mutex> lock(_connectionStateMutex);
+        _connectedCameraName.clear();
+    }
     auto from = "[Info " + to_string(_allottedNumber)  +"] " + cameraName;
     CameraSystem::syslog(from + " removed physically.");
     dispatchCallbacks(_statusMutex, _statusObservers, GrabbingStatus, false);
@@ -671,13 +689,13 @@ void Camera::OnCameraDeviceRemoved(CInstantCamera &camera){
 }
 
 void Camera::OnGrabStarted(CInstantCamera &camera){
-    auto from = "[Info " + to_string(_allottedNumber)  +"] " + safeCameraName(camera, _connectedCameraName);
+    auto from = "[Info " + to_string(_allottedNumber)  +"] " + safeCameraName(camera, getConnectedCameraName());
     CameraSystem::syslog(from + " started grabbing.");
     dispatchCallbacks(_statusMutex, _statusObservers, GrabbingStatus, true);
 }
 
 void Camera::OnGrabStopped(CInstantCamera &camera){
-    auto from = "[Info " + to_string(_allottedNumber)  +"] " + safeCameraName(camera, _connectedCameraName);
+    auto from = "[Info " + to_string(_allottedNumber)  +"] " + safeCameraName(camera, getConnectedCameraName());
     CameraSystem::syslog(from + " stopped grabbing.");
     dispatchCallbacks(_statusMutex, _statusObservers, GrabbingStatus, false);
 }
@@ -704,11 +722,15 @@ void Camera::OnCameraEvent(CInstantCamera &camera, intptr_t userProvidedId, GenA
 
 void Camera::markOpened(CInstantCamera& camera)
 {
-    _connectedCameraName = safeCameraName(camera, {});
+    const auto cameraName = safeCameraName(camera, {});
+    {
+        std::lock_guard<std::mutex> lock(_connectionStateMutex);
+        _connectedCameraName = cameraName;
+    }
     const bool wasAvailable = _deviceAvailable.exchange(true, std::memory_order_acq_rel);
     if(wasAvailable) return;
 
-    auto from = "[Info " + to_string(_allottedNumber)  +"] " + _connectedCameraName;
+    auto from = "[Info " + to_string(_allottedNumber)  +"] " + cameraName;
     CameraSystem::syslog(from + " opened.");
     dispatchCallbacks(_statusMutex, _statusObservers, ConnectionStatus, true);
 }
