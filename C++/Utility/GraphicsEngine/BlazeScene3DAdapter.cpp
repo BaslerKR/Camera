@@ -437,7 +437,8 @@ std::optional<GraphicsScene3D> buildScene3D(
     {
         frame.width = static_cast<int>(width);
         frame.height = static_cast<int>(height);
-        frame.zScaleMm = options.rotatePointCloudAroundX180 ? -1.0 : 1.0;
+        frame.lengthUnit = GraphicsLengthUnit::Millimeter;
+        frame.zScale = options.rotatePointCloudAroundX180 ? -1.0 : 1.0;
         frame.sensorType = "Basler blaze";
         frame.zValues.resize(pixelCount);
         frame.xValues.resize(pixelCount);

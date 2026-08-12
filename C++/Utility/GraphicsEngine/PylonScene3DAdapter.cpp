@@ -314,6 +314,7 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
     RangeFrame frame;
     frame.width = static_cast<int>(range.GetWidth());
     frame.height = static_cast<int>(range.GetHeight());
+    frame.lengthUnit = GraphicsLengthUnit::Millimeter;
     frame.sensorType = sourceName;
     const std::size_t count = static_cast<std::size_t>(frame.width) * static_cast<std::size_t>(frame.height);
     frame.xValues.resize(count);
@@ -423,6 +424,7 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
     RangeFrame frame;
     frame.width = static_cast<int>(disparity.GetWidth());
     frame.height = static_cast<int>(disparity.GetHeight());
+    frame.lengthUnit = GraphicsLengthUnit::Millimeter;
     frame.sensorType = "Basler Stereo ace";
     const std::size_t count = static_cast<std::size_t>(frame.width) * static_cast<std::size_t>(frame.height);
     frame.xValues.resize(count);
