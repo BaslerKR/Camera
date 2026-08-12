@@ -219,6 +219,7 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
         if (_camera->isOpened()) {
             _cameraListComboBox->setCurrentText(QString::fromStdString(_camera->getConnectedCameraName()));
         }
+        updateCameraSelectorState();
     }
 }
 
@@ -233,6 +234,20 @@ void QCameraWidget::setDiscoveredCameraNames(const QStringList& cameraNames)
     const QSignalBlocker blocker(_cameraListComboBox);
     _cameraListComboBox->clear();
     _cameraListComboBox->addItems(cameraNames);
+    updateCameraSelectorState();
+}
+
+void QCameraWidget::updateCameraSelectorState()
+{
+    if (!_cameraListComboBox) return;
+
+    const bool enabled = _camera
+        && !_shuttingDown
+        && !_connectionOperationActive
+        && !_refreshOperationActive
+        && !_camera->isOpened()
+        && _cameraListComboBox->count() > 0;
+    _cameraListComboBox->setEnabled(enabled);
 }
 
 void QCameraWidget::prepareForShutdown()
@@ -325,7 +340,7 @@ void QCameraWidget::setConnectionOperationActive(const bool active)
 
     const bool opened = _camera && _camera->isOpened();
     _toolConnect->setEnabled(!active);
-    _cameraListComboBox->setEnabled(!active && !opened);
+    updateCameraSelectorState();
     _toolRefresh->setEnabled(!active && !opened);
     _toolGrabOne->setEnabled(!active && opened);
     _toolGrabLive->setEnabled(!active && opened);
@@ -393,7 +408,7 @@ void QCameraWidget::setRefreshOperationActive(const bool active)
 
     const bool opened = _camera && _camera->isOpened();
     _toolRefresh->setEnabled(!active);
-    _cameraListComboBox->setEnabled(!active && !opened);
+    updateCameraSelectorState();
     _toolConnect->setEnabled(!active);
 
     updateStatusLabel();
@@ -412,7 +427,7 @@ void QCameraWidget::applyConnectionState(const bool opened)
         _toolConnect->setChecked(opened);
     }
 
-    _cameraListComboBox->setEnabled(!opened);
+    updateCameraSelectorState();
     _toolRefresh->setEnabled(!opened);
     _toolConnect->setEnabled(true);
     _toolGrabOne->setEnabled(opened);

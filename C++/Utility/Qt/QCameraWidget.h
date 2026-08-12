@@ -58,6 +58,7 @@ private:
     void applyConnectionState(bool opened);
     void startRefreshOperation();
     void setRefreshOperationActive(bool active);
+    void updateCameraSelectorState();
 
     Camera *_camera;
     Camera::CallbackId _statusCallbackId = 0;
