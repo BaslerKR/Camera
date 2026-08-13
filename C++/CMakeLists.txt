@@ -6,6 +6,10 @@ option(CAMERA_BUILD_GRAPHICSENGINE_ADAPTER
     "Build the optional Camera-to-GraphicsEngine adapter target."
     OFF
 )
+option(CAMERA_BUILD_QT_WIDGET
+    "Build the optional Camera Qt widget target."
+    OFF
+)
 set(HEADERS
     Camera.h
     CameraSystem.h
@@ -31,30 +35,33 @@ if(WIN32)
     target_compile_definitions(${PROJECT_NAME} PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 
-if(TARGET Qt6::Core)
-    set(QT_FOUND TRUE)
-    set(QT_VERSION_MAJOR 6)
-elseif(TARGET Qt5::Core)
-    set(QT_FOUND TRUE)
-    set(QT_VERSION_MAJOR 5)
-else()
-    find_package(QT NAMES Qt6 Qt5 QUIET)
-endif()
-if(QT_FOUND)
-    find_package(Qt${QT_VERSION_MAJOR} QUIET COMPONENTS Core Gui Widgets Xml)
-    set(CMAKE_AUTOMOC ON)
-    message(STATUS "[${PROJECT_NAME}] Configuring for Qt ${QT_VERSION_MAJOR}")
-    target_sources(${PROJECT_NAME} PRIVATE ${QT_HEADERS} ${QT_SOURCES})
-    target_link_libraries(${PROJECT_NAME} PUBLIC
-        Qt${QT_VERSION_MAJOR}::Core
-        Qt${QT_VERSION_MAJOR}::Gui
-        Qt${QT_VERSION_MAJOR}::Widgets
-        Qt${QT_VERSION_MAJOR}::Xml
+if(CAMERA_BUILD_QT_WIDGET)
+    if(TARGET Qt6::Core)
+        set(_camera_qt_package Qt6)
+    elseif(TARGET Qt5::Core)
+        set(_camera_qt_package Qt5)
+    else()
+        find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core)
+        set(_camera_qt_package Qt${QT_VERSION_MAJOR})
+    endif()
+
+    find_package(${_camera_qt_package} REQUIRED COMPONENTS Core Gui Widgets)
+
+    add_library(CameraQtWidget STATIC ${QT_HEADERS} ${QT_SOURCES})
+    add_library(Camera::QtWidget ALIAS CameraQtWidget)
+    set_target_properties(CameraQtWidget PROPERTIES AUTOMOC ON)
+    target_compile_features(CameraQtWidget PUBLIC cxx_std_17)
+    target_include_directories(CameraQtWidget PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(CameraQtWidget
+        PUBLIC
+            Camera
+            ${_camera_qt_package}::Core
+            ${_camera_qt_package}::Gui
+            ${_camera_qt_package}::Widgets
     )
-    message(STATUS "[${PROJECT_NAME}] QtConverter.h features will be enabled for users")
+    message(STATUS "[${PROJECT_NAME}] Camera::QtWidget enabled with ${_camera_qt_package}.")
 else()
-    message(STATUS "[${PROJECT_NAME}] Qt Not Found")
-    message(STATUS "[${PROJECT_NAME}] QtConverter.h features will be disabled")
+    message(STATUS "[${PROJECT_NAME}] Camera::QtWidget disabled.")
 endif()
 
 
@@ -101,12 +108,14 @@ if(NOT pylon_FOUND)
 endif()
 
 if(CAMERA_BUILD_GRAPHICSENGINE_ADAPTER)
-    if(NOT TARGET GraphicsEngine::GraphicsEngine)
+    if(NOT TARGET GraphicsEngine::Contracts)
         message(FATAL_ERROR
             "[Camera] CAMERA_BUILD_GRAPHICSENGINE_ADAPTER=ON requires "
-            "GraphicsEngine::GraphicsEngine. Add GraphicsEngine first or disable the adapter."
+            "GraphicsEngine::Contracts. Add GraphicsEngine first or disable the adapter."
         )
     endif()
+
+    find_package(OpenMP REQUIRED COMPONENTS CXX)
 
     add_library(CameraGraphicsEngineAdapter STATIC
         Utility/GraphicsEngine/BlazeScene3DAdapter.h
@@ -123,7 +132,9 @@ if(CAMERA_BUILD_GRAPHICSENGINE_ADAPTER)
     target_link_libraries(CameraGraphicsEngineAdapter
         PUBLIC
             Camera
-            GraphicsEngine::GraphicsEngine
+            GraphicsEngine::Contracts
+        PRIVATE
+            OpenMP::OpenMP_CXX
     )
     message(STATUS "[Camera] Camera::GraphicsEngineAdapter enabled.")
 endif()

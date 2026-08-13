@@ -2,6 +2,7 @@
 #ifdef QT_GUI_LIB
 #include <QToolButton>
 #include <QAction>
+#include <QDebug>
 #include <QHBoxLayout>
 #include <QMetaObject>
 #include <QPointer>
