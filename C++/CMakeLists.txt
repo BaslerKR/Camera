@@ -98,13 +98,60 @@ if(NOT pylon_FOUND)
         list(APPEND CMAKE_MODULE_PATH ${pylon_cmake})
         find_package(pylon REQUIRED)
     endif()
-    if(pylon_FOUND)
-        get_target_property(PYLON_LIBS pylon::pylon INTERFACE_LINK_LIBRARIES)
-        string(REPLACE "-Wl,--enable-new-dtags" "" PYLON_LIBS_CLEAN "${PYLON_LIBS}")
-        set_target_properties(pylon::pylon PROPERTIES INTERFACE_LINK_LIBRARIES "${PYLON_LIBS_CLEAN}")
-        target_link_libraries(${PROJECT_NAME} PUBLIC pylon::pylon)
-        message(STATUS "[${PROJECT_NAME}] pylon SDK ${pylon_VERSION} found")
+endif()
+
+if(pylon_FOUND)
+    if(NOT TARGET pylon::pylon)
+        message(FATAL_ERROR
+            "[${PROJECT_NAME}] pylon_FOUND is true, but the pylon::pylon target was not created."
+        )
     endif()
+
+    # Keep the vendor imported target immutable. Camera owns the platform-specific
+    # link policy through this interface target, including Linux loader behavior.
+    add_library(CameraPylonRuntime INTERFACE)
+    add_library(Camera::Pylon ALIAS CameraPylonRuntime)
+
+    foreach(_camera_pylon_interface_property IN ITEMS
+        INTERFACE_COMPILE_DEFINITIONS
+        INTERFACE_COMPILE_FEATURES
+        INTERFACE_COMPILE_OPTIONS
+        INTERFACE_INCLUDE_DIRECTORIES
+        INTERFACE_LINK_DEPENDS
+        INTERFACE_LINK_DIRECTORIES
+        INTERFACE_LINK_LIBRARIES
+        INTERFACE_LINK_OPTIONS
+        INTERFACE_PRECOMPILE_HEADERS
+        INTERFACE_SOURCES
+        INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+    )
+        get_target_property(
+            _camera_pylon_property
+            pylon::pylon
+            "${_camera_pylon_interface_property}"
+        )
+        if(NOT _camera_pylon_property STREQUAL "_camera_pylon_property-NOTFOUND")
+            if(UNIX AND NOT APPLE)
+                if(_camera_pylon_interface_property STREQUAL "INTERFACE_LINK_LIBRARIES"
+                   OR _camera_pylon_interface_property STREQUAL "INTERFACE_LINK_OPTIONS")
+                    string(REPLACE
+                        "-Wl,--enable-new-dtags"
+                        ""
+                        _camera_pylon_property
+                        "${_camera_pylon_property}"
+                    )
+                endif()
+            endif()
+            set_property(
+                TARGET CameraPylonRuntime
+                PROPERTY "${_camera_pylon_interface_property}"
+                "${_camera_pylon_property}"
+            )
+        endif()
+    endforeach()
+
+    target_link_libraries(${PROJECT_NAME} PUBLIC CameraPylonRuntime)
+    message(STATUS "[${PROJECT_NAME}] pylon SDK ${pylon_VERSION} found")
 endif()
 
 if(CAMERA_BUILD_GRAPHICSENGINE_ADAPTER)

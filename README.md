@@ -37,6 +37,8 @@ target_link_libraries(qt_consumer PRIVATE Camera::QtWidget)
 
 `Camera::QtWidget` provides `Utility/Qt/QCameraWidget.h` and `Utility/Qt/QtConverter.h` and links the `Camera` core transitively. Enabling the option requires Qt Core, Gui, and Widgets; configuration fails clearly when they are unavailable.
 
+The core links the SDK through the module-owned `Camera::Pylon` interface target. The vendor `pylon::pylon` imported target is left unchanged; on Linux, Camera's loader-link policy is applied only to its own interface. Consumers should link `Camera` rather than modifying the vendor target.
+
 The optional scene adapter is disabled by default. Enable it only after a neutral scene-contract target is available; the adapter converts SDK payloads without requiring the visualization renderer.
 
 ## Acquisition Contract

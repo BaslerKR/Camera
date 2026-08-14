@@ -2,6 +2,7 @@
 
 - Split the opt-in Qt control widget and image converter into `Camera::QtWidget`; the `Camera` core target no longer discovers or publicly links Qt.
 - Updated the optional scene adapter to consume a neutral scene-contract target without inheriting the visualization runtime; its conversion output is unchanged.
+- Keep the vendor `pylon::pylon` imported target unchanged by applying the Linux loader-link policy through the module-owned `Camera::Pylon` interface target. Pre-discovered pylon targets are linked consistently.
 - Replace the corrupted host-layout README with a standalone, code-aligned acquisition and integration contract.
 
 ## v1.0.1
