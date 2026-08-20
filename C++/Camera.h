@@ -97,10 +97,18 @@ public:
      * @brief Removes every registered 3D grab callback.
      */
     void clearGrab3DCallbacks();
+    /** Returns one consumer credit when free-run backpressure is active. */
     void ready();
 
+    /**
+     * Arms pylon acquisition and starts the frame-receive worker.
+     * @param frames Number of frames to deliver, or zero for continuous mode.
+     * @note Frame retrieval and callbacks run on the owned worker thread.
+     */
     void grab(size_t frames=0);
+    /** Requests stop and joins the frame-receive worker. */
     void stop();
+    /** Requests worker stop without joining the caller. */
     void requestStop();
 
     std::vector<std::string> getUpdatedCameraList() const;
@@ -161,6 +169,7 @@ private:
     std::mutex _permitMutex;
     std::condition_variable _permitCondition;
     std::atomic<int> _permits{0};
+    std::atomic<bool> _permitBackpressureEnabled{false};
 
     std::atomic<size_t> _frameSeq{0};
     std::atomic<size_t> _frameTarget{0};

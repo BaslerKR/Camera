@@ -134,6 +134,11 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
         }
     });
 
+    _nodeUpdateTimer = new QTimer(this);
+    _nodeUpdateTimer->setSingleShot(true);
+    _nodeUpdateTimer->setInterval(100);
+    connect(_nodeUpdateTimer, &QTimer::timeout, this, &QCameraWidget::drainNodeUpdates);
+
     layout->addWidget(_statusBar);
     setLayout(layout);
 
@@ -181,12 +186,7 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     _nodeCallbackId = _camera->registerNodeUpdatedCallback([guard](const std::string& nodeName){
         if(!guard) return;
         if(nodeName.empty()) return;
-
-        const QString qtNodeName = QString::fromStdString(nodeName);
-        QMetaObject::invokeMethod(guard, [guard, qtNodeName]{
-            if(!guard) return;
-            guard->handleNodeUpdated(qtNodeName);
-        }, Qt::QueuedConnection);
+        guard->enqueueNodeUpdate(QString::fromStdString(nodeName));
     });
     connect(_toolConnect, &QToolButton::toggled, this, [=](bool toggled){
         // Request to open the camera
@@ -253,7 +253,13 @@ void QCameraWidget::updateCameraSelectorState()
 
 void QCameraWidget::prepareForShutdown()
 {
-    _shuttingDown = true;
+    _shuttingDown.store(true, std::memory_order_release);
+    if(_nodeUpdateTimer) _nodeUpdateTimer->stop();
+    {
+        std::lock_guard<std::mutex> lock(_nodeUpdateMutex);
+        _pendingNodeUpdates.clear();
+        _nodeUpdateDrainScheduled = false;
+    }
 
     if(_connectionThread){
         _connectionThread->wait();
@@ -648,6 +654,67 @@ bool QCameraWidget::refreshNodeWidget(GenApi::INode *node)
     return handled;
 }
 
+void QCameraWidget::enqueueNodeUpdate(const QString& nodeName)
+{
+    if(nodeName.isEmpty() || _shuttingDown.load(std::memory_order_acquire)) return;
+    if(_grabbing.load(std::memory_order_acquire)){
+        _suppressedGrabNodeUpdates.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    bool postDrain = false;
+    {
+        std::lock_guard<std::mutex> lock(_nodeUpdateMutex);
+        if(_shuttingDown.load(std::memory_order_acquire)) return;
+        _pendingNodeUpdates.insert(nodeName);
+        if(!_nodeUpdateDrainScheduled){
+            _nodeUpdateDrainScheduled = true;
+            postDrain = true;
+        }
+    }
+    if(!postDrain) return;
+
+    const QPointer<QCameraWidget> guard(this);
+    QMetaObject::invokeMethod(this, [guard]{
+        if(guard) guard->scheduleNodeUpdateDrain();
+    }, Qt::QueuedConnection);
+}
+
+void QCameraWidget::scheduleNodeUpdateDrain()
+{
+    if(_shuttingDown.load(std::memory_order_acquire)) return;
+    if(_grabbing.load(std::memory_order_acquire)){
+        std::lock_guard<std::mutex> lock(_nodeUpdateMutex);
+        _suppressedGrabNodeUpdates.fetch_add(
+            static_cast<std::size_t>(_pendingNodeUpdates.size()),
+            std::memory_order_relaxed);
+        _pendingNodeUpdates.clear();
+        _nodeUpdateDrainScheduled = false;
+        return;
+    }
+    if(_nodeUpdateTimer && !_nodeUpdateTimer->isActive()) _nodeUpdateTimer->start();
+}
+
+void QCameraWidget::drainNodeUpdates()
+{
+    QSet<QString> updates;
+    {
+        std::lock_guard<std::mutex> lock(_nodeUpdateMutex);
+        updates.swap(_pendingNodeUpdates);
+        _nodeUpdateDrainScheduled = false;
+    }
+
+    if(_shuttingDown.load(std::memory_order_acquire) || updates.isEmpty()) return;
+    if(_grabbing.load(std::memory_order_acquire)){
+        _suppressedGrabNodeUpdates.fetch_add(
+            static_cast<std::size_t>(updates.size()),
+            std::memory_order_relaxed);
+        return;
+    }
+
+    for(const QString& nodeName : updates) handleNodeUpdated(nodeName);
+}
+
 void QCameraWidget::handleNodeUpdated(const QString& nodeName)
 {
     try{
@@ -667,12 +734,19 @@ void QCameraWidget::handleNodeUpdated(const QString& nodeName)
 
 void QCameraWidget::scheduleFeaturesRebuild()
 {
-    if(_shuttingDown || _rebuildScheduled || !isCameraReady()) return;
+    if(_shuttingDown.load(std::memory_order_acquire) || !isCameraReady()) return;
+    if(_grabbing.load(std::memory_order_acquire)){
+        return;
+    }
+    if(_rebuildScheduled) return;
 
     _rebuildScheduled = true;
     QTimer::singleShot(50, this, [this]{
-        if(_shuttingDown) return;
+        if(_shuttingDown.load(std::memory_order_acquire)) return;
         _rebuildScheduled = false;
+        if(_grabbing.load(std::memory_order_acquire)){
+            return;
+        }
         rebuildFeaturesIfReady();
     });
 }
@@ -1070,7 +1144,21 @@ void QCameraWidget::showStatusMessage(const QString& msg, bool isError, int time
 
 void QCameraWidget::updateGrabState(bool grabbing)
 {
-    _grabbing = grabbing;
+    const bool wasGrabbing = _grabbing.exchange(grabbing, std::memory_order_acq_rel);
+    if(grabbing){
+        if(_nodeUpdateTimer) _nodeUpdateTimer->stop();
+        std::lock_guard<std::mutex> lock(_nodeUpdateMutex);
+        _suppressedGrabNodeUpdates.fetch_add(
+            static_cast<std::size_t>(_pendingNodeUpdates.size()),
+            std::memory_order_relaxed);
+        _pendingNodeUpdates.clear();
+        _nodeUpdateDrainScheduled = false;
+    }else if(wasGrabbing){
+        const std::size_t suppressed = _suppressedGrabNodeUpdates.exchange(0, std::memory_order_acq_rel);
+        qInfo() << "[Camera UI] Live feature updates deferred during grab:"
+                << suppressed << "event(s); rebuilding once after stop.";
+        scheduleFeaturesRebuild();
+    }
     updateStatusLabel();
 }
 

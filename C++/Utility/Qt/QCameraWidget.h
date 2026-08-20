@@ -27,7 +27,10 @@
 
 #include <QThread>
 
+#include <atomic>
+#include <cstddef>
 #include <memory>
+#include <mutex>
 
 class QCameraWidget : public QWidget
 {
@@ -59,6 +62,12 @@ private:
     void startRefreshOperation();
     void setRefreshOperationActive(bool active);
     void updateCameraSelectorState();
+    /** Queues one camera-node update without growing the Qt event queue. */
+    void enqueueNodeUpdate(const QString& nodeName);
+    /** Starts the GUI-thread timer that drains a coalesced node-update batch. */
+    void scheduleNodeUpdateDrain();
+    /** Applies one bounded batch of unique camera-node updates. */
+    void drainNodeUpdates();
 
     Camera *_camera;
     Camera::CallbackId _statusCallbackId = 0;
@@ -71,8 +80,8 @@ private:
     bool _parameterWriteActive = false;
     int _pendingParameterWrites = 0;
     bool _connectionAttempted = false;
-    bool _shuttingDown = false;
-    bool _grabbing = false;
+    std::atomic<bool> _shuttingDown{false};
+    std::atomic<bool> _grabbing{false};
     QTreeWidget *_featuresWidget;
     QComboBox *_cameraListComboBox;
 
@@ -86,6 +95,11 @@ private:
     QLabel *_messageLabel = nullptr;
     QLabel *_statusLabel = nullptr;
     QTimer *_messageTimer = nullptr;
+    QTimer *_nodeUpdateTimer = nullptr;
+    std::mutex _nodeUpdateMutex;
+    QSet<QString> _pendingNodeUpdates;
+    bool _nodeUpdateDrainScheduled = false;
+    std::atomic<std::size_t> _suppressedGrabNodeUpdates{0};
 
     void showStatusMessage(const QString& msg, bool isError = false, int timeout = 0);
     void updateGrabState(bool grabbing);

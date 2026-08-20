@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <exception>
 #include <initializer_list>
 #include <limits>
@@ -399,7 +400,15 @@ void Camera::clearGrab3DCallbacks()
 
 void Camera::ready()
 {
-    _permits.fetch_add(1, std::memory_order_acq_rel);
+    if(!_permitBackpressureEnabled.load(std::memory_order_acquire)) return;
+
+    int current = _permits.load(std::memory_order_acquire);
+    while(current < 1 && !_permits.compare_exchange_weak(
+              current,
+              1,
+              std::memory_order_acq_rel,
+              std::memory_order_acquire)){
+    }
     _permitCondition.notify_one();
 }
 
@@ -516,9 +525,19 @@ void Camera::grab(const size_t frames){
     try{
         if(!isOpened()) return;
         if(_isRunning.load(std::memory_order_acquire)) return;
-        if(_thread.joinable()) _thread.join();
+        if(_thread.joinable()){
+            const auto joinStarted = std::chrono::steady_clock::now();
+            _thread.join();
+            const auto joinMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - joinStarted).count();
+            if(joinMs >= 100){
+                CameraSystem::syslog("[WARN] Previous camera grab worker join took "
+                    + std::to_string(joinMs) + " ms before re-arm.", true);
+            }
+        }
 
-        bool triggerMode = _currentCamera.TriggerMode.GetValue() == Basler_UniversalCameraParams::TriggerModeEnums::TriggerMode_On;
+        const bool triggerMode = _currentCamera.TriggerMode.GetValue()
+            == Basler_UniversalCameraParams::TriggerModeEnums::TriggerMode_On;
         if(triggerMode){
             _currentCamera.MaxNumBuffer = 30;
             _currentCamera.StartGrabbing(GrabStrategy_OneByOne, GrabLoop_ProvidedByUser);
@@ -531,11 +550,21 @@ void Camera::grab(const size_t frames){
         _frameTarget.store(frames, std::memory_order_release);
         _frameSeq.store(0, std::memory_order_release);
         _permits.store(1, std::memory_order_release);
+        _permitBackpressureEnabled.store(!triggerMode, std::memory_order_release);
 
-        _thread = std::thread([=]{
+        CameraSystem::syslog("[DEBUG] Grab armed: targetFrames=" + std::to_string(frames)
+            + ", triggerMode=" + (triggerMode ? "On" : "Off")
+            + ", strategy=" + (triggerMode ? "OneByOne" : "LatestImageOnly")
+            + ", receiveLoop=worker-thread.");
+
+        _thread = std::thread([this, triggerMode]{
+            const auto workerStarted = std::chrono::steady_clock::now();
+            auto nextProgressLog = workerStarted + std::chrono::seconds(10);
+            std::chrono::milliseconds maximumCallbackTime{0};
+            std::size_t slowCallbackCount = 0;
+            std::size_t delivered = 0;
             try{
                 CGrabResultPtr grabResult;
-                size_t delivered = 0;
 
                 while(_isRunning.load(std::memory_order_acquire) && _deviceAvailable.load(std::memory_order_acquire) && _currentCamera.IsGrabbing()){
                     if(_currentCamera.RetrieveResult(1000, grabResult, Pylon::TimeoutHandling_Return)){
@@ -551,6 +580,7 @@ void Camera::grab(const size_t frames){
                             }
 
                             auto seq = _frameSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
+                            const auto callbackStarted = std::chrono::steady_clock::now();
                             if(_streamKind.load(std::memory_order_acquire) == StreamKind::MultiPart3D){
                                 try{
                                     auto container = grabResult->GetDataContainer();
@@ -568,8 +598,31 @@ void Camera::grab(const size_t frames){
                                 dispatchCallbacks(_grabCallbackMutex, _grabCallbacks, image, seq);
                             }
 
+                            const auto callbackTime = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - callbackStarted);
+                            maximumCallbackTime = std::max(maximumCallbackTime, callbackTime);
+                            if(callbackTime >= std::chrono::milliseconds(500)){
+                                ++slowCallbackCount;
+                                if(slowCallbackCount <= 3 || slowCallbackCount % 100 == 0){
+                                    CameraSystem::syslog("[WARN] Grab callback backpressure: frame="
+                                        + std::to_string(seq) + ", callbackMs="
+                                        + std::to_string(callbackTime.count()) + ", slowCount="
+                                        + std::to_string(slowCallbackCount) + ".", true);
+                                }
+                            }
+
+                            ++delivered;
+                            const auto now = std::chrono::steady_clock::now();
+                            if(now >= nextProgressLog){
+                                CameraSystem::syslog("[DEBUG] Grab worker progress: frames="
+                                    + std::to_string(delivered) + ", lastCallbackMs="
+                                    + std::to_string(callbackTime.count()) + ", maxCallbackMs="
+                                    + std::to_string(maximumCallbackTime.count()) + ".");
+                                nextProgressLog = now + std::chrono::seconds(10);
+                            }
+
                             auto target = _frameTarget.load(std::memory_order_acquire);
-                            if(target !=0 && ++delivered >= target){
+                            if(target !=0 && delivered >= target){
                                 _isRunning.store(false, std::memory_order_release);
                                 _permitCondition.notify_all();
                                 break;
@@ -577,26 +630,68 @@ void Camera::grab(const size_t frames){
                         }
                     }
                 }
-                if(_currentCamera.IsGrabbing()) _currentCamera.StopGrabbing();
-            }catch(const GenericException &e){ 
-                CameraSystem::syslog(e.GetDescription(),true); 
-            }catch(const std::exception &e){ 
-                CameraSystem::syslog(e.what(),true); 
+            }catch(const GenericException &e){
+                CameraSystem::syslog(e.GetDescription(),true);
+            }catch(const std::exception &e){
+                CameraSystem::syslog(e.what(),true);
             }catch(...){
                 CameraSystem::syslog("Unknown exception in Camera::grab thread.", true);
             }
             _isRunning.store(false, std::memory_order_release);
             _permitCondition.notify_all();
+            try{
+                if(_currentCamera.IsGrabbing()) _currentCamera.StopGrabbing();
+            }catch(const GenericException &e){
+                CameraSystem::syslog(std::string("[WARN] StopGrabbing cleanup failed: ")
+                    + e.GetDescription(), true);
+            }catch(const std::exception &e){
+                CameraSystem::syslog(std::string("[WARN] StopGrabbing cleanup failed: ")
+                    + e.what(), true);
+            }
+            _permitBackpressureEnabled.store(false, std::memory_order_release);
+            const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - workerStarted).count();
+            CameraSystem::syslog("[DEBUG] Grab worker finished: frames="
+                + std::to_string(delivered) + ", elapsedMs=" + std::to_string(elapsedMs)
+                + ", maxCallbackMs=" + std::to_string(maximumCallbackTime.count())
+                + ", slowCallbacks=" + std::to_string(slowCallbackCount) + ".");
         });
-    }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
+    }catch(const GenericException &e){
+        _isRunning.store(false, std::memory_order_release);
+        _permitBackpressureEnabled.store(false, std::memory_order_release);
+        try{
+            if(_currentCamera.IsGrabbing()) _currentCamera.StopGrabbing();
+        }catch(...){
+        }
+        CameraSystem::syslog(e.GetDescription(),true);
+    }catch(const std::exception &e){
+        _isRunning.store(false, std::memory_order_release);
+        _permitBackpressureEnabled.store(false, std::memory_order_release);
+        try{
+            if(_currentCamera.IsGrabbing()) _currentCamera.StopGrabbing();
+        }catch(...){
+        }
+        CameraSystem::syslog(std::string("Camera grab start failed: ") + e.what(), true);
+    }
 }
 
 void Camera::stop(){
     try{
         requestStop();
 
-        if(_thread.joinable() && _thread.get_id() != std::this_thread::get_id()) _thread.join();
-    }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
+        if(_thread.joinable() && _thread.get_id() != std::this_thread::get_id()){
+            const auto joinStarted = std::chrono::steady_clock::now();
+            _thread.join();
+            const auto joinMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - joinStarted).count();
+            CameraSystem::syslog("[DEBUG] Camera stop joined grab worker in "
+                + std::to_string(joinMs) + " ms.");
+        }
+    }catch(const GenericException &e){
+        CameraSystem::syslog(e.GetDescription(),true);
+    }catch(const std::exception &e){
+        CameraSystem::syslog(std::string("Camera stop failed: ") + e.what(), true);
+    }
 }
 
 void Camera::requestStop()

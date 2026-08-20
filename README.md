@@ -62,7 +62,9 @@ if (camera->open()) {
 }
 ```
 
-Grab callbacks run on an acquisition thread. Do not update GUI objects directly from a callback. For continuous acquisition, call `ready()` only after the consumer has finished with the current 2D or multipart frame; otherwise the next frame remains blocked. Deregister callbacks, stop acquisition, close the camera, and remove it from `CameraSystem` before destroying dependent consumer state.
+Grab callbacks run on an acquisition thread. Do not update GUI objects directly from a callback. For continuous free-run acquisition, call `ready()` only after the consumer has finished with the current 2D or multipart frame; the credit is bounded and the next frame otherwise remains blocked. The Qt control coalesces duplicate feature-node notifications and defers live feature-tree refresh until grabbing stops, preventing camera-event traffic from growing the GUI event queue. Deregister callbacks, stop acquisition, close the camera, and remove it from `CameraSystem` before destroying dependent consumer state.
+
+Long-running acquisition logs a sampled worker-progress record every ten seconds and warns when a frame callback takes at least 500 ms. These diagnostics distinguish SDK receive activity from consumer/presentation backpressure without changing ordered frame delivery.
 
 Multipart 3D buffers remain SDK-owned for the callback duration. Consumers that retain data after the callback must create their own validated representation.
 
