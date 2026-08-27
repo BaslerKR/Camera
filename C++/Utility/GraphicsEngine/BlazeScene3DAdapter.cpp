@@ -439,6 +439,27 @@ std::optional<GraphicsScene3D> buildScene3D(
         frame.height = static_cast<int>(height);
         frame.lengthUnit = GraphicsLengthUnit::Millimeter;
         frame.zScale = options.rotatePointCloudAroundX180 ? -1.0 : 1.0;
+        frame.rangeField = {
+            "basler.blaze.z-coordinate",
+            "Z coordinate",
+            "mm",
+            MeasurementValueDomain::Calibrated,
+            MeasurementSampleKind::GridSample,
+            32U};
+        frame.intensityField = {
+            "basler.blaze.intensity",
+            "Intensity",
+            "",
+            MeasurementValueDomain::Native,
+            MeasurementSampleKind::GridSample,
+            0U};
+        frame.confidenceField = {
+            "basler.blaze.confidence",
+            "Confidence",
+            "",
+            MeasurementValueDomain::Native,
+            MeasurementSampleKind::GridSample,
+            0U};
         frame.sensorType = "Basler blaze";
         frame.zValues.resize(pixelCount);
         frame.xValues.resize(pixelCount);
@@ -530,6 +551,7 @@ std::optional<GraphicsScene3D> buildScene3D(
     {
         copyScalarComponent(intensity, width, height, frame.intensity, options);
         frame.intensityBits = frame.intensity.empty() ? 0U : scalarBits(intensity.GetPixelType());
+        frame.intensityField.bitsPerSample = frame.intensityBits;
     }
 
     const auto confidence = findComponentByType(container, Pylon::ComponentType_Confidence);
@@ -537,6 +559,7 @@ std::optional<GraphicsScene3D> buildScene3D(
     {
         copyScalarComponent(confidence, width, height, frame.confidence, options);
         frame.confidenceBits = frame.confidence.empty() ? 0U : scalarBits(confidence.GetPixelType());
+        frame.confidenceField.bitsPerSample = frame.confidenceBits;
     }
 
     GraphicsScene3D scene;

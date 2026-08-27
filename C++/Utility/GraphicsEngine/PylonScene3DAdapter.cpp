@@ -315,6 +315,24 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
     frame.width = static_cast<int>(range.GetWidth());
     frame.height = static_cast<int>(range.GetHeight());
     frame.lengthUnit = GraphicsLengthUnit::Millimeter;
+    frame.rangeField = {
+        pixelType == Pylon::PixelType_Coord3D_ABC32f
+            ? "basler.xyz.z-coordinate"
+            : "basler.depth",
+        pixelType == Pylon::PixelType_Coord3D_ABC32f
+            ? "Z coordinate"
+            : "Depth",
+        "mm",
+        MeasurementValueDomain::Calibrated,
+        MeasurementSampleKind::GridSample,
+        pixelType == Pylon::PixelType_Coord3D_ABC32f ? 32U : 16U};
+    frame.intensityField = {
+        "basler.intensity",
+        "Intensity",
+        "",
+        MeasurementValueDomain::Native,
+        MeasurementSampleKind::GridSample,
+        0U};
     frame.sensorType = sourceName;
     const std::size_t count = static_cast<std::size_t>(frame.width) * static_cast<std::size_t>(frame.height);
     frame.xValues.resize(count);
@@ -377,6 +395,7 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
     if (request.includeRangeAuxiliaryChannels)
     {
         copyScalarIntensity(intensity, frame);
+        frame.intensityField.bitsPerSample = frame.intensityBits;
     }
     if (request.includePointCloudColors)
     {
@@ -425,6 +444,20 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
     frame.width = static_cast<int>(disparity.GetWidth());
     frame.height = static_cast<int>(disparity.GetHeight());
     frame.lengthUnit = GraphicsLengthUnit::Millimeter;
+    frame.rangeField = {
+        "basler.stereo-ace.depth",
+        "Depth",
+        "mm",
+        MeasurementValueDomain::Calibrated,
+        MeasurementSampleKind::GridSample,
+        16U};
+    frame.intensityField = {
+        "basler.stereo-ace.intensity",
+        "Intensity",
+        "",
+        MeasurementValueDomain::Native,
+        MeasurementSampleKind::GridSample,
+        0U};
     frame.sensorType = "Basler Stereo ace";
     const std::size_t count = static_cast<std::size_t>(frame.width) * static_cast<std::size_t>(frame.height);
     frame.xValues.resize(count);
@@ -463,6 +496,7 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
     if (request.includeRangeAuxiliaryChannels)
     {
         copyScalarIntensity(intensity, frame);
+        frame.intensityField.bitsPerSample = frame.intensityBits;
     }
     if (request.includePointCloudColors)
     {
