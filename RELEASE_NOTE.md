@@ -1,5 +1,6 @@
 ## Unreleased
 
+- Initialize range-field `bitsPerSample` with `std::uint8_t` literals so brace initialization stays well-formed on Clang and GCC.
 - Keep long-running grabs responsive by coalescing feature-node notifications, deferring feature-tree refresh until grab stop, bounding free-run credits, and logging sampled worker/callback latency diagnostics.
 
 - Preserve semantic Z coordinate, Depth, Intensity, and Confidence field metadata in converted 3D payloads, including source bit depth where available.

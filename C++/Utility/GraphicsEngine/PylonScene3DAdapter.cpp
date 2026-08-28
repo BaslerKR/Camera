@@ -325,7 +325,7 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
         "mm",
         MeasurementValueDomain::Calibrated,
         MeasurementSampleKind::GridSample,
-        pixelType == Pylon::PixelType_Coord3D_ABC32f ? 32U : 16U};
+        pixelType == Pylon::PixelType_Coord3D_ABC32f ? std::uint8_t{32} : std::uint8_t{16}};
     frame.intensityField = {
         "basler.intensity",
         "Intensity",
