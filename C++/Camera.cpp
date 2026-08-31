@@ -222,13 +222,6 @@ const char* deviceFamilyName(PylonScene3DProfile::DeviceFamily family)
     return "2d";
 }
 
-bool setComponentMappingMode(GenApi::INodeMap& nodeMap, const char* mappingMode)
-{
-    auto* node = nodeMap.GetNode("BslComponentMappingMode");
-    return node && GenApi::IsWritable(node)
-        && Pylon::CEnumParameter(nodeMap, "BslComponentMappingMode").TrySetValue(mappingMode);
-}
-
 std::string safeCameraName(Pylon::CInstantCamera& camera, const std::string& fallback)
 {
     if(!fallback.empty()) return fallback;

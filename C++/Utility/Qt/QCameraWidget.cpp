@@ -413,7 +413,6 @@ void QCameraWidget::setRefreshOperationActive(const bool active)
 
     _refreshOperationActive = active;
 
-    const bool opened = _camera && _camera->isOpened();
     _toolRefresh->setEnabled(!active);
     updateCameraSelectorState();
     _toolConnect->setEnabled(!active);

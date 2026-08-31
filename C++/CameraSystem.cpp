@@ -35,7 +35,7 @@ void CameraSystem::updateCameraListLocked()
     _devices.clear();
     auto cnt = _tlFactory->EnumerateDevices(_devices);
     syslog("Updated the camera list: " + to_string(cnt) + " Camera(s) found.");
-    for(auto i=0; i<_devices.size(); ++i){
+    for(std::size_t i = 0; i < _devices.size(); ++i){
         syslog("-- " + std::string(_devices.at(i).GetFriendlyName()));
     }
 }
