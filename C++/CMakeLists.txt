@@ -22,7 +22,6 @@ set(SOURCES
 )
 
 set(QT_HEADERS
-    Utility/Qt/QtConverter.h
     Utility/Qt/QCameraWidget.h
 )
 set(QT_SOURCES

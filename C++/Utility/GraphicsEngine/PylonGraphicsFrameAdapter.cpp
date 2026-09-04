@@ -773,8 +773,11 @@ PylonGraphicsFrameStream::PylonGraphicsFrameStream(
         return;
     }
 
+    const auto callbackToken = _callbackGate.token();
     _grabCallbackId = _camera->registerGrabCallback(
-        [this](const Pylon::CPylonImage& image, const std::size_t sequence) {
+        [this, callbackToken](const Pylon::CPylonImage& image, const std::size_t sequence) {
+            GraphicsFrameCallbackGate::Lease lease(callbackToken);
+            if (!lease) return;
             CameraReadyGuard ready(_camera);
             try
             {
@@ -797,7 +800,9 @@ PylonGraphicsFrameStream::PylonGraphicsFrameStream(
         });
 
     _grab3DCallbackId = _camera->registerGrab3DCallback(
-        [this](const Pylon::CPylonDataContainer& container, const std::size_t) {
+        [this, callbackToken](const Pylon::CPylonDataContainer& container, const std::size_t) {
+            GraphicsFrameCallbackGate::Lease lease(callbackToken);
+            if (!lease) return;
             CameraReadyGuard ready(_camera);
             try
             {
@@ -819,6 +824,7 @@ PylonGraphicsFrameStream::PylonGraphicsFrameStream(
 
 PylonGraphicsFrameStream::~PylonGraphicsFrameStream()
 {
+    _callbackGate.beginShutdown();
     if (!_camera) return;
     if (_grabCallbackId != 0U)
     {
@@ -828,6 +834,7 @@ PylonGraphicsFrameStream::~PylonGraphicsFrameStream()
     {
         _camera->deregisterGrab3DCallback(_grab3DCallbackId);
     }
+    _callbackGate.waitForDrain();
 }
 
 std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsFrame(

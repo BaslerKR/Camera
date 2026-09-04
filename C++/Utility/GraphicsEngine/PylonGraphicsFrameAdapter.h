@@ -41,6 +41,7 @@ private:
     Camera* _camera = nullptr;
     GraphicsFrameCallback _callback;
     PylonGraphicsFrameAdapter _adapter;
+    GraphicsFrameCallbackGate _callbackGate;
     Camera::CallbackId _grabCallbackId = 0;
     Camera::CallbackId _grab3DCallbackId = 0;
 };

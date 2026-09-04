@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Drain in-flight GraphicsFrame adapter callbacks before stream destruction and cover the shared callback gate contract.
+- Remove the unused Qt converter header from the core source list.
 - Move SDK image/3D callback registration and GraphicsFrame conversion into the module adapter stream; the parent receives only owned GraphicsFrame values.
 - Move 2D pylon conversion into the GraphicsFrame adapter, keep image storage owned, and remove Qt from the adapter target.
 - Mark direct XYZ conversions as `ExplicitXY` so analysis uses producer coordinates instead of uniform-axis inference.
