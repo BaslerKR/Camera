@@ -163,12 +163,13 @@ if(CAMERA_BUILD_GRAPHICSENGINE_ADAPTER)
     endif()
 
     find_package(OpenMP REQUIRED COMPONENTS CXX)
+    find_package(Qt6 REQUIRED COMPONENTS Gui)
 
     add_library(CameraGraphicsEngineAdapter STATIC
-        Utility/GraphicsEngine/BlazeScene3DAdapter.h
-        Utility/GraphicsEngine/BlazeScene3DAdapter.cpp
-        Utility/GraphicsEngine/PylonScene3DAdapter.h
-        Utility/GraphicsEngine/PylonScene3DAdapter.cpp
+        Utility/GraphicsEngine/BlazeGraphicsFrameAdapter.h
+        Utility/GraphicsEngine/BlazeGraphicsFrameAdapter.cpp
+        Utility/GraphicsEngine/PylonGraphicsFrameAdapter.h
+        Utility/GraphicsEngine/PylonGraphicsFrameAdapter.cpp
     )
     add_library(Camera::GraphicsEngineAdapter ALIAS CameraGraphicsEngineAdapter)
     target_compile_features(CameraGraphicsEngineAdapter PUBLIC cxx_std_17)
@@ -180,6 +181,7 @@ if(CAMERA_BUILD_GRAPHICSENGINE_ADAPTER)
         PUBLIC
             Camera
             GraphicsEngine::Contracts
+            Qt6::Gui
         PRIVATE
             OpenMP::OpenMP_CXX
     )

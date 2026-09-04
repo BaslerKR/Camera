@@ -1,5 +1,6 @@
 ## Unreleased
 
+- Route camera 3D handoff through the host-owned `GraphicsFrame` payload contract.
 - Remove an unused component-mapping helper and correct camera-list index typing; keep the optional Qt refresh path free of dead state.
 - Initialize range-field `bitsPerSample` with `std::uint8_t` literals so brace initialization stays well-formed on Clang and GCC.
 - Keep long-running grabs responsive by coalescing feature-node notifications, deferring feature-tree refresh until grab stop, bounding free-run credits, and logging sampled worker/callback latency diagnostics.

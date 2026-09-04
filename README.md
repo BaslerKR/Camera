@@ -39,7 +39,7 @@ target_link_libraries(qt_consumer PRIVATE Camera::QtWidget)
 
 The core links the SDK through the module-owned `Camera::Pylon` interface target. The vendor `pylon::pylon` imported target is left unchanged; on Linux, Camera's loader-link policy is applied only to its own interface. Consumers should link `Camera` rather than modifying the vendor target.
 
-The optional scene adapter is disabled by default. Enable it only after a neutral scene-contract target is available; the adapter converts SDK payloads without requiring the visualization renderer.
+The optional GraphicsFrame adapter is disabled by default. Enable it only when the neutral GraphicsEngine contract target is available; it converts SDK payloads without requiring the visualization renderer.
 
 ## Acquisition Contract
 

@@ -1,4 +1,6 @@
-#include "PylonScene3DAdapter.h"
+#include "PylonGraphicsFrameAdapter.h"
+
+#include "engine/GraphicsImageQtAdapter.h"
 
 #include <QImage>
 
@@ -247,11 +249,11 @@ void copyPointCloudRgb(const Pylon::CPylonDataComponent& component, RangeFrame& 
 }
 
 void appendColorImage(const Pylon::CPylonDataComponent& intensity,
-                      const GraphicsScene3DRequest& request,
+                      const GraphicsFrameRequest& request,
                       const PylonScene3DProfile& profile,
-                      GraphicsScene3D& scene)
+                      GraphicsFrame& scene)
 {
-    if (!hasScene3DContent(request.content, GraphicsScene3DContent::ColorImage))
+    if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Image))
     {
         return;
     }
@@ -262,22 +264,20 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
         return;
     }
 
-    scene.content = scene.content | GraphicsScene3DContent::ColorImage;
-    scene.colorImage = std::move(image);
-    scene.meta.colorRegistration = profile.colorRegisteredToRange
+    scene.image = graphicsImageFromQImage(image);
+    scene.metadata.colorRegistration = profile.colorRegisteredToRange
         ? GraphicsImageRegistration::RegisteredToRange
         : GraphicsImageRegistration::Unregistered;
 }
 
-[[nodiscard]] std::optional<GraphicsScene3D> buildDirectXyzScene(
+[[nodiscard]] std::optional<GraphicsFrame> buildDirectXyzScene(
     const Pylon::CPylonDataContainer& container,
-    const GraphicsScene3DRequest& request,
+    const GraphicsFrameRequest& request,
     const PylonScene3DProfile& profile,
     const char* sourceName)
 {
-    GraphicsScene3D scene;
-    scene.content = GraphicsScene3DContent::None;
-    scene.meta.sourceName = sourceName;
+    GraphicsFrame scene;
+    scene.metadata.sourceName = sourceName;
     InitialView3D view;
     view.lookDirection = {0.0, 0.0, 1.0};
     view.viewUp = {0.0, -1.0, 0.0};
@@ -288,27 +288,27 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
 
     const auto intensity = componentByType(container, Pylon::ComponentType_Intensity);
     appendColorImage(intensity, request, profile, scene);
-    if (!hasScene3DContent(request.content, GraphicsScene3DContent::RangeFrame))
+    if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range))
     {
-        return scene.content == GraphicsScene3DContent::None ? std::nullopt : std::optional<GraphicsScene3D>(std::move(scene));
+        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
     }
 
     const auto range = componentByType(container, Pylon::ComponentType_Range);
     if (!range.IsValid() || range.GetData() == nullptr)
     {
-        return scene.content == GraphicsScene3DContent::None ? std::nullopt : std::optional<GraphicsScene3D>(std::move(scene));
+        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
     }
 
     const auto pixelType = range.GetPixelType();
     if (pixelType != Pylon::PixelType_Coord3D_ABC32f && pixelType != Pylon::PixelType_Coord3D_C16)
     {
-        return scene.content == GraphicsScene3DContent::None ? std::nullopt : std::optional<GraphicsScene3D>(std::move(scene));
+        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
     }
 
     std::size_t stride = 0U;
     if (!componentStride(range, stride))
     {
-        return scene.content == GraphicsScene3DContent::None ? std::nullopt : std::optional<GraphicsScene3D>(std::move(scene));
+        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
     }
 
     RangeFrame frame;
@@ -404,40 +404,38 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
 
     if (frame.isValid())
     {
-        scene.content = scene.content | GraphicsScene3DContent::RangeFrame;
         scene.rangeFrame = std::move(frame);
     }
-    return scene.content == GraphicsScene3DContent::None ? std::nullopt : std::optional<GraphicsScene3D>(std::move(scene));
+    return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
 }
 
-[[nodiscard]] std::optional<GraphicsScene3D> buildStereoAceScene(
+[[nodiscard]] std::optional<GraphicsFrame> buildStereoAceScene(
     const Pylon::CPylonDataContainer& container,
-    const GraphicsScene3DRequest& request,
+    const GraphicsFrameRequest& request,
     const PylonScene3DProfile& profile)
 {
-    GraphicsScene3D scene;
-    scene.content = GraphicsScene3DContent::None;
-    scene.meta.sourceName = "Basler Stereo ace";
+    GraphicsFrame scene;
+    scene.metadata.sourceName = "Basler Stereo ace";
 
     const auto intensity = componentByType(container, Pylon::ComponentType_Intensity);
     appendColorImage(intensity, request, profile, scene);
-    if (!hasScene3DContent(request.content, GraphicsScene3DContent::RangeFrame)
+    if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range)
         || !profile.hasDisparityCalibration())
     {
-        return scene.content == GraphicsScene3DContent::None ? std::nullopt : std::optional<GraphicsScene3D>(std::move(scene));
+        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
     }
 
     const auto disparity = componentByType(container, Pylon::ComponentType_Disparity);
     if (!disparity.IsValid() || disparity.GetPixelType() != Pylon::PixelType_Coord3D_C16
         || disparity.GetData() == nullptr)
     {
-        return scene.content == GraphicsScene3DContent::None ? std::nullopt : std::optional<GraphicsScene3D>(std::move(scene));
+        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
     }
 
     std::size_t stride = 0U;
     if (!componentStride(disparity, stride))
     {
-        return scene.content == GraphicsScene3DContent::None ? std::nullopt : std::optional<GraphicsScene3D>(std::move(scene));
+        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
     }
 
     RangeFrame frame;
@@ -505,23 +503,22 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
 
     if (frame.isValid())
     {
-        scene.content = scene.content | GraphicsScene3DContent::RangeFrame;
         scene.rangeFrame = std::move(frame);
     }
-    return scene.content == GraphicsScene3DContent::None ? std::nullopt : std::optional<GraphicsScene3D>(std::move(scene));
+    return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
 }
 
 } // namespace
 
-std::optional<GraphicsScene3D> PylonScene3DAdapter::convert(
+std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsFrame(
     const Pylon::CPylonDataContainer& container,
-    const GraphicsScene3DRequest& request,
+    const GraphicsFrameRequest& request,
     const PylonScene3DProfile& profile) const
 {
     switch (profile.family)
     {
     case PylonScene3DProfile::DeviceFamily::Blaze:
-        return _blazeAdapter.convert(container, request);
+        return _blazeAdapter.convertFrame(container, request);
     case PylonScene3DProfile::DeviceFamily::StereoMini:
         return buildDirectXyzScene(container, request, profile, "Basler Stereo mini");
     case PylonScene3DProfile::DeviceFamily::StereoAce:

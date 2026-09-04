@@ -1,4 +1,4 @@
-#include "BlazeScene3DAdapter.h"
+#include "BlazeGraphicsFrameAdapter.h"
 
 #include <cmath>
 #include <cstddef>
@@ -19,18 +19,18 @@ struct Coord3DPoint
     float z;
 };
 
-struct BlazeScene3DOptions
+struct BlazeFrameOptions
 {
-    constexpr BlazeScene3DOptions(const bool flipVertical = false,
+    constexpr BlazeFrameOptions(const bool flipVertical = false,
                                   const bool flipHorizontal = false,
                                   const bool rotatePointCloudAroundX180 = false,
-                                  const GraphicsScene3DContent content = GraphicsScene3DContent::All,
+                                  const GraphicsFrameComponent components = GraphicsFrameComponent::All,
                                   const bool includeRangeAuxiliaryChannels = true,
                                   const bool includePointCloudColors = true) noexcept
         : flipVertical(flipVertical)
         , flipHorizontal(flipHorizontal)
         , rotatePointCloudAroundX180(rotatePointCloudAroundX180)
-        , content(content)
+        , components(components)
         , includeRangeAuxiliaryChannels(includeRangeAuxiliaryChannels)
         , includePointCloudColors(includePointCloudColors)
     {
@@ -39,21 +39,21 @@ struct BlazeScene3DOptions
     bool flipVertical;
     bool flipHorizontal;
     bool rotatePointCloudAroundX180;
-    GraphicsScene3DContent content;
+    GraphicsFrameComponent components;
     bool includeRangeAuxiliaryChannels;
     bool includePointCloudColors;
 };
 
-[[nodiscard]] constexpr BlazeScene3DOptions blazeScene3DOptionsFromRequest(
-    const GraphicsScene3DRequest& request,
+[[nodiscard]] constexpr BlazeFrameOptions blazeFrameOptionsFromRequest(
+    const GraphicsFrameRequest& request,
     const bool flipVertical = false,
     const bool flipHorizontal = false,
     const bool rotatePointCloudAroundX180 = false) noexcept
 {
-    return BlazeScene3DOptions(flipVertical,
+    return BlazeFrameOptions(flipVertical,
                                flipHorizontal,
                                rotatePointCloudAroundX180,
-                               request.content,
+                               request.components,
                                request.includeRangeAuxiliaryChannels,
                                request.includePointCloudColors);
 }
@@ -121,7 +121,7 @@ struct BlazeScene3DOptions
                                         const std::size_t y,
                                         const std::size_t width,
                                         const std::size_t height,
-                                        const BlazeScene3DOptions& options) noexcept
+                                        const BlazeFrameOptions& options) noexcept
 {
     const std::size_t dstX = options.flipHorizontal ? (width - 1U - x) : x;
     const std::size_t dstY = options.flipVertical ? (height - 1U - y) : y;
@@ -201,7 +201,7 @@ void copyScalarComponent(const Pylon::CPylonDataComponent& component,
                          const std::size_t width,
                          const std::size_t height,
                          std::vector<float>& values,
-                         const BlazeScene3DOptions& options)
+                         const BlazeFrameOptions& options)
 {
     const auto pixelType = component.GetPixelType();
     const std::size_t pixelBytes = bytesPerPixel(pixelType);
@@ -294,7 +294,7 @@ struct ScalarComponentView
                                                  const std::size_t width,
                                                  const std::size_t height,
                                                  const ScalarComponentView& pointColorSource,
-                                                 const BlazeScene3DOptions& options)
+                                                 const BlazeFrameOptions& options)
 {
     std::vector<std::size_t> rowValidCounts(height, 0U);
     std::size_t validPointCount = 0U;
@@ -395,12 +395,12 @@ struct ScalarComponentView
     return cloud;
 }
 
-std::optional<GraphicsScene3D> buildScene3D(
+std::optional<GraphicsFrame> buildBlazeFrame(
     const Pylon::CPylonDataContainer& container,
-    const BlazeScene3DOptions& options)
+    const BlazeFrameOptions& options)
 {
-    const bool wantsRangeFrame = hasScene3DContent(options.content, GraphicsScene3DContent::RangeFrame);
-    const bool wantsPointCloud = hasScene3DContent(options.content, GraphicsScene3DContent::PointCloud);
+    const bool wantsRangeFrame = hasGraphicsFrameComponent(options.components, GraphicsFrameComponent::Range);
+    const bool wantsPointCloud = hasGraphicsFrameComponent(options.components, GraphicsFrameComponent::PointCloud);
     if (!wantsRangeFrame && !wantsPointCloud)
     {
         return std::nullopt;
@@ -562,23 +562,20 @@ std::optional<GraphicsScene3D> buildScene3D(
         frame.confidenceField.bitsPerSample = frame.confidenceBits;
     }
 
-    GraphicsScene3D scene;
-    scene.content = GraphicsScene3DContent::None;
-    scene.meta.sourceName = "Basler blaze";
+    GraphicsFrame scene;
+    scene.metadata.sourceName = "Basler blaze";
     scene.surfaceInitialView = blazeInitialView(1.0);
     scene.pointCloudInitialView = blazeInitialView(1.15);
     if (frame.isValid())
     {
-        scene.content = scene.content | GraphicsScene3DContent::RangeFrame;
         scene.rangeFrame = std::move(frame);
     }
     if (cloud.isValid())
     {
-        scene.content = scene.content | GraphicsScene3DContent::PointCloud;
         scene.pointCloud = std::move(cloud);
     }
 
-    if (scene.content == GraphicsScene3DContent::None)
+    if (!scene.isValid())
     {
         return std::nullopt;
     }
@@ -588,14 +585,14 @@ std::optional<GraphicsScene3D> buildScene3D(
 
 }
 
-std::optional<GraphicsScene3D> BlazeScene3DAdapter::convertScene3D(
+std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertGraphicsFrame(
     const Pylon::CPylonDataContainer& container,
-    const GraphicsScene3DRequest& request) const
+    const GraphicsFrameRequest& request) const
 {
-    auto scene = buildScene3D(container, blazeScene3DOptionsFromRequest(request));
+    auto scene = buildBlazeFrame(container, blazeFrameOptionsFromRequest(request));
     if (scene.has_value())
     {
-        scene->meta.retainSurfaceMesh = request.retainSurfaceMesh;
+        scene->metadata.sourceName = "Basler blaze";
     }
     return scene;
 }
