@@ -1,5 +1,6 @@
 #include "PylonGraphicsFrameAdapter.h"
 
+#include <pylon/PylonDataContainer.h>
 #include <pylon/PylonImage.h>
 
 #include <cassert>
@@ -33,5 +34,14 @@ int main()
 
     const Pylon::CPylonImage empty;
     assert(!adapter.convertGraphicsImage(empty).isValid());
+
+    Pylon::CPylonDataContainer emptyContainer;
+    PylonScene3DProfile profile;
+    profile.family = PylonScene3DProfile::DeviceFamily::Blaze;
+    assert(!adapter.convertGraphicsFrame(emptyContainer, {}, profile).has_value());
+    profile.family = PylonScene3DProfile::DeviceFamily::StereoMini;
+    assert(!adapter.convertGraphicsFrame(emptyContainer, {}, profile).has_value());
+    profile.family = PylonScene3DProfile::DeviceFamily::StereoAce;
+    assert(!adapter.convertGraphicsFrame(emptyContainer, {}, profile).has_value());
     return 0;
 }
