@@ -1,5 +1,9 @@
 ## Unreleased
 
+- Move SDK image/3D callback registration and GraphicsFrame conversion into the module adapter stream; the parent receives only owned GraphicsFrame values.
+- Move 2D pylon conversion into the GraphicsFrame adapter, keep image storage owned, and remove Qt from the adapter target.
+- Mark direct XYZ conversions as `ExplicitXY` so analysis uses producer coordinates instead of uniform-axis inference.
+- Reject malformed stride layouts and non-finite or non-positive disparity calibration before conversion.
 - Route camera 3D handoff through the host-owned `GraphicsFrame` payload contract.
 - Remove an unused component-mapping helper and correct camera-list index typing; keep the optional Qt refresh path free of dead state.
 - Initialize range-field `bitsPerSample` with `std::uint8_t` literals so brace initialization stays well-formed on Clang and GCC.

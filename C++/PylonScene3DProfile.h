@@ -5,6 +5,8 @@
  * @brief Stream configuration facts required to decode pylon 3D frames.
  */
 
+#include <cmath>
+
 struct PylonScene3DProfile
 {
     enum class DeviceFamily
@@ -35,8 +37,8 @@ struct PylonScene3DProfile
     [[nodiscard]] bool hasDisparityCalibration() const noexcept
     {
         return geometry == GeometryKind::DisparityReconstruction
-            && coordinateScale != 0.0
-            && baseline != 0.0
-            && focalLength != 0.0;
+            && std::isfinite(coordinateScale) && coordinateScale > 0.0
+            && std::isfinite(baseline) && baseline > 0.0
+            && std::isfinite(focalLength) && focalLength > 0.0;
     }
 };

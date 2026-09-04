@@ -93,9 +93,12 @@ struct BlazeFrameOptions
                                    const std::size_t fallbackBytesPerPixel,
                                    std::size_t& stride)
 {
+    const std::size_t width = static_cast<std::size_t>(component.GetWidth());
+    const std::size_t height = static_cast<std::size_t>(component.GetHeight());
+    const std::size_t dataSize = component.GetDataSize();
     if (component.GetStride(stride))
     {
-        return true;
+        return stride > 0U && (height == 0U || stride <= dataSize / height);
     }
 
     if (fallbackBytesPerPixel == 0U)
@@ -103,9 +106,18 @@ struct BlazeFrameOptions
         return false;
     }
 
-    stride = static_cast<std::size_t>(component.GetWidth()) * fallbackBytesPerPixel
-           + component.GetPaddingX();
-    return true;
+    if (width != 0U && fallbackBytesPerPixel > (std::numeric_limits<std::size_t>::max)() / width)
+    {
+        return false;
+    }
+    const std::size_t packedStride = width * fallbackBytesPerPixel;
+    const std::size_t padding = component.GetPaddingX();
+    if (packedStride > (std::numeric_limits<std::size_t>::max)() - padding)
+    {
+        return false;
+    }
+    stride = packedStride + padding;
+    return stride > 0U && (height == 0U || stride <= dataSize / height);
 }
 
 [[nodiscard]] bool hasSameExtent(const Pylon::CPylonDataComponent& component,
@@ -464,6 +476,7 @@ std::optional<GraphicsFrame> buildBlazeFrame(
         frame.zValues.resize(pixelCount);
         frame.xValues.resize(pixelCount);
         frame.yValues.resize(pixelCount);
+        frame.xyCoordinateMode = RangeFrameXYCoordinateMode::ExplicitXY;
         frame.validMask.clear();
         frame.intensity.clear();
         frame.confidence.clear();

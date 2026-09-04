@@ -6,6 +6,7 @@ option(CAMERA_BUILD_GRAPHICSENGINE_ADAPTER
     "Build the optional Camera-to-GraphicsEngine adapter target."
     OFF
 )
+option(CAMERA_BUILD_TESTS "Build focused Camera adapter tests." OFF)
 option(CAMERA_BUILD_QT_WIDGET
     "Build the optional Camera Qt widget target."
     OFF
@@ -163,7 +164,6 @@ if(CAMERA_BUILD_GRAPHICSENGINE_ADAPTER)
     endif()
 
     find_package(OpenMP REQUIRED COMPONENTS CXX)
-    find_package(Qt6 REQUIRED COMPONENTS Gui)
 
     add_library(CameraGraphicsEngineAdapter STATIC
         Utility/GraphicsEngine/BlazeGraphicsFrameAdapter.h
@@ -181,9 +181,23 @@ if(CAMERA_BUILD_GRAPHICSENGINE_ADAPTER)
         PUBLIC
             Camera
             GraphicsEngine::Contracts
-            Qt6::Gui
         PRIVATE
             OpenMP::OpenMP_CXX
     )
     message(STATUS "[Camera] Camera::GraphicsEngineAdapter enabled.")
+
+    if(CAMERA_BUILD_TESTS)
+        enable_testing()
+        add_executable(camera_graphics_image_adapter_test
+            Tests/GraphicsImageAdapterTest.cpp
+        )
+        target_link_libraries(camera_graphics_image_adapter_test
+            PRIVATE
+                Camera::GraphicsEngineAdapter
+        )
+        add_test(
+            NAME camera_graphics_image_adapter_test
+            COMMAND camera_graphics_image_adapter_test
+        )
+    endif()
 endif()
