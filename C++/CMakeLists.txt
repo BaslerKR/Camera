@@ -169,6 +169,8 @@ if(CAMERA_BUILD_GRAPHICSENGINE_ADAPTER)
         Utility/GraphicsEngine/BlazeGraphicsFrameAdapter.cpp
         Utility/GraphicsEngine/PylonGraphicsFrameAdapter.h
         Utility/GraphicsEngine/PylonGraphicsFrameAdapter.cpp
+        Utility/GraphicsEngine/PylonGraphicsFrameStream.h
+        Utility/GraphicsEngine/PylonGraphicsFrameStream.cpp
     )
     add_library(Camera::GraphicsEngineAdapter ALIAS CameraGraphicsEngineAdapter)
     target_compile_features(CameraGraphicsEngineAdapter PUBLIC cxx_std_17)

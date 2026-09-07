@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Publish GraphicsFrame through `PylonGraphicsFrameStream`; the converter header stays in the adapter translation unit.
+
 - Drain in-flight GraphicsFrame adapter callbacks before stream destruction and cover the shared callback gate contract.
 - Remove the unused Qt converter header from the core source list.
 - Extend the adapter test with empty multipart 3D dispatch coverage for Blaze, Stereo mini, and Stereo ace profiles.

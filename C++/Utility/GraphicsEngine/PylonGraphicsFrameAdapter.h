@@ -26,22 +26,3 @@ public:
 private:
     BlazeGraphicsFrameAdapter _blazeAdapter;
 };
-
-/** Owns Camera SDK callback registration and emits only owned GraphicsFrame values. */
-class PylonGraphicsFrameStream final
-{
-public:
-    PylonGraphicsFrameStream(Camera* camera, GraphicsFrameCallback callback);
-    ~PylonGraphicsFrameStream();
-
-    PylonGraphicsFrameStream(const PylonGraphicsFrameStream&) = delete;
-    PylonGraphicsFrameStream& operator=(const PylonGraphicsFrameStream&) = delete;
-
-private:
-    Camera* _camera = nullptr;
-    GraphicsFrameCallback _callback;
-    PylonGraphicsFrameAdapter _adapter;
-    GraphicsFrameCallbackGate _callbackGate;
-    Camera::CallbackId _grabCallbackId = 0;
-    Camera::CallbackId _grab3DCallbackId = 0;
-};
