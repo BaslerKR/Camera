@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Stage `pylon.framework` in the Playground plugin `runtime` payload on macOS instead of the host `Contents/Frameworks` extra list.
+
 - Link `Playground::DevicePlugin` for the `IDevicePlugin` MODULE.
 - Own package identity in `Utility/PlaygroundAdapter/Package/Package.cmake`; the host emits `plugin.json` from `DevicePluginPackage.h`.
 - Keep the session source controller in `Utility/PlaygroundAdapter/Source` as `CameraSourceController`.

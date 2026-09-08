@@ -100,7 +100,10 @@ function(camera_prepare_playground_plugin_runtime target_name)
         endif()
         get_filename_component(pylon_framework_parent "${pylon_framework}" DIRECTORY)
         list(APPEND search_paths "${pylon_framework_parent}")
-        list(APPEND host_bundle_files "${pylon_framework}")
+        set(payload_dir "${CMAKE_CURRENT_BINARY_DIR}/plugin-runtime")
+        file(REMOVE_RECURSE "${payload_dir}")
+        file(MAKE_DIRECTORY "${payload_dir}")
+        file(COPY "${pylon_framework}" DESTINATION "${payload_dir}")
     endif()
 
     set_target_properties(${target_name} PROPERTIES
