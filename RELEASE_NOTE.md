@@ -1,5 +1,10 @@
 ## Unreleased
 
+- Link `Playground::DevicePlugin` for the `IDevicePlugin` MODULE.
+- Own package identity in `Utility/PlaygroundAdapter/Package/Package.cmake`; the host emits `plugin.json` from `DevicePluginPackage.h`.
+- Keep the session source controller in `Utility/PlaygroundAdapter/Source` as `CameraSourceController`.
+- Declare the Playground plugin runtime payload from this module; the host copies it into the package.
+- Move the GraphicsFrame stream/adapter into `Utility/PlaygroundAdapter` as `Camera::PlaygroundAdapter`.
 - Publish GraphicsFrame through `PylonGraphicsFrameStream`; the converter header stays in the adapter translation unit.
 
 - Drain in-flight GraphicsFrame adapter callbacks before stream destruction and cover the shared callback gate contract.

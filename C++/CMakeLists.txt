@@ -2,8 +2,12 @@ cmake_minimum_required(VERSION 3.16)
 project(Camera LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-option(CAMERA_BUILD_GRAPHICSENGINE_ADAPTER
-    "Build the optional Camera-to-GraphicsEngine adapter target."
+option(CAMERA_BUILD_PLAYGROUND_ADAPTER
+    "Build the optional Camera Playground adapter target."
+    OFF
+)
+option(CAMERA_BUILD_PLAYGROUND_PLUGIN
+    "Build the Camera Playground device plugin MODULE."
     OFF
 )
 option(CAMERA_BUILD_TESTS "Build focused Camera adapter tests." OFF)
@@ -154,51 +158,111 @@ if(pylon_FOUND)
     message(STATUS "[${PROJECT_NAME}] pylon SDK ${pylon_VERSION} found")
 endif()
 
-if(CAMERA_BUILD_GRAPHICSENGINE_ADAPTER)
+if(CAMERA_BUILD_PLAYGROUND_ADAPTER)
     if(NOT TARGET GraphicsEngine::Contracts)
         message(FATAL_ERROR
-            "[Camera] CAMERA_BUILD_GRAPHICSENGINE_ADAPTER=ON requires "
+            "[Camera] CAMERA_BUILD_PLAYGROUND_ADAPTER=ON requires "
             "GraphicsEngine::Contracts. Add GraphicsEngine first or disable the adapter."
         )
     endif()
 
     find_package(OpenMP REQUIRED COMPONENTS CXX)
 
-    add_library(CameraGraphicsEngineAdapter STATIC
-        Utility/GraphicsEngine/BlazeGraphicsFrameAdapter.h
-        Utility/GraphicsEngine/BlazeGraphicsFrameAdapter.cpp
-        Utility/GraphicsEngine/PylonGraphicsFrameAdapter.h
-        Utility/GraphicsEngine/PylonGraphicsFrameAdapter.cpp
-        Utility/GraphicsEngine/PylonGraphicsFrameStream.h
-        Utility/GraphicsEngine/PylonGraphicsFrameStream.cpp
+    add_library(CameraPlaygroundAdapter STATIC
+        Utility/PlaygroundAdapter/BlazeGraphicsFrameAdapter.h
+        Utility/PlaygroundAdapter/BlazeGraphicsFrameAdapter.cpp
+        Utility/PlaygroundAdapter/PylonGraphicsFrameAdapter.h
+        Utility/PlaygroundAdapter/PylonGraphicsFrameAdapter.cpp
+        Utility/PlaygroundAdapter/PylonGraphicsFrameStream.h
+        Utility/PlaygroundAdapter/PylonGraphicsFrameStream.cpp
     )
-    add_library(Camera::GraphicsEngineAdapter ALIAS CameraGraphicsEngineAdapter)
-    target_compile_features(CameraGraphicsEngineAdapter PUBLIC cxx_std_17)
-    target_include_directories(CameraGraphicsEngineAdapter
+    add_library(Camera::PlaygroundAdapter ALIAS CameraPlaygroundAdapter)
+    target_compile_features(CameraPlaygroundAdapter PUBLIC cxx_std_17)
+    target_include_directories(CameraPlaygroundAdapter
         PUBLIC
-            "${CMAKE_CURRENT_SOURCE_DIR}/Utility/GraphicsEngine"
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter"
     )
-    target_link_libraries(CameraGraphicsEngineAdapter
+    target_link_libraries(CameraPlaygroundAdapter
         PUBLIC
             Camera
             GraphicsEngine::Contracts
         PRIVATE
             OpenMP::OpenMP_CXX
     )
-    message(STATUS "[Camera] Camera::GraphicsEngineAdapter enabled.")
+    message(STATUS "[Camera] Camera::PlaygroundAdapter enabled.")
 
     if(CAMERA_BUILD_TESTS)
         enable_testing()
         add_executable(camera_graphics_image_adapter_test
-            Tests/GraphicsImageAdapterTest.cpp
+            Utility/PlaygroundAdapter/Tests/GraphicsFrameAdapterTest.cpp
         )
         target_link_libraries(camera_graphics_image_adapter_test
             PRIVATE
-                Camera::GraphicsEngineAdapter
+                Camera::PlaygroundAdapter
         )
         add_test(
             NAME camera_graphics_image_adapter_test
             COMMAND camera_graphics_image_adapter_test
         )
     endif()
+endif()
+
+if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
+    if(NOT CAMERA_BUILD_PLAYGROUND_ADAPTER)
+        message(FATAL_ERROR
+            "[Camera] CAMERA_BUILD_PLAYGROUND_PLUGIN=ON requires "
+            "CAMERA_BUILD_PLAYGROUND_ADAPTER."
+        )
+    endif()
+    if(NOT CAMERA_BUILD_QT_WIDGET)
+        message(FATAL_ERROR
+            "[Camera] CAMERA_BUILD_PLAYGROUND_PLUGIN=ON requires "
+            "CAMERA_BUILD_QT_WIDGET."
+        )
+    endif()
+    if(NOT TARGET Playground::DevicePlugin)
+        message(FATAL_ERROR
+            "[Camera] CAMERA_BUILD_PLAYGROUND_PLUGIN=ON requires "
+            "Playground::DevicePlugin."
+        )
+    endif()
+    if(NOT TARGET Qt6::Widgets)
+        message(FATAL_ERROR
+            "[Camera] CAMERA_BUILD_PLAYGROUND_PLUGIN=ON requires Qt 6."
+        )
+    endif()
+    find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets Concurrent)
+
+    add_library(CameraPlugin MODULE
+        Utility/PlaygroundAdapter/Plugin/CameraPlugin.cpp
+        Utility/PlaygroundAdapter/Source/CameraSourceController.h
+        Utility/PlaygroundAdapter/Source/CameraSourceController.cpp
+    )
+    set_target_properties(CameraPlugin PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME CameraPlugin
+        AUTOMOC ON
+        PLAYGROUND_PLUGIN_PACKAGE
+            "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Package/Package.cmake"
+    )
+    target_compile_features(CameraPlugin PRIVATE cxx_std_17)
+    target_include_directories(CameraPlugin PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Source"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Plugin"
+    )
+    target_link_libraries(CameraPlugin PRIVATE
+        Playground::DevicePlugin
+        Camera
+        Camera::QtWidget
+        Camera::PlaygroundAdapter
+        Qt6::Widgets
+        Qt6::OpenGL
+        Qt6::OpenGLWidgets
+        Qt6::Concurrent
+    )
+    include("${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Package/RuntimeStaging.cmake")
+    camera_prepare_playground_plugin_runtime(CameraPlugin)
+    message(STATUS "[Camera] CameraPlugin enabled.")
 endif()
