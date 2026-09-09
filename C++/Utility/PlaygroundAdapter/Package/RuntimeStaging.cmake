@@ -103,7 +103,15 @@ function(camera_prepare_playground_plugin_runtime target_name)
         set(payload_dir "${CMAKE_CURRENT_BINARY_DIR}/plugin-runtime")
         file(REMOVE_RECURSE "${payload_dir}")
         file(MAKE_DIRECTORY "${payload_dir}")
-        file(COPY "${pylon_framework}" DESTINATION "${payload_dir}")
+        # The host rejects archive symlinks during plugin installation. Use
+        # macOS cp's dereference mode while staging the framework payload.
+        execute_process(
+            COMMAND /bin/cp -R -L "${pylon_framework}" "${payload_dir}"
+            RESULT_VARIABLE copy_result)
+        if(copy_result)
+            message(FATAL_ERROR
+                "[Camera] Failed to stage pylon.framework (cp exit ${copy_result}).")
+        endif()
     endif()
 
     set_target_properties(${target_name} PROPERTIES
