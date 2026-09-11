@@ -1,5 +1,6 @@
 #include "Camera.h"
 #include "CameraSystem.h"
+#include "CameraGrabDiagnostics.h"
 
 #include <pylon/ConfigurationHelper.h>
 
@@ -531,6 +532,7 @@ void Camera::grab(const size_t frames){
 
         const bool triggerMode = _currentCamera.TriggerMode.GetValue()
             == Basler_UniversalCameraParams::TriggerModeEnums::TriggerMode_On;
+        _grabErrorCount.store(0, std::memory_order_release);
         if(triggerMode){
             _currentCamera.MaxNumBuffer = 30;
             _currentCamera.StartGrabbing(GrabStrategy_OneByOne, GrabLoop_ProvidedByUser);
@@ -556,6 +558,7 @@ void Camera::grab(const size_t frames){
             std::chrono::milliseconds maximumCallbackTime{0};
             std::size_t slowCallbackCount = 0;
             std::size_t delivered = 0;
+            std::size_t failedResults = 0;
             try{
                 CGrabResultPtr grabResult;
 
@@ -620,6 +623,29 @@ void Camera::grab(const size_t frames){
                                 _permitCondition.notify_all();
                                 break;
                             }
+                        } else {
+                            ++failedResults;
+                            if (CameraGrabDiagnostics::shouldReportFailure(failedResults)) {
+                                const auto cameraName = getConnectedCameraName();
+                                const auto errorDescription = grabResult->GetErrorDescription();
+                                CameraSystem::syslog(
+                                    "[WARN] Incomplete grab result camera="
+                                        + (cameraName.empty() ? "<unknown>" : cameraName)
+                                        + " errorCode=" + std::to_string(grabResult->GetErrorCode())
+                                        + " description=" + std::string(errorDescription.c_str())
+                                        + " failureCount=" + std::to_string(failedResults) + ".",
+                                    true);
+                            }
+                        }
+                    } else {
+                        ++failedResults;
+                        if (CameraGrabDiagnostics::shouldReportFailure(failedResults)) {
+                            const auto cameraName = getConnectedCameraName();
+                            CameraSystem::syslog(
+                                "[WARN] Grab result timeout/no result camera="
+                                    + (cameraName.empty() ? "<unknown>" : cameraName)
+                                    + " failureCount=" + std::to_string(failedResults) + ".",
+                                true);
                         }
                     }
                 }
@@ -786,6 +812,20 @@ void Camera::OnGrabStopped(CInstantCamera &camera){
     auto from = "[Info " + to_string(_allottedNumber)  +"] " + safeCameraName(camera, getConnectedCameraName());
     CameraSystem::syslog(from + " stopped grabbing.");
     dispatchCallbacks(_statusMutex, _statusObservers, GrabbingStatus, false);
+}
+
+void Camera::OnGrabError(CInstantCamera& camera, const char* errorMessage)
+{
+    const auto failureCount = _grabErrorCount.fetch_add(1, std::memory_order_relaxed) + 1U;
+    if (!CameraGrabDiagnostics::shouldReportFailure(failureCount)) return;
+
+    const auto cameraName = safeCameraName(camera, getConnectedCameraName());
+    CameraSystem::syslog(
+        "[WARN] Camera grab error camera="
+            + (cameraName.empty() ? "<unknown>" : cameraName)
+            + " failureCount=" + std::to_string(failureCount)
+            + " description=" + (errorMessage ? errorMessage : "<none>") + ".",
+        true);
 }
 
 void Camera::OnCameraEvent(CInstantCamera &camera, intptr_t userProvidedId, GenApi::INode *pNode){

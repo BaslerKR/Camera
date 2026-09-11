@@ -173,6 +173,7 @@ private:
 
     std::atomic<size_t> _frameSeq{0};
     std::atomic<size_t> _frameTarget{0};
+    std::atomic<size_t> _grabErrorCount{0};
     std::atomic<StreamKind> _streamKind{StreamKind::Image2D};
     std::vector<std::string> _registeredNodeEventNames;
     mutable std::mutex _scene3DProfileMutex;
@@ -198,7 +199,7 @@ protected:
     void OnClosed(Pylon::CInstantCamera& camera) override;
     void OnGrabStarted(Pylon::CInstantCamera& camera) override;
     void OnGrabStopped(Pylon::CInstantCamera& camera) override;
-    void OnGrabError(Pylon::CInstantCamera& camera, const char* errorMessage) override {}
+    void OnGrabError(Pylon::CInstantCamera& camera, const char* errorMessage) override;
     void OnCameraDeviceRemoved(Pylon::CInstantCamera& camera) override;
 
     // Pylon::CCameraEventHandler function

@@ -17,6 +17,7 @@ option(CAMERA_BUILD_QT_WIDGET
 )
 set(HEADERS
     Camera.h
+    CameraGrabDiagnostics.h
     CameraSystem.h
     PylonScene3DProfile.h
 )
@@ -205,6 +206,18 @@ if(CAMERA_BUILD_PLAYGROUND_ADAPTER)
             NAME camera_graphics_image_adapter_test
             COMMAND camera_graphics_image_adapter_test
         )
+
+        add_executable(camera_grab_diagnostics_test
+            Utility/PlaygroundAdapter/Tests/GrabDiagnosticsTest.cpp
+        )
+        target_link_libraries(camera_grab_diagnostics_test
+            PRIVATE
+                Camera::PlaygroundAdapter
+        )
+        add_test(
+            NAME camera_grab_diagnostics_test
+            COMMAND camera_grab_diagnostics_test
+        )
     endif()
 endif()
 
@@ -254,7 +267,6 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
     )
     target_link_libraries(CameraPlugin PRIVATE
         Playground::DevicePlugin
-        Camera
         Camera::QtWidget
         Camera::PlaygroundAdapter
         Qt6::Widgets

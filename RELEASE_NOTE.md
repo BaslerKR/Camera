@@ -1,5 +1,15 @@
 ## Unreleased
 
+- Publish the camera controls through the generic host-managed plugin dock contract.
+
+- Link `CameraPlugin` only through `Camera::QtWidget` and `Camera::PlaygroundAdapter` so `libCamera.a` is not passed twice to the linker.
+
+- Surface incomplete, timed-out, and SDK-reported grab failures with camera
+  identity and Pylon error details; sample repeated diagnostics after the first
+  failure to keep acquisition logs bounded.
+
+- Require ABI / Qt IID 4.0 and recompilation; v3 packages are rejected. Declare immutable GraphicsEngine + Script Editor capabilities directly on the session.
+
 - Stage `pylon.framework` in the Playground plugin `runtime` payload on macOS instead of the host `Contents/Frameworks` extra list.
 
 - Link `Playground::DevicePlugin` for the `IDevicePlugin` MODULE.
