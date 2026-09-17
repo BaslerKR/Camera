@@ -79,7 +79,6 @@ private:
     bool _refreshOperationActive = false;
     bool _parameterWriteActive = false;
     int _pendingParameterWrites = 0;
-    bool _connectionAttempted = false;
     std::atomic<bool> _shuttingDown{false};
     std::atomic<bool> _grabbing{false};
     QTreeWidget *_featuresWidget;
@@ -92,16 +91,15 @@ private:
 
     QStatusBar *_statusBar;
     bool _rebuildScheduled = false;
-    QLabel *_messageLabel = nullptr;
     QLabel *_statusLabel = nullptr;
-    QTimer *_messageTimer = nullptr;
     QTimer *_nodeUpdateTimer = nullptr;
     std::mutex _nodeUpdateMutex;
     QSet<QString> _pendingNodeUpdates;
     bool _nodeUpdateDrainScheduled = false;
     std::atomic<std::size_t> _suppressedGrabNodeUpdates{0};
 
-    void showStatusMessage(const QString& msg, bool isError = false, int timeout = 0);
+    /** Routes operation diagnostics to application logs. */
+    void logMessage(const QString& msg, bool isError = false);
     void updateGrabState(bool grabbing);
     void updateStatusLabel();
 

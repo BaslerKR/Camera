@@ -27,13 +27,6 @@ void expandToDepth(QTreeWidgetItem* item, const int depth, const int maxExpanded
     }
 }
 
-void repolish(QWidget* widget)
-{
-    if(!widget) return;
-    widget->style()->unpolish(widget);
-    widget->style()->polish(widget);
-    widget->update();
-}
 }
 
 QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent), _camera(camera)
@@ -117,23 +110,6 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     _statusLabel->setAlignment(Qt::AlignCenter);
     _statusBar->addWidget(_statusLabel);
 
-    _messageLabel = new QLabel(this);
-    _messageLabel->setObjectName(QStringLiteral("CameraMessageLabel"));
-    _messageLabel->setProperty("statusRole", "message");
-    _messageLabel->setProperty("messageState", "normal");
-    _messageLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    _messageLabel->hide();
-    _statusBar->addWidget(_messageLabel, 1);
-
-    _messageTimer = new QTimer(this);
-    _messageTimer->setSingleShot(true);
-    connect(_messageTimer, &QTimer::timeout, this, [this]() {
-        if (_messageLabel) {
-            _messageLabel->clear();
-            _messageLabel->hide();
-        }
-    });
-
     _nodeUpdateTimer = new QTimer(this);
     _nodeUpdateTimer->setSingleShot(true);
     _nodeUpdateTimer->setInterval(100);
@@ -151,7 +127,7 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
         _toolConnect->setEnabled(false);
         _toolGrabOne->setEnabled(false);
         _toolGrabLive->setEnabled(false);
-        showStatusMessage(tr("Camera instance is not configured."), true);
+        logMessage(tr("Camera instance is not configured."), true);
         return;
     }
 
@@ -199,16 +175,16 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     connect(_toolGrabOne, &QToolButton::clicked, this, [=]{
         // Request to start a single grabbing
         _camera->grab(1);
-        showStatusMessage(tr("Single grab triggered."), false, 3000);
+        logMessage(tr("Single grab triggered."), false);
     });
     connect(_toolGrabLive, &QToolButton::toggled, this, [=](bool toggled){
         // Request to start a continuous grabbing
         if(toggled) {
             _camera->grab();
-            showStatusMessage(tr("Live grabbing started."), false, 0);
+            logMessage(tr("Live grabbing started."), false);
         } else {
             _camera->requestStop();
-            showStatusMessage(tr("Live grabbing stopped."), false, 3000);
+            logMessage(tr("Live grabbing stopped."), false);
         }
     });
 
@@ -309,9 +285,9 @@ void QCameraWidget::startConnectionOperation(const bool open, const QString& cam
 
     _connectionThread = worker;
     worker->setParent(this);
-    _connectionAttempted = true;
+
     setConnectionOperationActive(true);
-    showStatusMessage(open ? tr("Connecting camera...") : tr("Disconnecting camera..."), false, 0);
+    logMessage(open ? tr("Connecting camera...") : tr("Disconnecting camera..."), false);
 
     QPointer<QCameraWidget> guard(this);
     connect(worker, &QThread::finished, this, [guard, worker, open, result]{
@@ -328,12 +304,12 @@ void QCameraWidget::startConnectionOperation(const bool open, const QString& cam
 
         if(open){
             if(*result && opened){
-                guard->showStatusMessage(tr("Camera connected successfully."), false, 3000);
+                guard->logMessage(tr("Camera connected successfully."), false);
             }else{
-                guard->showStatusMessage(tr("Camera connection failed."), true, 5000);
+                guard->logMessage(tr("Camera connection failed."), true);
             }
         }else{
-            guard->showStatusMessage(tr("Camera disconnected successfully."), false, 3000);
+            guard->logMessage(tr("Camera disconnected successfully."), false);
         }
     });
     worker->start();
@@ -360,7 +336,7 @@ void QCameraWidget::startRefreshOperation()
     if (!_camera || _shuttingDown || _refreshThread) return;
 
     setRefreshOperationActive(true);
-    showStatusMessage(tr("Scanning for cameras..."), false, 0);
+    logMessage(tr("Scanning for cameras..."), false);
 
     struct RefreshResult {
         std::vector<std::string> cameraList;
@@ -402,7 +378,7 @@ void QCameraWidget::startRefreshOperation()
         }
 
         guard->setRefreshOperationActive(false);
-        guard->showStatusMessage(tr("Camera list updated."), false, 3000);
+        guard->logMessage(tr("Camera list updated."), false);
     });
     worker->start();
 }
@@ -425,7 +401,7 @@ void QCameraWidget::applyConnectionState(const bool opened)
     if(_shuttingDown) return;
 
     if(opened){
-        _connectionAttempted = true;
+
     }
 
     {
@@ -793,7 +769,7 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
             spinBox->setRange(ptr->GetMin(), ptr->GetMax());
             spinBox->setValue(ptr->GetValue());
         }catch (const Pylon::GenericException &e){
-            showStatusMessage(e.GetDescription(), true, 5000);
+            logMessage(e.GetDescription(), true);
             qWarning() << e.GetDescription() << node->GetName().c_str();
         }
         connect(spinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [=](int value){
@@ -825,9 +801,9 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
                                 }
                             } catch(...) {}
                         }
-                        showStatusMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(*errorMsg), true, 5000);
+                        logMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(*errorMsg), true);
                     } else {
-                        showStatusMessage(tr("Parameter '%1' updated to %2.").arg(nodeName).arg(value), false, 3000);
+                        logMessage(tr("Parameter '%1' updated to %2.").arg(nodeName).arg(value), false);
                         scheduleFeaturesRebuild();
                     }
                     delete errorMsg;
@@ -845,7 +821,7 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
             spinBox->setRange(ptr->GetMin(), ptr->GetMax());
             spinBox->setValue(ptr->GetValue());
         }catch (const Pylon::GenericException &e){
-            showStatusMessage(e.GetDescription(), true, 5000);
+            logMessage(e.GetDescription(), true);
             qWarning() << e.GetDescription() << node->GetName().c_str() << "Float";
         }
         connect(spinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [=](double value){
@@ -877,9 +853,9 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
                                 }
                             } catch(...) {}
                         }
-                        showStatusMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(*errorMsg), true, 5000);
+                        logMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(*errorMsg), true);
                     } else {
-                        showStatusMessage(tr("Parameter '%1' updated to %2.").arg(nodeName).arg(value), false, 3000);
+                        logMessage(tr("Parameter '%1' updated to %2.").arg(nodeName).arg(value), false);
                         scheduleFeaturesRebuild();
                     }
                     delete errorMsg;
@@ -895,7 +871,7 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
             QSignalBlocker block(checkBox);
             checkBox->setChecked(ptr->GetValue());
         }catch (const Pylon::GenericException &e){
-            showStatusMessage(e.GetDescription(), true, 5000);
+            logMessage(e.GetDescription(), true);
             qWarning() << e.GetDescription() << node->GetName().c_str();
         }
         const auto updateBooleanNode = [=](const Qt::CheckState state){
@@ -928,9 +904,9 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
                                 }
                             } catch(...) {}
                         }
-                        showStatusMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(*errorMsg), true, 5000);
+                        logMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(*errorMsg), true);
                     } else {
-                        showStatusMessage(tr("Parameter '%1' updated to %2.").arg(nodeName).arg(val ? "True" : "False"), false, 3000);
+                        logMessage(tr("Parameter '%1' updated to %2.").arg(nodeName).arg(val ? "True" : "False"), false);
                         scheduleFeaturesRebuild();
                     }
                     delete errorMsg;
@@ -954,7 +930,7 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
             QSignalBlocker block(lineEdit);
             lineEdit->setText(ptr->GetValue().c_str());
         }catch (const Pylon::GenericException &e){
-            showStatusMessage(e.GetDescription(), true, 5000);
+            logMessage(e.GetDescription(), true);
             qWarning() << e.GetDescription() << node->GetName().c_str();
         }
         connect(lineEdit, &QLineEdit::editingFinished, this, [=](){
@@ -987,9 +963,9 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
                                 }
                             } catch(...) {}
                         }
-                        showStatusMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(*errorMsg), true, 5000);
+                        logMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(*errorMsg), true);
                     } else {
-                        showStatusMessage(tr("Parameter '%1' updated to '%2'.").arg(nodeName).arg(text), false, 3000);
+                        logMessage(tr("Parameter '%1' updated to '%2'.").arg(nodeName).arg(text), false);
                         scheduleFeaturesRebuild();
                     }
                     delete errorMsg;
@@ -1014,11 +990,11 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
                 QSignalBlocker block(comboBox);
                 comboBox->setCurrentText(ptr->GetCurrentEntry()->GetNode()->GetDisplayName().c_str());
             }catch (const Pylon::GenericException &e){
-                showStatusMessage(e.GetDescription(), true, 5000);
+                logMessage(e.GetDescription(), true);
                 qWarning() << e.GetDescription() << node->GetName().c_str();
             }
         }catch (const Pylon::GenericException &e){
-            showStatusMessage(e.GetDescription(), true, 5000);
+            logMessage(e.GetDescription(), true);
             qWarning() << e.GetDescription() << node->GetName().c_str();
         }
         connect(comboBox, &QComboBox::currentTextChanged, this, [=](QString text){
@@ -1052,9 +1028,9 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
                                 }
                             } catch(...) {}
                         }
-                        showStatusMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(*errorMsg), true, 5000);
+                        logMessage(tr("Failed to update '%1': %2").arg(nodeName).arg(*errorMsg), true);
                     } else {
-                        showStatusMessage(tr("Parameter '%1' updated to '%2'.").arg(nodeName).arg(text), false, 3000);
+                        logMessage(tr("Parameter '%1' updated to '%2'.").arg(nodeName).arg(text), false);
                         scheduleFeaturesRebuild();
                     }
                     delete errorMsg;
@@ -1069,7 +1045,7 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
         connect(button, &QPushButton::clicked, this, [=]{
             button->setEnabled(false);
             auto* errorMsg = new QString();
-            showStatusMessage(tr("Executing command '%1'...").arg(nodeName), false, 0);
+            logMessage(tr("Executing command '%1'...").arg(nodeName), false);
             
             runAsyncWrite(
                 [=]() {
@@ -1093,12 +1069,12 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
                     scheduleFeaturesRebuild();
                     if (!success) {
                         if (errorMsg->isEmpty()) {
-                            showStatusMessage(tr("Failed to execute command '%1'.").arg(nodeName), true, 5000);
+                            logMessage(tr("Failed to execute command '%1'.").arg(nodeName), true);
                         } else {
-                            showStatusMessage(tr("Failed to execute command '%1': %2").arg(nodeName).arg(*errorMsg), true, 5000);
+                            logMessage(tr("Failed to execute command '%1': %2").arg(nodeName).arg(*errorMsg), true);
                         }
                     } else {
-                        showStatusMessage(tr("Command '%1' executed successfully.").arg(nodeName), false, 3000);
+                        logMessage(tr("Command '%1' executed successfully.").arg(nodeName), false);
                     }
                     delete errorMsg;
                 }
@@ -1125,20 +1101,11 @@ QWidget *QCameraWidget::createNodeWidget(GenApi::INode *node)
     return widget;
 }
 
-void QCameraWidget::showStatusMessage(const QString& msg, bool isError, int timeout)
+void QCameraWidget::logMessage(const QString& message, bool error)
 {
-    if (!_messageLabel || _shuttingDown) return;
-
-    _messageTimer->stop();
-    _messageLabel->setText(msg);
-    _messageLabel->setToolTip(msg);
-    _messageLabel->setProperty("messageState", isError ? "error" : "normal");
-    repolish(_messageLabel);
-    _messageLabel->setVisible(!msg.isEmpty());
-
-    if (timeout > 0) {
-        _messageTimer->start(timeout);
-    }
+    if (message.isEmpty()) return;
+    if (error) qWarning().noquote() << "[Camera UI]" << message;
+    else qInfo().noquote() << "[Camera UI]" << message;
 }
 
 void QCameraWidget::updateGrabState(bool grabbing)
@@ -1166,33 +1133,7 @@ void QCameraWidget::updateStatusLabel()
     if (!_statusLabel || _shuttingDown) return;
 
     const bool opened = _camera && _camera->isOpened();
-
-    const bool busy = _connectionOperationActive || _refreshOperationActive || _parameterWriteActive;
-    if (busy) {
-        if (_connectionOperationActive) {
-            _statusLabel->setText(tr("Connecting"));
-        } else if (_refreshOperationActive) {
-            _statusLabel->setText(tr("Scanning"));
-        } else {
-            _statusLabel->setText(tr("Updating"));
-        }
-        _statusLabel->setProperty("status", "idle");
-    } else {
-        if (!opened && !_connectionAttempted) {
-            _statusLabel->setText(tr("Idle"));
-            _statusLabel->setProperty("status", "idle");
-        } else if (!opened) {
-            _statusLabel->setText(tr("Disconnected"));
-            _statusLabel->setProperty("status", "disconnected");
-        } else if (_grabbing) {
-            _statusLabel->setText(tr("Live"));
-            _statusLabel->setProperty("status", "grabbing");
-        } else {
-            _statusLabel->setText(tr("Connected"));
-            _statusLabel->setProperty("status", "connected");
-        }
-    }
-    _statusLabel->style()->unpolish(_statusLabel);
-    _statusLabel->style()->polish(_statusLabel);
+    _statusLabel->setText(!opened ? QStringLiteral("Idle")
+        : _grabbing ? QStringLiteral("Live") : QStringLiteral("Connected"));
 }
 #endif

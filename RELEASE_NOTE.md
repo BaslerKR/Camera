@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Limit the control statusbar to Idle, Connected, and Live; route operation messages to application logs.
+
 - Publish the camera controls through the generic host-managed plugin dock contract.
 
 - Link `CameraPlugin` only through `Camera::QtWidget` and `Camera::PlaygroundAdapter` so `libCamera.a` is not passed twice to the linker.
