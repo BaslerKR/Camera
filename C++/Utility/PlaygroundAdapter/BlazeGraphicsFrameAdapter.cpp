@@ -577,15 +577,15 @@ std::optional<GraphicsFrame> buildBlazeFrame(
 
     GraphicsFrame scene;
     scene.metadata.sourceName = "Basler blaze";
-    scene.surfaceInitialView = blazeInitialView(1.0);
-    scene.pointCloudInitialView = blazeInitialView(1.15);
     if (frame.isValid())
     {
-        scene.rangeFrame = std::move(frame);
+        scene.addRange("range", std::move(frame), "Range", "primary");
+        scene.ranges.back().initialView = blazeInitialView(1.0);
     }
     if (cloud.isValid())
     {
-        scene.pointCloud = std::move(cloud);
+        scene.addPointCloud("point-cloud", std::move(cloud), "Point Cloud", "primary",
+                            blazeInitialView(1.15));
     }
 
     if (!scene.isValid())

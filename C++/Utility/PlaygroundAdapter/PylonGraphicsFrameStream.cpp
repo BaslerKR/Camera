@@ -73,7 +73,7 @@ PylonGraphicsFrameStream::Impl::Impl(
                 if (!graphicsImage.isValid()) return;
 
                 GraphicsFrame frame;
-                frame.setImage(std::move(graphicsImage));
+                frame.addImage("image", std::move(graphicsImage), "Image");
                 _callback(std::move(frame), 0U);
             }
             catch (const std::exception& error)

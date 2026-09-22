@@ -481,10 +481,21 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
         return;
     }
 
-    scene.image = std::move(image);
-    scene.metadata.colorRegistration = profile.colorRegisteredToRange
-        ? GraphicsImageRegistration::RegisteredToRange
-        : GraphicsImageRegistration::Unregistered;
+    scene.addImage("image", std::move(image), "Image", "primary");
+    scene.images.back().descriptor.registration = GraphicsImageRegistration::Unregistered;
+}
+
+void registerColorImageToRange(
+    const PylonScene3DProfile& profile,
+    GraphicsFrame& scene)
+{
+    if (!profile.colorRegisteredToRange || scene.images.empty() || scene.ranges.empty())
+    {
+        return;
+    }
+    auto& descriptor = scene.images.front().descriptor;
+    descriptor.registeredResourceId = scene.ranges.front().descriptor.id;
+    descriptor.registration = GraphicsImageRegistration::RegisteredToRange;
 }
 
 [[nodiscard]] std::optional<GraphicsFrame> buildDirectXyzScene(
@@ -500,8 +511,6 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
     view.viewUp = {0.0, -1.0, 0.0};
     view.parallelProjection = false;
     view.distanceScale = 1.15;
-    scene.surfaceInitialView = view;
-    scene.pointCloudInitialView = view;
 
     const auto intensity = componentByType(container, Pylon::ComponentType_Intensity);
     appendColorImage(intensity, request, profile, scene);
@@ -623,7 +632,9 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
 
     if (frame.isValid())
     {
-        scene.rangeFrame = std::move(frame);
+        scene.addRange("range", std::move(frame), "Range", "primary");
+        scene.ranges.back().initialView = view;
+        registerColorImageToRange(profile, scene);
     }
     return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
 }
@@ -723,7 +734,8 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
 
     if (frame.isValid())
     {
-        scene.rangeFrame = std::move(frame);
+        scene.addRange("range", std::move(frame), "Range", "primary");
+        registerColorImageToRange(profile, scene);
     }
     return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
 }

@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Publish image and range output as identified GraphicsFrame resources with an explicit source group and validated pixel-registration edge.
+
 - Limit the control statusbar to Idle, Connected, and Live; route operation messages to application logs.
 
 - Publish the camera controls through the generic host-managed plugin dock contract.
@@ -10,7 +12,7 @@
   identity and Pylon error details; sample repeated diagnostics after the first
   failure to keep acquisition logs bounded.
 
-- Require ABI / Qt IID 4.0 and recompilation; v3 packages are rejected. Declare immutable GraphicsEngine + Script Editor capabilities directly on the session.
+- Require ABI / Qt IID 5.0 and recompilation; older packages are rejected. Declare immutable GraphicsEngine + Script Editor capabilities directly on the session.
 
 - Stage `pylon.framework` in the Playground plugin `runtime` payload on macOS instead of the host `Contents/Frameworks` extra list.
 
