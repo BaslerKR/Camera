@@ -4,7 +4,10 @@
 # Repeat NAME=value to declare multiple environment paths for one variable.
 set(PLAYGROUND_PLUGIN_ID "camera")
 set(PLAYGROUND_PLUGIN_VERSION "1.0.2")
-set(PLAYGROUND_PLUGIN_DISPLAY_NAME "Basler Camera")
+set(PLAYGROUND_PLUGIN_DISPLAY_NAME "Camera")
+# Optional presentation metadata; consumers must export it to manifests/catalogs.
+set(PLAYGROUND_PLUGIN_SUBTITLE "Basler pylon")
+set(PLAYGROUND_PLUGIN_DESCRIPTION "Discover and configure Basler cameras, and acquire 2D images and supported 3D payloads.")
 set(PLAYGROUND_PLUGIN_ADD_ACTION_TEXT "Camera")
 set(PLAYGROUND_PLUGIN_SESSION_TYPE "Camera")
 set(PLAYGROUND_PLUGIN_MENU_ORDER 100)

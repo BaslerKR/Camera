@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Declare the Camera display name, Basler pylon subtitle, and acquisition summary in package metadata.
+
 - Publish image and range output as identified GraphicsFrame resources with an explicit source group and validated pixel-registration edge.
 
 - Limit the control statusbar to Idle, Connected, and Live; route operation messages to application logs.
