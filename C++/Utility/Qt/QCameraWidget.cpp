@@ -3,6 +3,12 @@
 #include <QToolButton>
 #include <QAction>
 #include <QDebug>
+#include <QLoggingCategory>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QElapsedTimer>
+Q_LOGGING_CATEGORY(cameraDiagnosticLog, "diagnostics.Camera", QtInfoMsg)
 #include <QHBoxLayout>
 #include <QMetaObject>
 #include <QPointer>
@@ -473,6 +479,36 @@ void QCameraWidget::generateFeaturesWidget(GenApi::INodeMap &nodemap)
     try{
         GenApi::NodeList_t nodes;
         nodemap.GetNodes(nodes);
+        if (cameraDiagnosticLog().isDebugEnabled() && !_grabbing.load(std::memory_order_acquire)) {
+            QElapsedTimer timing; timing.start();
+            QJsonArray snapshot;
+            for (auto* node : nodes) {
+                QJsonObject record{{"name", QString::fromUtf8(node->GetName().c_str())}};
+                try {
+                    record.insert("readable", GenApi::IsReadable(node));
+                    record.insert("writable", GenApi::IsWritable(node));
+                    record.insert("kind", static_cast<int>(node->GetPrincipalInterfaceType()));
+                    switch (node->GetPrincipalInterfaceType()) {
+                    case GenApi::intfIInteger: case GenApi::intfIFloat: case GenApi::intfIBoolean:
+                    case GenApi::intfIEnumeration: case GenApi::intfIString:
+                        if (GenApi::IsReadable(node)) {
+                            record.insert("value", QString::fromUtf8(GenApi::CValuePtr(node)->ToString(false, true).c_str()));
+                            record.insert("outcome", "read");
+                        } else record.insert("outcome", "unreadable");
+                        break;
+                    default: record.insert("outcome", "non-scalar-not-read"); break;
+                    }
+                } catch (const GenericException& error) {
+                    record.insert("outcome", "read-failed"); record.insert("error", QString::fromUtf8(error.what()));
+                }
+                snapshot.append(record);
+            }
+            qCDebug(cameraDiagnosticLog).noquote() << "@diagnostic " + QString::fromUtf8(QJsonDocument(QJsonObject{
+                {"event", "feature_snapshot"}, {"fields", QJsonObject{
+                {"camera", QString::fromStdString(_camera->getConnectedCameraName())},
+                {"coverage", "all-node-map-scalars/current-selector-state"},
+                {"elapsedMs", timing.elapsed()}, {"nodes", snapshot}}}}).toJson(QJsonDocument::Compact));
+        }
 
         QTreeWidgetItem *cameraFeatures = new QTreeWidgetItem(_featuresWidget, QStringList() << _camera->getConnectedCameraName().c_str());
         cameraFeatures->setData(0, Qt::UserRole, QStringLiteral("__camera_root__"));

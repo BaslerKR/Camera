@@ -43,6 +43,7 @@ void CameraSourceController::registerCallbacks() {
     _statusCallbackId = _camera->registerStatusCallback([this](Camera::Status status, bool on) {
         if (status == Camera::GrabbingStatus) {
             _isGrabbing = on;
+            emit diagnosticAcquisitionChanged(on, QStringLiteral("camera"));
         }
     });
 
