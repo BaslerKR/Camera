@@ -45,6 +45,8 @@ The optional Playground device plugin is a separate MODULE. Enable `CAMERA_BUILD
 
 ## Acquisition Contract
 
+`Camera::accessFeatures()` executes short feature work under the owning recursive camera and node-map locks, reporting a connection generation to the callback. It returns false while disconnected. Callbacks must not retain node pointers, change camera lifecycle or acquire unrelated locks. The optional device adapter exposes copied remote-node descriptors and typed parameter commands through `IDeviceParameterControl/1.0` on `CameraSourceController`; integer values stay signed 64-bit. Requests carry a controller-instance/connection-generation identity and the complete selecting-feature context. Observed revisions describe queried state, not every intermediate hardware event. Writes revalidate current access and constraints, retain SDK rounding in readback, and distinguish no effect, accepted effect and uncertain SDK completion. There is no implicit selector change, acquisition restart or multi-feature transaction. Root invalidation uses the existing coalesced UI path after SDK locks are released; live refresh remains deferred until stop.
+
 ```cpp
 #include "CameraSystem.h"
 
@@ -72,4 +74,9 @@ Multipart 3D buffers remain SDK-owned for the callback duration. Consumers that 
 
 ## Validation
 
+The feature authority also serializes connection setup and teardown. Supplying the optional `busy` output to `accessFeatures()` selects nonwaiting admission; competing feature/lifecycle work returns false with busy set. Without that output, existing worker writes wait for their serialized turn. SDK calls inside an admitted turn retain vendor timeout behavior. Invoke the entry point from consumer command workers or the owning GUI adapter, never recursively from its callback or from a vendor lifecycle callback. The software emulator test covers exact readback, competing work rejection and reconnect identities; it opens only a device with the pylon emulation class, even when other devices are discoverable.
+
 Build the core against the installed SDK on every supported platform. Stereo decoding, trigger behavior, device configuration, and runtime producers require matching physical-hardware validation; a successful library build does not establish those contracts.
+# Declared device lifecycle capability
+
+The optional source-controller adapter declares `device.targets`, `device.discover`, `device.connection`, `device.connect` and `device.disconnect` through the neutral `IToolProvider` contract. Discovery returns copied full transport identities and labels. Connection commands select exact identities, refuse implicit replacement, and fence stale generations under the existing lifecycle lock. SDK work uses the existing bounded adapter workers; GUI catalog updates receive copied queued results. These generations identify connection lifetimes, not settings-to-acquisition causality.

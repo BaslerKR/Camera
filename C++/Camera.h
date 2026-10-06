@@ -24,6 +24,12 @@ using namespace Pylon;
 using namespace std;
 
 class CameraSystem;
+/** @brief Copies a transport-owned target identity independently of feature widgets. */
+struct CameraDeviceDescriptor { std::string id; std::string displayName; };
+/** @brief Copies current logical connection identity without querying SDK features. */
+struct CameraConnectionState { bool connected = false; std::uint64_t generation = 0; std::string deviceId; std::string displayName; };
+/** @brief Distinguishes refused lifecycle admission from actual SDK failure. */
+enum class CameraConnectionOutcome { Success, Busy, Conflict, AlreadyConnected, NotFound, Failed };
 class Camera : public Pylon::CConfigurationEventHandler,
                public Pylon::CCameraEventHandler
 {
@@ -61,6 +67,13 @@ public:
     bool isOpened() const;
     void close();
     std::string getConnectedCameraName() const;
+    /** @brief Copies cached or explicitly refreshed targets through the existing system authority. */
+    std::vector<CameraDeviceDescriptor> deviceCatalog(bool refresh) const;
+    /** @brief Copies logical connection state and its reconnect generation. */
+    CameraConnectionState connectionState() const;
+    /** @brief Admits exact target connect/disconnect without waiting or silently switching a live connection. */
+    CameraConnectionOutcome controlConnection(bool connect, const std::string& deviceId, std::uint64_t expectedGeneration,
+        CameraConnectionState* result);
 
     using GrabCallback = std::function<void(const CPylonImage&, size_t frame)>;
     /**
@@ -114,6 +127,11 @@ public:
     std::vector<std::string> getUpdatedCameraList() const;
     std::vector<std::string> getCachedCameraList() const;
     GenApi::INodeMap& getNodeMap();
+    /** @brief Runs short feature work under owning locks; a busy output selects nonwaiting admission.
+     *  @note Without a busy output, worker callers retain serialized waiting behavior.
+     */
+    bool accessFeatures(const std::function<void(GenApi::INodeMap&, std::uint64_t)>& operation,
+        bool* busy = nullptr);
     [[nodiscard]] PylonScene3DProfile scene3DProfile() const;
 
     using NodeCallback = std::function<void(const std::string& nodeName)>;
@@ -133,6 +151,8 @@ public:
      * @brief Removes every registered node update callback.
      */
     void clearNodeUpdatedCallbacks();
+    /** @brief Publishes a root invalidation after external feature work releases SDK locks. */
+    void notifyFeaturesChanged();
 
 private:
     enum class StreamKind
@@ -144,11 +164,18 @@ private:
     CameraSystem *_system;
     mutable std::mutex _connectionStateMutex;
     std::string _connectedCameraName;
+    std::string _connectedDeviceId;
+    /** @brief Shares SDK setup behind the existing lifecycle lock. */
+    bool openLocked(const std::string& cameraName, bool exactIdentity = false);
+    /** @brief Shares SDK teardown and reports failure behind the existing lifecycle lock. */
+    bool closeLocked();
     int _allottedNumber = 0;
 
     std::thread _thread;
     std::atomic<bool> _isRunning=false;
     std::atomic<bool> _deviceAvailable=false;
+    std::atomic<std::uint64_t> _connectionGeneration{0};
+    std::mutex _featureLifecycleMutex;
 
     std::mutex _statusMutex;
     std::unordered_map<size_t, StatusCallback> _statusObservers;
@@ -179,7 +206,12 @@ private:
     mutable std::mutex _scene3DProfileMutex;
     PylonScene3DProfile _scene3DProfile;
 
-    CBaslerUniversalInstantCamera _currentCamera;
+    /** @brief Exposes the SDK's recursive lifecycle lock to this owning wrapper. */
+    class LockedCamera final : public CBaslerUniversalInstantCamera {
+    public:
+        using Pylon::CInstantCamera::GetLock;
+    };
+    LockedCamera _currentCamera;
 
     void configureStreamForConnectedCamera();
     void configureBlazeStream(GenApi::INodeMap& nodeMap);

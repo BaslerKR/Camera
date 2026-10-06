@@ -284,6 +284,11 @@ void Camera::clearStatusCallbacks()
 }
 
 bool Camera::open(const string& cameraName){
+    std::lock_guard<std::mutex> featureLifecycle(_featureLifecycleMutex);
+    return openLocked(cameraName);
+}
+
+bool Camera::openLocked(const string& cameraName, bool exactIdentity){
     const auto cleanupFailedOpen = [this]{
         try{
             requestStop();
@@ -311,7 +316,7 @@ bool Camera::open(const string& cameraName){
         _deviceAvailable.store(false, std::memory_order_release);
         clearNodeEventHandlers();
         CameraSystem::syslog("Try to open " + (cameraName.empty() ? "any one of the cameras on this system" : cameraName) + ".");
-        _currentCamera.Attach(_system->createDevice(cameraName), Cleanup_Delete);
+        _currentCamera.Attach(_system->createDevice(cameraName, exactIdentity), Cleanup_Delete);
         _currentCamera.Open();
         if(_currentCamera.IsOpen()){
             markOpened(_currentCamera);
@@ -336,6 +341,11 @@ bool Camera::isOpened() const {
 }
 
 void Camera::close(){
+    std::lock_guard<std::mutex> featureLifecycle(_featureLifecycleMutex);
+    closeLocked();
+}
+
+bool Camera::closeLocked(){
     try{
         stop();
         _deviceAvailable.store(false, std::memory_order_release);
@@ -351,9 +361,34 @@ void Camera::close(){
         if(_currentCamera.IsPylonDeviceAttached()){
             _currentCamera.DestroyDevice();
         }
+        return true;
     }catch(const GenericException &e){ CameraSystem::syslog(e.GetDescription(),true); }
     catch(const std::exception &e){ CameraSystem::syslog(e.what(),true); }
     catch(...){ CameraSystem::syslog("Unknown exception while closing camera", true); }
+    return false;
+}
+
+std::vector<CameraDeviceDescriptor> Camera::deviceCatalog(bool refresh) const { return _system->deviceCatalog(refresh); }
+
+CameraConnectionState Camera::connectionState() const {
+    std::lock_guard<std::mutex> lock(_connectionStateMutex);
+    const bool connected = _deviceAvailable.load(std::memory_order_acquire);
+    return {connected, _connectionGeneration.load(std::memory_order_acquire), connected ? _connectedDeviceId : std::string(), connected ? _connectedCameraName : std::string()};
+}
+
+CameraConnectionOutcome Camera::controlConnection(bool connect, const std::string& deviceId, std::uint64_t expectedGeneration,
+        CameraConnectionState* result) {
+    std::unique_lock<std::mutex> lifecycle(_featureLifecycleMutex, std::try_to_lock);
+    if (!lifecycle.owns_lock()) return CameraConnectionOutcome::Busy;
+    if (_connectionGeneration.load(std::memory_order_acquire) != expectedGeneration) return CameraConnectionOutcome::Conflict;
+    if (connect && _deviceAvailable.load(std::memory_order_acquire)) return CameraConnectionOutcome::AlreadyConnected;
+    if (connect) {
+        const auto targets = deviceCatalog(false);
+        if (deviceId.empty() || std::none_of(targets.begin(), targets.end(), [&](const auto& target) { return target.id == deviceId; })) return CameraConnectionOutcome::NotFound;
+    }
+    const bool ok = connect ? openLocked(deviceId, true) : closeLocked();
+    if (result) *result = connectionState();
+    return ok ? CameraConnectionOutcome::Success : CameraConnectionOutcome::Failed;
 }
 
 std::string Camera::getConnectedCameraName() const
@@ -731,6 +766,21 @@ GenApi::INodeMap &Camera::getNodeMap(){
     return _currentCamera.GetNodeMap();
 }
 
+bool Camera::accessFeatures(const std::function<void(GenApi::INodeMap&, std::uint64_t)>& operation, bool* busy)
+{
+    if (busy) *busy = false;
+    std::unique_lock<std::mutex> lifecycle(_featureLifecycleMutex, std::defer_lock);
+    if (busy) {
+        if (!lifecycle.try_lock()) { *busy = true; return false; }
+    } else lifecycle.lock();
+    Pylon::AutoLock cameraLock(_currentCamera.GetLock());
+    if (!_deviceAvailable.load(std::memory_order_acquire) || !_currentCamera.IsOpen()) return false;
+    auto& map = _currentCamera.GetNodeMap();
+    GenApi::AutoLock nodeLock(map.GetLock());
+    operation(map, _connectionGeneration.load(std::memory_order_acquire));
+    return true;
+}
+
 PylonScene3DProfile Camera::scene3DProfile() const
 {
     std::lock_guard<std::mutex> lock(_scene3DProfileMutex);
@@ -750,6 +800,11 @@ bool Camera::deregisterNodeUpdatedCallback(const CallbackId id)
 void Camera::clearNodeUpdatedCallbacks()
 {
     clearCallbacks(_nodeCallbackMutex, _nodeCallbacks);
+}
+
+void Camera::notifyFeaturesChanged()
+{
+    dispatchCallbacks(_nodeCallbackMutex, _nodeCallbacks, std::string("Root"));
 }
 
 void Camera::OnAttached(CInstantCamera &camera){
@@ -851,11 +906,14 @@ void Camera::OnCameraEvent(CInstantCamera &camera, intptr_t userProvidedId, GenA
 void Camera::markOpened(CInstantCamera& camera)
 {
     const auto cameraName = safeCameraName(camera, {});
+    bool wasAvailable;
     {
         std::lock_guard<std::mutex> lock(_connectionStateMutex);
         _connectedCameraName = cameraName;
+        _connectedDeviceId = camera.GetDeviceInfo().GetFullName().c_str();
+        wasAvailable = _deviceAvailable.exchange(true, std::memory_order_acq_rel);
+        if (!wasAvailable) _connectionGeneration.fetch_add(1, std::memory_order_acq_rel);
     }
-    const bool wasAvailable = _deviceAvailable.exchange(true, std::memory_order_acq_rel);
     if(wasAvailable) return;
 
     auto from = "[Info " + to_string(_allottedNumber)  +"] " + cameraName;

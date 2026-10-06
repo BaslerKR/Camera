@@ -26,6 +26,8 @@ public:
     void updateCameraList();
     std::vector<std::string> getCameraList();
     std::vector<std::string> getCachedCameraList() const;
+    /** @brief Copies exact transport identities under the existing discovery/cache lock. */
+    std::vector<CameraDeviceDescriptor> deviceCatalog(bool refresh);
     bool isAccessible(const std::string &camera);
 
     CDeviceInfo getCameraInfo(const std::string &cameraName);
@@ -33,7 +35,7 @@ public:
     Camera* addCamera();
     void removeCamera(Camera* camera);
     Camera* getCamera(int allottedNumber) const;
-    IPylonDevice *createDevice(const std::string &cameraName="");
+    IPylonDevice *createDevice(const std::string &cameraName="", bool exactIdentity = false);
 
     static void syslog(const std::string &message, bool warning=false);
 

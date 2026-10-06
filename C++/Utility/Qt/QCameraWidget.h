@@ -109,8 +109,15 @@ private:
         _parameterWriteActive = true;
         updateStatusLabel();
         const auto success = std::make_shared<bool>(false);
-        QThread* worker = QThread::create([writeFunc, success]() {
-            *success = writeFunc();
+        Camera* const camera = _camera;
+        QThread* worker = QThread::create([camera, writeFunc, success]() {
+            try {
+                if (camera) camera->accessFeatures([&](GenApi::INodeMap&, std::uint64_t) {
+                    *success = writeFunc();
+                });
+            } catch (...) {
+                *success = false;
+            }
         });
         worker->setParent(this);
         _parameterThreads.insert(worker);

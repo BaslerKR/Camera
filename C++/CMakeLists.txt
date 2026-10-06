@@ -251,6 +251,7 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
         Utility/PlaygroundAdapter/Plugin/CameraPlugin.cpp
         Utility/PlaygroundAdapter/Source/CameraSourceController.h
         Utility/PlaygroundAdapter/Source/CameraSourceController.cpp
+        Utility/PlaygroundAdapter/Source/CameraParameterControl.cpp
     )
     set_target_properties(CameraPlugin PROPERTIES
         PREFIX ""

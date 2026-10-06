@@ -1,4 +1,11 @@
 ## Unreleased
+- Deliver declared device-tool completion exactly once even when a consumer callback throws; drain accepted workers on controller teardown.
+- Release cached SDK device descriptors before terminating the pylon runtime.
+- Declare neutral device discovery/connection tools on the source controller; select exact transport identities, refuse stale/busy requests or implicit device switching, and share existing SDK lifecycle authority with GUI controls. Refresh GUI device labels through queued copied results.
+
+- Expose copied remote-device parameter descriptions, typed reads/writes and commands through an optional source-controller capability. Revalidate connection generations, selector context and observed revisions under SDK locks; preserve accepted/uncertain effects when readback fails.
+- Admit parameter requests on the consumer thread and execute SDK access on bounded module-owned workers. Deliver copied completion values and drain accepted work before releasing the controller and SDK.
+- Serialize Qt parameter writes through the same owning camera/node-map locks and invalidate dependent feature views after external commands without changing acquisition or live refresh policy.
 
 - Report acquisition lifecycle to consumers and retain opt-in stopped-device feature snapshots at the current selector state without changing capture policy.
 

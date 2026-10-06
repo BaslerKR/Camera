@@ -19,6 +19,9 @@ CameraSystem::~CameraSystem(){
         }
         delete camera;
     }
+    // Device-info strings are SDK-owned objects; release them while pylon is alive.
+    _devices.clear();
+    _tlFactory = nullptr;
     try{
         PylonTerminate();
     }catch(const GenericException &e){
@@ -84,6 +87,14 @@ std::vector<string> CameraSystem::getCachedCameraList() const {
         syslog("Unknown exception in getCachedCameraList", true);
     }
     return list;
+}
+
+std::vector<CameraDeviceDescriptor> CameraSystem::deviceCatalog(bool refresh) {
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (refresh) updateCameraListLocked();
+    std::vector<CameraDeviceDescriptor> result;
+    for (const auto& device : _devices) result.push_back({device.GetFullName().c_str(), device.GetFriendlyName().c_str()});
+    return result;
 }
 
 bool CameraSystem::isAccessible(const string &camera){
@@ -163,7 +174,7 @@ Camera *CameraSystem::getCamera(const int allottedNumber) const {
     return iter == _cameraList.end() ? nullptr : *iter;
 }
 
-IPylonDevice* CameraSystem::createDevice(const string &cameraName)
+IPylonDevice* CameraSystem::createDevice(const string &cameraName, bool exactIdentity)
 {
     std::lock_guard<std::mutex> lock(_mutex);
 
@@ -176,6 +187,13 @@ IPylonDevice* CameraSystem::createDevice(const string &cameraName)
         throw std::runtime_error("No cached accessible camera device found. Refresh the camera list first.");
     }
 
+    for(const auto& device : _devices){
+        if(cameraName == device.GetFullName().c_str()){
+            if(!_tlFactory->IsDeviceAccessible(device)) throw std::runtime_error("Camera device is not accessible: " + cameraName);
+            return _tlFactory->CreateDevice(device);
+        }
+    }
+    if (exactIdentity) throw std::runtime_error("Exact camera identity is no longer in the cached catalog: " + cameraName);
     for(const auto& device : _devices){
         if(cameraName == device.GetFriendlyName().c_str()){
             if(!_tlFactory->IsDeviceAccessible(device)){

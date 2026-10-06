@@ -2,14 +2,24 @@
 #include "engine/GraphicsFrame.h"
 #include "SessionFrame.h"
 #include "Utility/PlaygroundAdapter/PylonGraphicsFrameStream.h"
+#include <QUuid>
 
 
 CameraSourceController::CameraSourceController(Camera* camera, QObject* parent)
     : AbstractSourceController(parent), _camera(camera) {
+    _parameterInstance = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     registerCallbacks();
 }
 
 CameraSourceController::~CameraSourceController() {
+    _parameterClosing = true;
+    const auto workers = _parameterWorkers;
+    for (auto* worker : workers) {
+        disconnect(worker, nullptr, this, nullptr);
+        worker->wait();
+        delete worker;
+    }
+    _parameterWorkers.clear();
     stop();
     deregisterCallbacks();
 }

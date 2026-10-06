@@ -106,6 +106,8 @@ public:
         if (!_widget) {
             _widget = new QCameraWidget(parent, _camera);
             _widget->setDiscoveredCameraNames(_discoveredCameraNames);
+            QObject::connect(_controller.get(), &CameraSourceController::deviceCatalogChanged,
+                _widget.data(), &QCameraWidget::setDiscoveredCameraNames, Qt::QueuedConnection);
         }
         return {{QStringLiteral("device-controls"), QStringLiteral("Device Controls"),
                  Qt::LeftDockWidgetArea, _widget, true}};
