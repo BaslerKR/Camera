@@ -7,6 +7,8 @@
 - Admit parameter requests on the consumer thread and execute SDK access on bounded module-owned workers. Deliver copied completion values and drain accepted work before releasing the controller and SDK.
 - Serialize Qt parameter writes through the same owning camera/node-map locks and invalidate dependent feature views after external commands without changing acquisition or live refresh policy.
 
+## v1.1.0 (2026-10-08)
+
 - Report acquisition lifecycle to consumers and retain opt-in stopped-device feature snapshots at the current selector state without changing capture policy.
 
 - Declare the Camera display name, Basler pylon subtitle, and acquisition summary in package metadata.
