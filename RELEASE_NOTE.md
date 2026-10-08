@@ -1,5 +1,7 @@
 ## Unreleased
 
+## v1.1.0 (2026-10-08)
+
 - Report acquisition lifecycle to consumers and retain opt-in stopped-device feature snapshots at the current selector state without changing capture policy.
 
 - Declare the Camera display name, Basler pylon subtitle, and acquisition summary in package metadata.
