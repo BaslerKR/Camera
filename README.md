@@ -45,6 +45,10 @@ The optional Playground device plugin is a separate MODULE. Enable `CAMERA_BUILD
 
 ## SDK discovery validation
 
+Windows library defaults come from the selected `Findpylon.cmake` installation.
+Explicit finder/module paths and library overrides take precedence over a
+machine-wide pylon installation; pylon 12 name defaults fill unresolved values.
+
 Linux first searches for the pylon config package using `pylon_DIR`, standard CMake prefixes, `PYLON_ROOT`, and `/opt/pylon` (including its `share/pylon/cmake` layout). If no config package is available, it tries the SDK-provided `Findpylon.cmake`. Windows retains find-module discovery; macOS retains framework-target discovery.
 
 Run the configure-only regression suite with Python 3, CMake, and Ninja on `PATH`:

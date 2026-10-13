@@ -32,6 +32,9 @@ def main():
         ("linux-find-module", "Linux", "module", "root", True),
         ("linux-missing", "Linux", "missing", "root", False),
         ("windows-find-module", "Windows", "module", "root", True),
+        ("windows-pylon12", "Windows", "module", "root", True),
+        ("windows-pylon12-overrides", "Windows", "module", "root", True),
+        ("windows-explicit-finder", "Windows", "module", "root", True),
         ("macos-framework", "Darwin", "framework", "root", True),
         ("preloaded-target", "Linux", "preloaded", "root", True),
     ]
@@ -59,6 +62,26 @@ def main():
                 (framework / "pylon-targets.cmake").write_text(package("framework"))
                 (framework / "genicam-targets.cmake").write_text("")
                 (framework / "pylon-config-version.cmake").write_text("set(PACKAGE_VERSION 8.0.0)\n")
+            checks = ""
+            if name.startswith("windows-pylon12"):
+                libraries = sdk / "lib/x64"
+                libraries.mkdir(parents=True)
+                (libraries / "PylonBase_v12.lib").touch()
+                expected_base = (libraries / "PylonBase_v12.lib").as_posix()
+                expected_genapi = (libraries / "GenApi_MD_VC142_v3_5_Basler_pylon_v1.lib").as_posix()
+                if name.endswith("overrides"):
+                    expected_base = (root / "explicit-base.lib").as_posix()
+                    expected_genapi = (root / "explicit-genapi.lib").as_posix()
+                checks = (f'if(NOT pylonBase STREQUAL "{expected_base}" OR NOT GenApi STREQUAL "{expected_genapi}")\n'
+                          'message(FATAL_ERROR "Wrong Windows pylon library defaults or overrides")\nendif()\n')
+            if name == "windows-explicit-finder":
+                installed = root / "program-files/Basler/pylon/Development"
+                (installed / "lib/cmake").mkdir(parents=True)
+                (installed / "lib/cmake/Findpylon.cmake").write_text(package("wrong"))
+                (installed / "lib/x64").mkdir()
+                (installed / "lib/x64/PylonBase_v12.lib").touch()
+                checks = ('if(DEFINED pylonBase)\n'
+                          'message(FATAL_ERROR "Unselected default SDK overwrote library paths")\nendif()\n')
             source = root / "source"
             source.mkdir()
             preload = package("preloaded") if layout == "preloaded" else ""
@@ -68,7 +91,8 @@ def main():
                 + f'add_subdirectory("{camera}" camera)\n'
                 + "get_target_property(marker CameraPylonRuntime INTERFACE_COMPILE_DEFINITIONS)\n"
                 + f'if(NOT marker STREQUAL "SDK_{expected}")\n'
-                + 'message(FATAL_ERROR "Wrong SDK selected: ${marker}")\nendif()\n')
+                + 'message(FATAL_ERROR "Wrong SDK selected: ${marker}")\nendif()\n'
+                + checks)
             # Configure/generate only: bypass compiler probes in cross-platform fixtures.
             toolchain = root / "toolchain.cmake"
             toolchain.write_text(
@@ -79,7 +103,7 @@ def main():
                 "set(CMAKE_CXX_COMPILER_WORKS TRUE)\n"
                 'set(CMAKE_INSTALL_NAME_TOOL "${CMAKE_COMMAND}")\n')
             env = {k: v for k, v in os.environ.items()
-                   if k.upper() not in ("PYLON_ROOT", "PYLON_DEV_DIR", "PYLON_DIR", "CMAKE_PREFIX_PATH", "CMAKE_MODULE_PATH")}
+                   if k.upper() not in ("PYLON_ROOT", "PYLON_DEV_DIR", "PYLON_DIR", "CMAKE_PREFIX_PATH", "CMAKE_MODULE_PATH", "PROGRAMFILES")}
             env["ProgramFiles"] = str(root / "unused-program-files")
             command = ["cmake", "-S", str(source), "-B", str(root / "build"),
                        "-G", "Ninja", f"-DCMAKE_TOOLCHAIN_FILE={toolchain}",
@@ -89,6 +113,11 @@ def main():
                        "-DCMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH=OFF"]
             # Supply Ninja explicitly because system-environment searching is disabled.
             command.append(f"-DCMAKE_MAKE_PROGRAM={ninja}")
+            if name == "windows-pylon12-overrides":
+                command += [f"-DpylonBase={expected_base}", f"-DGenApi={expected_genapi}"]
+            if name == "windows-explicit-finder":
+                env["ProgramFiles"] = str(root / "program-files")
+                command.append(f"-DCMAKE_MODULE_PATH={sdk / 'lib/cmake'}")
             if hint != "default":
                 command.extend(["-DCMAKE_IGNORE_PREFIX_PATH=/opt/pylon",
                                 "-DCMAKE_IGNORE_PATH=/opt/pylon/lib/cmake"])

@@ -87,25 +87,6 @@ if(POLICY CMP0144)
     cmake_policy(SET CMP0144 NEW)
 endif()
 if(NOT pylon_FOUND)
-    if(WIN32)
-        find_path(CAMERA_PYLON_DEVELOPMENT_ROOT NAMES lib/cmake/Findpylon.cmake
-            HINTS "$ENV{PYLON_DEV_DIR}" "$ENV{PYLON_ROOT}/Development"
-                  "$ENV{ProgramFiles}/Basler/pylon/Development")
-        if(CAMERA_PYLON_DEVELOPMENT_ROOT)
-            list(APPEND CMAKE_MODULE_PATH "${CAMERA_PYLON_DEVELOPMENT_ROOT}/lib/cmake")
-            set(camera_pylon_lib "${CAMERA_PYLON_DEVELOPMENT_ROOT}/lib/x64")
-            if(EXISTS "${camera_pylon_lib}/PylonBase_v12.lib")
-                set(pylon_LIBRARY_DIR "${camera_pylon_lib}" CACHE PATH "pylon library directory" FORCE)
-                foreach(name IN ITEMS Base GUI Utility)
-                    set(pylon${name} "${camera_pylon_lib}/Pylon${name}_v12.lib" CACHE FILEPATH "pylon ${name} library" FORCE)
-                endforeach()
-                foreach(name IN ITEMS GCBase GenApi)
-                    set(${name} "${camera_pylon_lib}/${name}_MD_VC142_v3_5_Basler_pylon_v1.lib"
-                        CACHE FILEPATH "pylon ${name} library" FORCE)
-                endforeach()
-            endif()
-        endif()
-    endif()
     if(APPLE)
         find_path(pylon_cmake
             NAMES pylon-targets.cmake
@@ -129,15 +110,46 @@ if(NOT pylon_FOUND)
             )
         endif()
         if(NOT pylon_FOUND)
+            set(camera_windows_pylon_hints)
+            if(WIN32)
+                list(APPEND camera_windows_pylon_hints
+                    "$ENV{ProgramFiles}/Basler/pylon/Development/lib/cmake")
+            endif()
             find_path(pylon_cmake Findpylon.cmake
-                HINTS "$ENV{PYLON_DEV_DIR}/lib/cmake"
+                HINTS ${CMAKE_MODULE_PATH} "${pylon_DIR}"
+                "$ENV{PYLON_DEV_DIR}/lib/cmake"
                 "$ENV{PYLON_ROOT}/lib/cmake"
                 "$ENV{PYLON_ROOT}/Development/lib/cmake"
+                ${camera_windows_pylon_hints}
                 "$ENV{ProgramFiles}/Basler/pylon 8/Development/lib/cmake"
                 "$ENV{ProgramFiles}/Basler/pylon 7/Development/lib/cmake"
                 "/opt/pylon/lib/cmake"
             )
             if(pylon_cmake)
+                if(WIN32)
+                    # Derive defaults from the selected finder, preserving explicit
+                    # library paths even when another pylon installation is present.
+                    get_filename_component(camera_pylon_lib "${pylon_cmake}/../../lib/x64" ABSOLUTE)
+                    if(pylon_LIBRARY_DIR AND NOT pylon_LIBRARY_DIR MATCHES "-NOTFOUND$")
+                        set(camera_pylon_lib "${pylon_LIBRARY_DIR}")
+                    endif()
+                    if(EXISTS "${camera_pylon_lib}/PylonBase_v12.lib")
+                        if(NOT pylon_LIBRARY_DIR OR pylon_LIBRARY_DIR MATCHES "-NOTFOUND$")
+                            set(pylon_LIBRARY_DIR "${camera_pylon_lib}" CACHE PATH "pylon library directory" FORCE)
+                        endif()
+                        foreach(name IN ITEMS Base GUI Utility)
+                            if(NOT pylon${name} OR pylon${name} MATCHES "-NOTFOUND$")
+                                set(pylon${name} "${camera_pylon_lib}/Pylon${name}_v12.lib" CACHE FILEPATH "pylon ${name} library" FORCE)
+                            endif()
+                        endforeach()
+                        foreach(name IN ITEMS GCBase GenApi)
+                            if(NOT ${name} OR ${name} MATCHES "-NOTFOUND$")
+                                set(${name} "${camera_pylon_lib}/${name}_MD_VC142_v3_5_Basler_pylon_v1.lib"
+                                    CACHE FILEPATH "pylon ${name} library" FORCE)
+                            endif()
+                        endforeach()
+                    endif()
+                endif()
                 list(PREPEND CMAKE_MODULE_PATH "${pylon_cmake}")
             endif()
             find_package(pylon REQUIRED)
