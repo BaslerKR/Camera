@@ -1,4 +1,7 @@
 ## Unreleased
+
+## v1.2.0 (2026-10-13)
+
 - Deliver declared device-tool completion exactly once even when a consumer callback throws; drain accepted workers on controller teardown.
 - Release cached SDK device descriptors before terminating the pylon runtime.
 - Declare neutral device discovery/connection tools on the source controller; select exact transport identities, refuse stale/busy requests or implicit device switching, and share existing SDK lifecycle authority with GUI controls. Refresh GUI device labels through queued copied results.
