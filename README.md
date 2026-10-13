@@ -43,6 +43,18 @@ The optional Playground adapter is disabled by default. Enable `CAMERA_BUILD_PLA
 
 The optional Playground device plugin is a separate MODULE. Enable `CAMERA_BUILD_PLAYGROUND_PLUGIN` only when `Playground::DevicePlugin`, the adapter, and `Camera::QtWidget` are available. It does not belong in the adapter static library. Package identity lives in `Utility/PlaygroundAdapter/Package/Package.cmake` as quoted `set(PLAYGROUND_PLUGIN_* ...)` assignments; the MODULE must set `PLAYGROUND_PLUGIN_PACKAGE` and include `DevicePlugin.h`. The host emits `plugin.json` from that identity plus `DevicePluginPackage.h`.
 
+## SDK discovery validation
+
+Linux first searches for the pylon config package using `pylon_DIR`, standard CMake prefixes, `PYLON_ROOT`, and `/opt/pylon` (including its `share/pylon/cmake` layout). If no config package is available, it tries the SDK-provided `Findpylon.cmake`. Windows retains find-module discovery; macOS retains framework-target discovery.
+
+Run the configure-only regression suite with Python 3, CMake, and Ninja on `PATH`:
+
+```sh
+python path/to/Camera/C++/Tests/test_pylon_discovery.py --work-dir build/pylon-discovery-tests
+```
+
+The ten synthetic SDK-layout cases cover Linux default/custom prefixes, explicit config directories, config preference over a find module, module-only SDKs, missing SDKs, Windows find modules, macOS framework targets, and a consumer-provided SDK target. These checks do not compile vendor headers or establish native Linux/macOS or device acceptance.
+
 ## Acquisition Contract
 
 `Camera::accessFeatures()` executes short feature work under the owning recursive camera and node-map locks, reporting a connection generation to the callback. It returns false while disconnected. Callbacks must not retain node pointers, change camera lifecycle or acquire unrelated locks. The optional device adapter exposes copied remote-node descriptors and typed parameter commands through `IDeviceParameterControl/1.0` on `CameraSourceController`; integer values stay signed 64-bit. Requests carry a controller-instance/connection-generation identity and the complete selecting-feature context. Observed revisions describe queried state, not every intermediate hardware event. Writes revalidate current access and constraints, retain SDK rounding in readback, and distinguish no effect, accepted effect and uncertain SDK completion. There is no implicit selector change, acquisition restart or multi-feature transaction. Root invalidation uses the existing coalesced UI path after SDK locks are released; live refresh remains deferred until stop.

@@ -92,16 +92,27 @@ if(NOT pylon_FOUND)
         set(pylon_FOUND TRUE)
         set(pylon_VERSION "${PACKAGE_VERSION}")
     else()
-        find_path(pylon_cmake Findpylon.cmake
-            HINTS "$ENV{PYLON_DEV_DIR}/lib/cmake"
-            "$ENV{PYLON_ROOT}/lib/cmake"
-            "$ENV{PYLON_ROOT}/Development/lib/cmake"
-            "$ENV{ProgramFiles}/Basler/pylon 8/Development/lib/cmake"
-            "$ENV{ProgramFiles}/Basler/pylon 7/Development/lib/cmake"
-            "/opt/pylon/lib/cmake"
-        )
-        list(APPEND CMAKE_MODULE_PATH ${pylon_cmake})
-        find_package(pylon REQUIRED)
+        # Linux pylon 8 ships a config package under share/pylon/cmake.
+        # Try it before the find-module discovery used by other SDK layouts.
+        if(UNIX)
+            find_package(pylon CONFIG QUIET
+                HINTS "$ENV{PYLON_ROOT}" "/opt/pylon"
+            )
+        endif()
+        if(NOT pylon_FOUND)
+            find_path(pylon_cmake Findpylon.cmake
+                HINTS "$ENV{PYLON_DEV_DIR}/lib/cmake"
+                "$ENV{PYLON_ROOT}/lib/cmake"
+                "$ENV{PYLON_ROOT}/Development/lib/cmake"
+                "$ENV{ProgramFiles}/Basler/pylon 8/Development/lib/cmake"
+                "$ENV{ProgramFiles}/Basler/pylon 7/Development/lib/cmake"
+                "/opt/pylon/lib/cmake"
+            )
+            if(pylon_cmake)
+                list(APPEND CMAKE_MODULE_PATH "${pylon_cmake}")
+            endif()
+            find_package(pylon REQUIRED)
+        endif()
     endif()
 endif()
 
