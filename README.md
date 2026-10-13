@@ -102,7 +102,7 @@ renderer is needed. The plugin switch enables its owning widget/adapter
 consumer-owned.
 
 ```sh
-cmake -S C++ -B build/plugin -DCMAKE_PREFIX_PATH="<PluginSDK>;<Qt-prefix>" -DCAMERA_BUILD_PLAYGROUND_PLUGIN=ON -DCAMERA_BUILD_TESTS=ON
+cmake -S C++ -B build/plugin -DCMAKE_PREFIX_PATH="<PluginSDK>;<Qt-prefix>" -DCMAKE_CONFIGURATION_TYPES=Release -DCMAKE_BUILD_TYPE=Release -DCAMERA_BUILD_PLAYGROUND_PLUGIN=ON -DCAMERA_BUILD_TESTS=ON
 cmake --build build/plugin --config Release --parallel 4
 ctest --test-dir build/plugin -C Release --output-on-failure
 cmake --build build/plugin --config Release --target CameraPluginPackageStage
