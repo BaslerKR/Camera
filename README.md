@@ -92,3 +92,27 @@ Build the core against the installed SDK on every supported platform. Stereo dec
 # Declared device lifecycle capability
 
 The optional source-controller adapter declares `device.targets`, `device.discover`, `device.connection`, `device.connect` and `device.disconnect` through the neutral `IToolProvider` contract. Discovery returns copied full transport identities and labels. Connection commands select exact identities, refuse implicit replacement, and fence stale generations under the existing lifecycle lock. SDK work uses the existing bounded adapter workers; GUI catalog updates receive copied queued results. These generations identify connection lifetimes, not settings-to-acquisition causality.
+
+## Installed consumer SDK plugin build
+
+Build the existing plugin project using this repository, an installed Plugin
+SDK, the matching Qt kit and its vendor SDK. No consumer source tree or
+renderer is needed. The plugin switch enables its owning widget/adapter
+(and vendor SDK implementation where required). Theme installation remains
+consumer-owned.
+
+```sh
+cmake -S C++ -B build/plugin -DCMAKE_PREFIX_PATH="<PluginSDK>;<Qt-prefix>" -DCAMERA_BUILD_PLAYGROUND_PLUGIN=ON -DCAMERA_BUILD_TESTS=ON
+cmake --build build/plugin --config Release --parallel 4
+ctest --test-dir build/plugin -C Release --output-on-failure
+cmake --build build/plugin --config Release --target CameraPluginPackageStage
+```
+
+Supply the existing vendor SDK options when it is not in the documented default
+location. The generated package is `build/plugin/packages/Release/plugins/<id>/current`
+on multi-configuration generators and retains the module-owned runtime layout.
+It includes the manifest, icon and SDK identity. Staging reconciles only this
+generated package. Use a fresh build directory or explicitly update
+`PlaygroundPluginSDK_DIR` when selecting another SDK. This Release software
+gate does not establish physical-device, Debug or cross-platform acceptance.
+Set `CMAKE_BUILD_TYPE=Release` for a single-configuration generator.

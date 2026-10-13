@@ -15,6 +15,16 @@ option(CAMERA_BUILD_QT_WIDGET
     "Build the optional Camera Qt widget target."
     OFF
 )
+if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
+    set(CAMERA_BUILD_PLAYGROUND_ADAPTER ON)
+    set(CAMERA_BUILD_QT_WIDGET ON)
+endif()
+if(PROJECT_NAME STREQUAL "Camera" AND PROJECT_IS_TOP_LEVEL AND
+   (CAMERA_BUILD_PLAYGROUND_ADAPTER OR CAMERA_BUILD_PLAYGROUND_PLUGIN))
+    find_package(PlaygroundPluginSDK 0.1 CONFIG REQUIRED)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+
 set(HEADERS
     Camera.h
     CameraGrabDiagnostics.h
@@ -77,6 +87,25 @@ if(POLICY CMP0144)
     cmake_policy(SET CMP0144 NEW)
 endif()
 if(NOT pylon_FOUND)
+    if(WIN32)
+        find_path(CAMERA_PYLON_DEVELOPMENT_ROOT NAMES lib/cmake/Findpylon.cmake
+            HINTS "$ENV{PYLON_DEV_DIR}" "$ENV{PYLON_ROOT}/Development"
+                  "$ENV{ProgramFiles}/Basler/pylon/Development")
+        if(CAMERA_PYLON_DEVELOPMENT_ROOT)
+            list(APPEND CMAKE_MODULE_PATH "${CAMERA_PYLON_DEVELOPMENT_ROOT}/lib/cmake")
+            set(camera_pylon_lib "${CAMERA_PYLON_DEVELOPMENT_ROOT}/lib/x64")
+            if(EXISTS "${camera_pylon_lib}/PylonBase_v12.lib")
+                set(pylon_LIBRARY_DIR "${camera_pylon_lib}" CACHE PATH "pylon library directory" FORCE)
+                foreach(name IN ITEMS Base GUI Utility)
+                    set(pylon${name} "${camera_pylon_lib}/Pylon${name}_v12.lib" CACHE FILEPATH "pylon ${name} library" FORCE)
+                endforeach()
+                foreach(name IN ITEMS GCBase GenApi)
+                    set(${name} "${camera_pylon_lib}/${name}_MD_VC142_v3_5_Basler_pylon_v1.lib"
+                        CACHE FILEPATH "pylon ${name} library" FORCE)
+                endforeach()
+            endif()
+        endif()
+    endif()
     if(APPLE)
         find_path(pylon_cmake
             NAMES pylon-targets.cmake
@@ -109,7 +138,7 @@ if(NOT pylon_FOUND)
                 "/opt/pylon/lib/cmake"
             )
             if(pylon_cmake)
-                list(APPEND CMAKE_MODULE_PATH "${pylon_cmake}")
+                list(PREPEND CMAKE_MODULE_PATH "${pylon_cmake}")
             endif()
             find_package(pylon REQUIRED)
         endif()
@@ -288,5 +317,26 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
     )
     include("${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Package/RuntimeStaging.cmake")
     camera_prepare_playground_plugin_runtime(CameraPlugin)
+    if(PROJECT_NAME STREQUAL "Camera" AND PROJECT_IS_TOP_LEVEL)
+        if(APPLE)
+            set_target_properties(CameraPlugin PROPERTIES BUILD_WITH_INSTALL_RPATH ON
+                INSTALL_RPATH "@loader_path/runtime;@executable_path/../Frameworks")
+        elseif(UNIX)
+            set_target_properties(CameraPlugin PROPERTIES BUILD_WITH_INSTALL_RPATH ON
+                INSTALL_RPATH "$ORIGIN/runtime")
+        endif()
+        playground_sdk_package_plugin(CameraPlugin
+            PACKAGE_FILE "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Package/Package.cmake"
+            ICON "${PlaygroundPluginSDK_ICON_DIR}/icons8-camera-48.png")
+    endif()
     message(STATUS "[Camera] CameraPlugin enabled.")
 endif()
+
+# Keep contract assertions active in Release validation.
+foreach(module_test IN ITEMS camera_graphics_image_adapter_test camera_grab_diagnostics_test)
+    if(TARGET ${module_test})
+        target_compile_options(${module_test} PRIVATE
+            $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG>
+            $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-UNDEBUG>)
+    endif()
+endforeach()

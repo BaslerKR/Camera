@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Build the standalone device plugin against an installed consumer SDK and stage its module-owned runtime package.
+
 - Discover Linux pylon config packages from explicit CMake paths, PYLON_ROOT, and /opt/pylon before trying the SDK find module; preserve Windows and macOS discovery.
 
 ## v1.2.0 (2026-10-13)
