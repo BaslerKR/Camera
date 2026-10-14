@@ -337,8 +337,9 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
             set_target_properties(CameraPlugin PROPERTIES BUILD_WITH_INSTALL_RPATH ON
                 INSTALL_RPATH "$ORIGIN/runtime")
         endif()
+        get_target_property(camera_package_file CameraPlugin PLAYGROUND_PLUGIN_PACKAGE)
         playground_sdk_package_plugin(CameraPlugin
-            PACKAGE_FILE "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Package/Package.cmake"
+            PACKAGE_FILE "${camera_package_file}"
             ICON "${PlaygroundPluginSDK_ICON_DIR}/icons8-camera-48.png")
     endif()
     message(STATUS "[Camera] CameraPlugin enabled.")

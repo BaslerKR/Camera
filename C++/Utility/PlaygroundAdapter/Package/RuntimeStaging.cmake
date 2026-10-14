@@ -124,4 +124,28 @@ function(camera_prepare_playground_plugin_runtime target_name)
             PLAYGROUND_PLUGIN_RUNTIME_PAYLOAD_DIR "${payload_dir}"
         )
     endif()
+    if(WIN32)
+        # pylon's processing and stereo components are optional installer features.
+        # Declare search paths only for components actually included in this payload.
+        get_target_property(package_file ${target_name} PLAYGROUND_PLUGIN_PACKAGE)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${package_file}")
+        file(READ "${package_file}" package_content)
+        set(library_directories "runtime")
+        set(environment_paths "GENICAM_GENTL64_PATH=runtime")
+        foreach(component DataProcessingPluginsB pylonDataProcessingPlugins stereo-mini)
+            if(IS_DIRECTORY "${payload_dir}/${component}")
+                list(APPEND library_directories "runtime/${component}")
+                if(component STREQUAL "stereo-mini")
+                    list(APPEND environment_paths "GENICAM_GENTL64_PATH=runtime/stereo-mini")
+                endif()
+            endif()
+        endforeach()
+        string(APPEND package_content
+            "\nset(PLAYGROUND_PLUGIN_LIBRARY_DIRECTORIES \"${library_directories}\")\n"
+            "set(PLAYGROUND_PLUGIN_ENVIRONMENT_PATHS \"${environment_paths}\")\n")
+        set(resolved_package "${CMAKE_CURRENT_BINARY_DIR}/camera-package/Package.cmake")
+        file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/camera-package")
+        file(WRITE "${resolved_package}" "${package_content}")
+        set_property(TARGET ${target_name} PROPERTY PLAYGROUND_PLUGIN_PACKAGE "${resolved_package}")
+    endif()
 endfunction()

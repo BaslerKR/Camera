@@ -1,5 +1,6 @@
 ## Unreleased
 
+- Declare Windows pylon processing/stereo runtime paths only when those optional installer components are staged.
 - Resolve Windows pylon 12 library defaults from the selected finder without replacing explicit library paths.
 - Document explicit Release-only installed SDK configuration.
 - Build the standalone device plugin against an installed consumer SDK and stage its module-owned runtime package.
