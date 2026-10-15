@@ -3,7 +3,7 @@
 # Host schema, ABI, and icon names come from DevicePluginPackage.h.
 # Repeat NAME=value to declare multiple environment paths for one variable.
 set(PLAYGROUND_PLUGIN_ID "camera")
-set(PLAYGROUND_PLUGIN_VERSION "1.0.2")
+set(PLAYGROUND_PLUGIN_VERSION "1.2.1")
 set(PLAYGROUND_PLUGIN_DISPLAY_NAME "Camera")
 # Optional presentation metadata; consumers must export it to manifests/catalogs.
 set(PLAYGROUND_PLUGIN_SUBTITLE "Basler pylon")

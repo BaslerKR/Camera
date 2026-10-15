@@ -1,5 +1,9 @@
 ## Unreleased
 
+## v1.2.1 (2026-10-15)
+
+- Publish the independently built device package with installed SDK validation.
+
 - Declare Windows pylon processing/stereo runtime paths only when those optional installer components are staged.
 - Resolve Windows pylon 12 library defaults from the selected finder without replacing explicit library paths.
 - Document explicit Release-only installed SDK configuration.
