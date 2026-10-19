@@ -52,7 +52,7 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
 
     // Create the toolbuttons
     _toolRefresh = new QToolButton(this);
-    _toolRefresh->setIcon(QIcon(":/Resources/Icons/icons8-refresh-48.png"));
+    _toolRefresh->setIcon(QIcon(":/Resources/icon/refresh-48.png"));
     _toolRefresh->setToolButtonStyle(Qt::ToolButtonIconOnly);
     _toolRefresh->setIconSize(QSize(16, 16));
     _toolConnect = new QToolButton(this);
@@ -66,7 +66,7 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
         _toolConnect->setIcon(icon);
     }
     _toolGrabOne = new QToolButton(this);
-    _toolGrabOne->setIcon(QIcon(":/Resources/Icons/icons8-camera-48.png"));
+    _toolGrabOne->setIcon(QIcon(":/Resources/icon/camera-48.png"));
     _toolGrabOne->setEnabled(false);
     _toolGrabOne->setToolButtonStyle(Qt::ToolButtonIconOnly);
     _toolGrabOne->setIconSize(QSize(16, 16));
@@ -77,8 +77,8 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     _toolGrabLive->setIconSize(QSize(16, 16));
     {
         QIcon icon;
-        icon.addFile(":/Resources/Icons/icons8-cameras-48.png", QSize(), QIcon::Normal, QIcon::Off);
-        icon.addFile(":/Resources/Icons/icons8-pause-48.png", QSize(), QIcon::Normal, QIcon::On);
+        icon.addFile(":/Resources/icon/cameras-48.png", QSize(), QIcon::Normal, QIcon::Off);
+        icon.addFile(":/Resources/icon/pause-48.png", QSize(), QIcon::Normal, QIcon::On);
         _toolGrabLive->setIcon(icon);
     }
 
