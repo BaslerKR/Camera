@@ -61,8 +61,8 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     _toolConnect->setIconSize(QSize(16, 16));
     {
         QIcon icon;
-        icon.addFile(":/Resources/Icons/icons8-connect-48.png", QSize(), QIcon::Normal, QIcon::Off);
-        icon.addFile(":/Resources/Icons/icons8-disconnected-48.png", QSize(), QIcon::Normal, QIcon::On);
+        icon.addFile(":/Resources/icon/connect-48.png", QSize(), QIcon::Normal, QIcon::Off);
+        icon.addFile(":/Resources/icon/disconnected-48.png", QSize(), QIcon::Normal, QIcon::On);
         _toolConnect->setIcon(icon);
     }
     _toolGrabOne = new QToolButton(this);

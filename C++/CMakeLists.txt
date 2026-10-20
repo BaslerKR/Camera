@@ -340,7 +340,7 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
         get_target_property(camera_package_file CameraPlugin PLAYGROUND_PLUGIN_PACKAGE)
         playground_sdk_package_plugin(CameraPlugin
             PACKAGE_FILE "${camera_package_file}"
-            ICON "${PlaygroundPluginSDK_ICON_DIR}/icons8-camera-48.png")
+            ICON "${PlaygroundPluginSDK_ICON_DIR}/camera-48.png")
     endif()
     message(STATUS "[Camera] CameraPlugin enabled.")
 endif()
