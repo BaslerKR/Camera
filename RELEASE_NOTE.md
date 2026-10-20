@@ -1,4 +1,4 @@
-## Unreleased
+## v1.2.2 (2026-10-20)
 
 - Use the shared neutral camera artwork for the package icon.
 
