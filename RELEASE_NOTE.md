@@ -1,12 +1,10 @@
-## v1.2.2 (2026-10-20)
+## v1.2.1 (2026-10-20)
 
 - Use the shared neutral camera artwork for the package icon.
 
 - Use the shared connect and disconnect artwork for connection controls.
 
 - Use the shared refresh, single-grab, and live glyphs on the device toolbar.
-
-## v1.2.1 (2026-10-15)
 
 - Publish the independently built device package with installed SDK validation.
 
