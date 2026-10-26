@@ -15,6 +15,10 @@
 
 - Discover Linux pylon config packages from explicit CMake paths, PYLON_ROOT, and /opt/pylon before trying the SDK find module; preserve Windows and macOS discovery.
 
+## Unreleased
+
+- Share the SDK-independent Qt control composition between the runtime widget and isolated presentation consumers.
+
 ## v1.2.0 (2026-10-13)
 
 - Deliver declared device-tool completion exactly once even when a consumer callback throws; drain accepted workers on controller teardown.

@@ -120,3 +120,11 @@ generated package. Use a fresh build directory or explicitly update
 `PlaygroundPluginSDK_DIR` when selecting another SDK. This Release software
 gate does not establish physical-device, Debug or cross-platform acceptance.
 Set `CMAKE_BUILD_TYPE=Release` for a single-configuration generator.
+
+## Qt presentation
+
+`C++/Utility/Qt` provides the SDK-independent `CameraPresentation` target.
+The runtime Qt widget and isolated presentation consumers use the same
+`CameraControlUi` composition; device discovery, feature access and
+acquisition remain in the runtime widget. The presentation target does not
+install an application theme.

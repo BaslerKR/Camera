@@ -10,6 +10,7 @@
  */
 
 #ifdef QT_GUI_LIB
+#include "CameraControlUi.h"
 #include <QWidget>
 #include <QObject>
 #include <QTreeWidget>
@@ -32,7 +33,7 @@
 #include <memory>
 #include <mutex>
 
-class QCameraWidget : public QWidget
+class QCameraWidget : public QWidget, protected CameraControlUi
 {
     Q_OBJECT
 public:
@@ -81,17 +82,9 @@ private:
     int _pendingParameterWrites = 0;
     std::atomic<bool> _shuttingDown{false};
     std::atomic<bool> _grabbing{false};
-    QTreeWidget *_featuresWidget;
-    QComboBox *_cameraListComboBox;
 
-    QToolButton *_toolRefresh;
-    QToolButton *_toolConnect;
-    QToolButton *_toolGrabOne;
-    QToolButton *_toolGrabLive;
 
-    QStatusBar *_statusBar;
     bool _rebuildScheduled = false;
-    QLabel *_statusLabel = nullptr;
     QTimer *_nodeUpdateTimer = nullptr;
     std::mutex _nodeUpdateMutex;
     QSet<QString> _pendingNodeUpdates;

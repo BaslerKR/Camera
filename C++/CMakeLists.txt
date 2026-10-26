@@ -62,6 +62,7 @@ if(CAMERA_BUILD_QT_WIDGET)
 
     find_package(${_camera_qt_package} REQUIRED COMPONENTS Core Gui Widgets)
 
+    add_subdirectory(Utility/Qt)
     add_library(CameraQtWidget STATIC ${QT_HEADERS} ${QT_SOURCES})
     add_library(Camera::QtWidget ALIAS CameraQtWidget)
     set_target_properties(CameraQtWidget PROPERTIES AUTOMOC ON)
@@ -353,3 +354,7 @@ foreach(module_test IN ITEMS camera_graphics_image_adapter_test camera_grab_diag
             $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-UNDEBUG>)
     endif()
 endforeach()
+
+if(TARGET CameraQtWidget)
+    target_link_libraries(CameraQtWidget PUBLIC CameraPresentation)
+endif()
