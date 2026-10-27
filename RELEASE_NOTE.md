@@ -17,6 +17,10 @@
 
 ## Unreleased
 
+- Declare only the staged runtime directories in the macOS package, so the host admits it.
+
+- Run the configure-only pylon discovery checks with make on Linux and macOS hosts without Ninja.
+
 - Share the SDK-independent Qt control composition between the runtime widget and isolated presentation consumers.
 
 ## v1.2.0 (2026-10-13)

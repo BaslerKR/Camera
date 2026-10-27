@@ -124,9 +124,11 @@ function(camera_prepare_playground_plugin_runtime target_name)
             PLAYGROUND_PLUGIN_RUNTIME_PAYLOAD_DIR "${payload_dir}"
         )
     endif()
-    if(WIN32)
-        # pylon's processing and stereo components are optional installer features.
-        # Declare search paths only for components actually included in this payload.
+    if(payload_dir)
+        # pylon's processing and stereo components are optional Windows installer
+        # features, and the macOS framework payload has none of them. The host
+        # rejects a declared directory that is missing, so declare search paths
+        # only for components actually included in this payload.
         get_target_property(package_file ${target_name} PLAYGROUND_PLUGIN_PACKAGE)
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${package_file}")
         file(READ "${package_file}" package_content)
