@@ -51,7 +51,8 @@ machine-wide pylon installation; pylon 12 name defaults fill unresolved values.
 
 Linux first searches for the pylon config package using `pylon_DIR`, standard CMake prefixes, `PYLON_ROOT`, and `/opt/pylon` (including its `share/pylon/cmake` layout). If no config package is available, it tries the SDK-provided `Findpylon.cmake`. Windows retains find-module discovery; macOS retains framework-target discovery.
 
-Run the configure-only regression suite with Python 3, CMake, and Ninja on `PATH`:
+Run the configure-only regression suite with Python 3 and CMake on `PATH`. It
+uses Ninja when available; Linux and macOS hosts without Ninja use `make`:
 
 ```sh
 python path/to/Camera/C++/Tests/test_pylon_discovery.py --work-dir build/pylon-discovery-tests

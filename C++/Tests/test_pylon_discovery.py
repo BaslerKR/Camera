@@ -18,9 +18,13 @@ def main():
                         default=Path(__file__).resolve().parents[1])
     parser.add_argument("--work-dir", type=Path, required=True)
     args = parser.parse_args()
+    # Any single-configuration generator can configure the synthetic layouts.
+    # Prefer Ninja; Unix hosts without it use the make tool they already have.
     ninja = shutil.which("ninja")
-    if not ninja:
-        parser.error("Ninja must be available on PATH")
+    make = None if ninja or os.name == "nt" else shutil.which("make")
+    if not ninja and not make:
+        parser.error("Ninja (or make on Linux/macOS) must be available on PATH")
+    generator, make_program = ("Ninja", ninja) if ninja else ("Unix Makefiles", make)
     args.work_dir.mkdir(parents=True, exist_ok=True)
     camera = args.camera_source.resolve().as_posix()
     cases = [
@@ -106,13 +110,13 @@ def main():
                    if k.upper() not in ("PYLON_ROOT", "PYLON_DEV_DIR", "PYLON_DIR", "CMAKE_PREFIX_PATH", "CMAKE_MODULE_PATH", "PROGRAMFILES")}
             env["ProgramFiles"] = str(root / "unused-program-files")
             command = ["cmake", "-S", str(source), "-B", str(root / "build"),
-                       "-G", "Ninja", f"-DCMAKE_TOOLCHAIN_FILE={toolchain}",
+                       "-G", generator, f"-DCMAKE_TOOLCHAIN_FILE={toolchain}",
                        "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF",
                        "-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF",
                        "-DCMAKE_FIND_USE_CMAKE_SYSTEM_PATH=OFF",
                        "-DCMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH=OFF"]
-            # Supply Ninja explicitly because system-environment searching is disabled.
-            command.append(f"-DCMAKE_MAKE_PROGRAM={ninja}")
+            # Supply the build tool explicitly because system-environment searching is disabled.
+            command.append(f"-DCMAKE_MAKE_PROGRAM={make_program}")
             if name == "windows-pylon12-overrides":
                 command += [f"-DpylonBase={expected_base}", f"-DGenApi={expected_genapi}"]
             if name == "windows-explicit-finder":
