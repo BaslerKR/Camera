@@ -17,6 +17,8 @@
 
 ## Unreleased
 
+- Declare semantic layout, device-panel and action-density scopes through Qt properties; preserve independent plain-Qt builds without a theme dependency.
+
 - Declare only the staged runtime directories in the macOS package, so the host admits it.
 
 - Run the configure-only pylon discovery checks with make on Linux and macOS hosts without Ninja.

@@ -3,6 +3,8 @@
 
 
 void CameraControlUi::create(QWidget* owner) {
+    owner->setProperty("actionDensity", "compact");
+    owner->setProperty("controlRole", "devicePanel");
 
     owner->setWindowTitle("Basler pylon Camera Configuration");
     owner->setMinimumSize(300, 350);
@@ -51,26 +53,31 @@ void CameraControlUi::create(QWidget* owner) {
 
     QHBoxLayout *cameraListLayout = new QHBoxLayout;
     cameraListLayout->setObjectName(QStringLiteral("DeviceSelectorLayout"));
+    cameraListLayout->setProperty("layoutRole", "row");
     cameraListLayout->addWidget(_cameraListComboBox);
     cameraListLayout->addWidget(_toolRefresh);
 
     QHBoxLayout *toolButtonLayout = new QHBoxLayout;
     toolButtonLayout->setObjectName(QStringLiteral("DeviceToolLayout"));
+    toolButtonLayout->setProperty("layoutRole", "actions");
     toolButtonLayout->addWidget(_toolConnect);
     toolButtonLayout->addWidget(_toolGrabOne);
     toolButtonLayout->addWidget(_toolGrabLive);
 
     auto *listAndButtonLayout = new QHBoxLayout;
     listAndButtonLayout->setObjectName(QStringLiteral("DeviceTopBarLayout"));
+    listAndButtonLayout->setProperty("layoutRole", "content");
     listAndButtonLayout->addLayout(cameraListLayout);
     listAndButtonLayout->addLayout(toolButtonLayout);
 
     auto *featuresWidgetLayout = new QVBoxLayout;
     featuresWidgetLayout->setObjectName(QStringLiteral("DeviceTreePanelLayout"));
+    featuresWidgetLayout->setProperty("layoutRole", "bottom-panel");
     featuresWidgetLayout->addWidget(_featuresWidget);
 
     auto *layout = new QVBoxLayout;
     layout->setObjectName(QStringLiteral("DeviceRootLayout"));
+    layout->setProperty("layoutRole", "flush");
     layout->addLayout(listAndButtonLayout);
     layout->addLayout(featuresWidgetLayout);
 
