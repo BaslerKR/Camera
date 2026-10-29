@@ -17,6 +17,8 @@
 
 ## Unreleased
 
+- Connect and Grab Live icons name the current state (`disconnected`/`connect`, `pause`/`cameras`); the host theme previews the other state on hover. Commands, tooltips and checked state are unchanged.
+
 - Declare semantic layout, device-panel and action-density scopes through Qt properties; preserve independent plain-Qt builds without a theme dependency.
 
 - Declare only the staged runtime directories in the macOS package, so the host admits it.

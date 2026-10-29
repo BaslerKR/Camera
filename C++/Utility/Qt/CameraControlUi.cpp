@@ -30,8 +30,9 @@ void CameraControlUi::create(QWidget* owner) {
     _toolConnect->setIconSize(QSize(16, 16));
     {
         QIcon icon;
-        icon.addFile(":/Resources/icon/connect-48.png", QSize(), QIcon::Normal, QIcon::Off);
-        icon.addFile(":/Resources/icon/disconnected-48.png", QSize(), QIcon::Normal, QIcon::On);
+        // The glyph names the current state; the shared theme previews the other state on hover.
+        icon.addFile(":/Resources/icon/disconnected-48.png", QSize(), QIcon::Normal, QIcon::Off);
+        icon.addFile(":/Resources/icon/connect-48.png", QSize(), QIcon::Normal, QIcon::On);
         _toolConnect->setIcon(icon);
     }
     _toolGrabOne = new QToolButton(owner);
@@ -46,8 +47,9 @@ void CameraControlUi::create(QWidget* owner) {
     _toolGrabLive->setIconSize(QSize(16, 16));
     {
         QIcon icon;
-        icon.addFile(":/Resources/icon/cameras-48.png", QSize(), QIcon::Normal, QIcon::Off);
-        icon.addFile(":/Resources/icon/pause-48.png", QSize(), QIcon::Normal, QIcon::On);
+        // Paused while stopped, live while grabbing.
+        icon.addFile(":/Resources/icon/pause-48.png", QSize(), QIcon::Normal, QIcon::Off);
+        icon.addFile(":/Resources/icon/cameras-48.png", QSize(), QIcon::Normal, QIcon::On);
         _toolGrabLive->setIcon(icon);
     }
 
