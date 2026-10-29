@@ -17,7 +17,12 @@
 
 ## Unreleased
 
-- Connect and Grab Live icons name the current state (`disconnected`/`connect`, `pause`/`cameras`); the host theme previews the other state on hover. Commands, tooltips and checked state are unchanged.
+- Disable connection changes and single-grab commands during acquisition; recompute availability after pending operations and restore it after stop. Reject connection toggles while acquisition is active.
+
+- Show the next Live grab command with cameras/stop artwork in all pointer and focus states, and keep its tooltip and accessible name synchronized with acquisition state.
+
+
+- Connect icons name the current state (`disconnected`/`connect`); a consumer theme can preview the other state on hover.
 
 - Declare semantic layout, device-panel and action-density scopes through Qt properties; preserve independent plain-Qt builds without a theme dependency.
 

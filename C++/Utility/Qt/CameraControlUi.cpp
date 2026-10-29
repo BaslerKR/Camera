@@ -47,10 +47,13 @@ void CameraControlUi::create(QWidget* owner) {
     _toolGrabLive->setIconSize(QSize(16, 16));
     {
         QIcon icon;
-        // Paused while stopped, live while grabbing.
-        icon.addFile(":/Resources/icon/pause-48.png", QSize(), QIcon::Normal, QIcon::Off);
-        icon.addFile(":/Resources/icon/cameras-48.png", QSize(), QIcon::Normal, QIcon::On);
+        // Always show the next acquisition command, including during hover.
+        icon.addFile(":/Resources/icon/cameras-48.png", QSize(), QIcon::Normal, QIcon::Off);
+        icon.addFile(":/Resources/icon/stop-48.png", QSize(), QIcon::Normal, QIcon::On);
+        _toolGrabLive->setProperty("iconStateRole", "action");
         _toolGrabLive->setIcon(icon);
+        QObject::connect(_toolGrabLive, &QToolButton::toggled, owner, [this] { updateLiveAction(); });
+        updateLiveAction();
     }
 
     QHBoxLayout *cameraListLayout = new QHBoxLayout;
@@ -95,4 +98,13 @@ void CameraControlUi::create(QWidget* owner) {
     layout->addWidget(_statusBar);
     owner->setLayout(layout);
 
+}
+
+void CameraControlUi::updateLiveAction()
+{
+    const QString command = _toolGrabLive->isChecked()
+        ? QCoreApplication::translate("QCameraWidget", "Stop live acquisition")
+        : QCoreApplication::translate("QCameraWidget", "Start live acquisition");
+    _toolGrabLive->setToolTip(command);
+    _toolGrabLive->setAccessibleName(command);
 }

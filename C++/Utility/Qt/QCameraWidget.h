@@ -63,6 +63,8 @@ private:
     void startRefreshOperation();
     void setRefreshOperationActive(bool active);
     void updateCameraSelectorState();
+    /** @brief Recomputes connection and single-grab availability from observed acquisition and pending work. */
+    void updateAcquisitionControls();
     /** Queues one camera-node update without growing the Qt event queue. */
     void enqueueNodeUpdate(const QString& nodeName);
     /** Starts the GUI-thread timer that drains a coalesced node-update batch. */

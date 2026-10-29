@@ -8,6 +8,8 @@ class QLineEdit; class QTabWidget; class OneGenFeatureTree;
 struct CameraControlUi {
     /** @brief Creates the same controls used by the runtime widget. */
     void create(QWidget* owner);
+    /** @brief Synchronizes the next command after observed or local acquisition state changes. */
+    void updateLiveAction();
     QTreeWidget* _featuresWidget = nullptr;
     QComboBox* _cameraListComboBox = nullptr;
     QToolButton* _toolRefresh = nullptr;

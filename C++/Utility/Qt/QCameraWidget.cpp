@@ -71,10 +71,10 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
             case Camera::GrabbingStatus:{
                 if(on){ // Grabbing started
                     QSignalBlocker grabbingBlock(guard->_toolGrabLive);
-                    guard->_toolGrabLive->setChecked(true);
+                    guard->_toolGrabLive->setChecked(true); guard->updateLiveAction();
                 }else{ // Grabbing stopped
                     QSignalBlocker grabbingBlock(guard->_toolGrabLive);
-                    guard->_toolGrabLive->setChecked(false);
+                    guard->_toolGrabLive->setChecked(false); guard->updateLiveAction();
                 }
                 guard->updateGrabState(on);
             }break;
@@ -153,6 +153,14 @@ void QCameraWidget::updateCameraSelectorState()
     _cameraListComboBox->setEnabled(enabled);
 }
 
+void QCameraWidget::updateAcquisitionControls()
+{
+    const bool idle = _camera && !_shuttingDown && !_connectionOperationActive
+        && !_refreshOperationActive && !_grabbing.load(std::memory_order_acquire);
+    _toolConnect->setEnabled(idle);
+    _toolGrabOne->setEnabled(idle && _camera->isOpened());
+}
+
 void QCameraWidget::prepareForShutdown()
 {
     _shuttingDown.store(true, std::memory_order_release);
@@ -197,6 +205,12 @@ void QCameraWidget::prepareForShutdown()
 void QCameraWidget::startConnectionOperation(const bool open, const QString& cameraName)
 {
     if(!_camera || _shuttingDown || _connectionThread) return;
+    if (_grabbing.load(std::memory_order_acquire)) {
+        // Reject a programmatic toggle as well as clicks while acquisition is active.
+        const QSignalBlocker blocker(_toolConnect);
+        _toolConnect->setChecked(_camera->isOpened());
+        return;
+    }
 
     const std::string selectedCameraName = cameraName.toStdString();
     const auto result = std::make_shared<bool>(false);
@@ -248,10 +262,9 @@ void QCameraWidget::setConnectionOperationActive(const bool active)
     _connectionOperationActive = active;
 
     const bool opened = _camera && _camera->isOpened();
-    _toolConnect->setEnabled(!active);
+    updateAcquisitionControls();
     updateCameraSelectorState();
     _toolRefresh->setEnabled(!active && !opened);
-    _toolGrabOne->setEnabled(!active && opened);
     _toolGrabLive->setEnabled(!active && opened);
 
     updateStatusLabel();
@@ -317,7 +330,7 @@ void QCameraWidget::setRefreshOperationActive(const bool active)
 
     _toolRefresh->setEnabled(!active);
     updateCameraSelectorState();
-    _toolConnect->setEnabled(!active);
+    updateAcquisitionControls();
 
     updateStatusLabel();
 }
@@ -337,8 +350,7 @@ void QCameraWidget::applyConnectionState(const bool opened)
 
     updateCameraSelectorState();
     _toolRefresh->setEnabled(!opened);
-    _toolConnect->setEnabled(true);
-    _toolGrabOne->setEnabled(opened);
+    updateAcquisitionControls();
     _toolGrabLive->setEnabled(opened);
 
     updateStatusLabel();
@@ -348,7 +360,7 @@ void QCameraWidget::applyConnectionState(const bool opened)
     }else{
         {
             QSignalBlocker grabBlock(_toolGrabLive);
-            _toolGrabLive->setChecked(false);
+            _toolGrabLive->setChecked(false); updateLiveAction();
         }
         updateGrabState(false);
         _featuresWidget->clear();
@@ -1067,6 +1079,7 @@ void QCameraWidget::logMessage(const QString& message, bool error)
 void QCameraWidget::updateGrabState(bool grabbing)
 {
     const bool wasGrabbing = _grabbing.exchange(grabbing, std::memory_order_acq_rel);
+    updateAcquisitionControls();
     if(grabbing){
         if(_nodeUpdateTimer) _nodeUpdateTimer->stop();
         std::lock_guard<std::mutex> lock(_nodeUpdateMutex);
