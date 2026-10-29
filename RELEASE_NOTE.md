@@ -17,6 +17,8 @@
 
 ## Unreleased
 
+## v1.2.2 (2026-10-29)
+
 - Disable connection changes and single-grab commands during acquisition; recompute availability after pending operations and restore it after stop. Reject connection toggles while acquisition is active.
 
 - Show the next Live grab command with cameras/stop artwork in all pointer and focus states, and keep its tooltip and accessible name synchronized with acquisition state.
