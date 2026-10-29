@@ -17,6 +17,8 @@
 
 ## Unreleased
 
+- Align the plugin binary display name with the package manifest as `Camera` to avoid a metadata mismatch warning during loading.
+
 ## v1.2.2 (2026-10-29)
 
 - Disable connection changes and single-grab commands during acquisition; recompute availability after pending operations and restore it after stop. Reject connection toggles while acquisition is active.
