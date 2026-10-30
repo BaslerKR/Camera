@@ -142,7 +142,7 @@ class CameraPlugin final : public DevicePluginTemplate {
 public:
     DevicePluginDescriptor descriptor() const override
     {
-        return {QStringLiteral("camera"), QStringLiteral("Camera"), playgroundDevicePluginVersion(), true};
+        return {QStringLiteral("camera"), playgroundDevicePluginDisplayName(), playgroundDevicePluginVersion(), true};
     }
 
     bool discoverDevices(QVariantMap* discoveryData, QString* errorMessage) override

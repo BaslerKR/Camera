@@ -18,6 +18,7 @@
 ## Unreleased
 
 - Align the plugin binary display name with the package manifest as `Camera` to avoid a metadata mismatch warning during loading.
+- Take the binary display name from the package definition.
 
 ## v1.2.2 (2026-10-29)
 
