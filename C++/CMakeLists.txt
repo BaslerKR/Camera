@@ -328,6 +328,35 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
         Qt6::OpenGLWidgets
         Qt6::Concurrent
     )
+    if(CAMERA_BUILD_TESTS)
+        # The controller sources are compiled into the plugin MODULE, so the test compiles them too.
+        find_package(Qt6 REQUIRED COMPONENTS Test)
+        add_executable(camera_parameter_control_test
+            Utility/PlaygroundAdapter/Tests/ParameterControlTest.cpp
+            Utility/PlaygroundAdapter/Source/CameraSourceController.cpp
+            Utility/PlaygroundAdapter/Source/CameraParameterControl.cpp
+        )
+        set_target_properties(camera_parameter_control_test PROPERTIES AUTOMOC ON)
+        target_compile_features(camera_parameter_control_test PRIVATE cxx_std_17)
+        target_include_directories(camera_parameter_control_test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Source"
+        )
+        target_link_libraries(camera_parameter_control_test PRIVATE
+            Playground::DevicePlugin
+            Camera::QtWidget
+            Camera::PlaygroundAdapter
+            Qt6::Widgets
+            Qt6::Concurrent
+            Qt6::Test
+        )
+        # Emulator-backed cases skip when the pylon camera emulator is not installed.
+        add_test(NAME camera_parameter_control_test COMMAND camera_parameter_control_test)
+        set_tests_properties(camera_parameter_control_test PROPERTIES
+            ENVIRONMENT "PYLON_CAMEMU=1;QT_QPA_PLATFORM=offscreen"
+            TIMEOUT 300
+        )
+    endif()
     include("${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Package/RuntimeStaging.cmake")
     camera_prepare_playground_plugin_runtime(CameraPlugin)
     if(PROJECT_NAME STREQUAL "Camera" AND PROJECT_IS_TOP_LEVEL)
