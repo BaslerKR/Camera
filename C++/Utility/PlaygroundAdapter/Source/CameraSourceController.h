@@ -1,8 +1,8 @@
 #pragma once
 #include "AbstractSourceController.h"
 #include "Camera.h"
+#include "DeviceConnectionControl.h"
 #include "DeviceParameterControl.h"
-#include "ToolProvider.h"
 #include <map>
 #include <QSet>
 #include <QThread>
@@ -11,11 +11,12 @@
 
 class PylonGraphicsFrameStream;
 
-class CameraSourceController : public AbstractSourceController, public IDeviceParameterControl, public IToolProvider {
+class CameraSourceController : public AbstractSourceController, public IDeviceParameterControl, public IDeviceConnectionControl {
     Q_OBJECT
-    Q_INTERFACES(IDeviceParameterControl IToolProvider)
+    Q_INTERFACES(IDeviceParameterControl IDeviceConnectionControl)
 public:
     using Completion = IDeviceParameterControl::Completion;
+    using TargetsCompletion = IDeviceConnectionControl::TargetsCompletion;
     explicit CameraSourceController(Camera* camera, QObject* parent = nullptr);
     ~CameraSourceController() override;
 
@@ -44,10 +45,18 @@ public:
     /** @brief Admits bounded worker command execution. */
     DeviceParameterResult requestExecuteParameter(DeviceParameterTarget target,
         std::optional<std::uint64_t> expectedRevision, Completion completion) override;
-    /** @brief Declares neutral discovery and connection tools without SDK work during metadata queries. */
-    QList<ToolDescriptor> toolDescriptors() const override;
-    /** @brief Routes standard calls through existing system/lifecycle authority and bounded workers. */
-    ApiResult<void> requestTool(const QString& name, int version, QJsonObject arguments, IToolProvider::Completion completion) override;
+    /** @brief Declares Single/Live unavailable: acquisition uses the common source controls. */
+    DeviceConnectionCapabilities connectionCapabilities() const override;
+    /** @brief Copies the cached system catalog on a bounded worker. */
+    DeviceConnectionResult requestConnectionTargets(TargetsCompletion completion) override;
+    /** @brief Refreshes the catalog through the existing system discovery authority. */
+    DeviceConnectionResult requestDiscover(TargetsCompletion completion) override;
+    /** @brief Copies the logical connection; the id is this controller plus its reconnect generation. */
+    DeviceConnectionResult requestConnectionState(IDeviceConnectionControl::Completion completion) override;
+    /** @brief Connects an exact cached target while disconnected. */
+    DeviceConnectionResult requestConnect(std::string targetId, IDeviceConnectionControl::Completion completion) override;
+    /** @brief Uses the existing stopped/drained teardown for the exact current connection. */
+    DeviceConnectionResult requestDisconnect(std::string connectionId, IDeviceConnectionControl::Completion completion) override;
 signals:
     /** @brief Publishes copied discovered labels for queued GUI selector refresh. */
     void deviceCatalogChanged(QStringList names);
@@ -55,6 +64,14 @@ signals:
 private:
     /** @brief Owns accepted worker lifetime independently of the caller's wait. */
     DeviceParameterResult scheduleParameterWork(std::function<void()> work);
+    /** @brief Runs lifecycle work on the same bounded workers and delivers it exactly once. */
+    DeviceConnectionResult scheduleConnectionWork(std::function<DeviceConnectionResult()> work,
+        IDeviceConnectionControl::Completion completion);
+    DeviceConnectionResult catalogWork(bool refresh, TargetsCompletion completion);
+    DeviceConnectionResult connectionOutcome(CameraConnectionOutcome outcome, const CameraConnectionState& state) const;
+    /** @brief Matches the parameter target connection id, so one id addresses both capabilities. */
+    std::string connectionIdFor(const CameraConnectionState& state) const;
+    DeviceConnectionState copiedConnectionState(const CameraConnectionState& state) const;
     QSet<QThread*> _parameterWorkers;
     bool _parameterClosing = false;
     void registerCallbacks();

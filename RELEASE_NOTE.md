@@ -1,5 +1,6 @@
 ## Unreleased
 
+- Connect, disconnect and discover cameras through Playground's standard device connection tools, which work the same for every device. The connection is identified by one id that changes on every reconnect and also addresses device features; Single and Live stay on the common source controls. Builds against Plugin SDK 0.2 and requires a Playground release with the standard device connection interface.
 - Declare what kind of data each automation tool returns, so Playground can limit what connected assistants receive. Requires a Playground release with the updated automation interface; earlier releases do not list this package's automation tools.
 
 ## v1.2.1 (2026-10-20)

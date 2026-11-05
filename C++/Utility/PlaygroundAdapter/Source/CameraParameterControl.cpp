@@ -1,6 +1,5 @@
 #include "CameraSourceController.h"
 #include <QThread>
-#include <QJsonArray>
 #include <algorithm>
 #include <limits>
 #include <set>
@@ -302,91 +301,119 @@ DeviceParameterResult CameraSourceController::requestExecuteParameter(DevicePara
     });
 }
 
-QList<ToolDescriptor> CameraSourceController::toolDescriptors() const {
-    Q_ASSERT(QThread::currentThread() == thread());
-    const auto object = [](QJsonObject properties, QJsonArray required) {
-        return QJsonObject{{"type", "object"}, {"properties", properties}, {"required", required}, {"additionalProperties", false}};
-    };
-    const QJsonObject text{{"type", "string"}}, flag{{"type", "boolean"}};
-    const QJsonObject identity{{"type", "string"}, {"minLength", 1}};
-    const QJsonObject generation{{"type", "string"}, {"pattern", "^(0|[1-9][0-9]{0,19})$"}};
-    const auto target = object({{"id", identity}, {"displayName", text}}, {"id", "displayName"});
-    const auto state = object({{"connected", flag}, {"connectionGeneration", generation}, {"deviceId", text}, {"displayName", text}},
-        {"connected", "connectionGeneration", "deviceId", "displayName"});
-    const auto empty = object({}, {});
-    const bool available = _camera && !_parameterClosing;
-    const QString reason = available ? QString() : QStringLiteral("Camera controller lifetime is unavailable.");
-    return {
-        {"device.targets", 1, "Cached device targets", "Copy exact module-owned device identities; no refresh or implicit selection.", ToolEffect::Observe, ToolEgress::Metadata, available, reason, empty, {{"type", "array"}, {"items", target}}},
-        {"device.discover", 1, "Discover device targets", "Refresh through the existing system discovery authority on a bounded worker.", ToolEffect::Observe, ToolEgress::Metadata, available, reason, empty, {{"type", "array"}, {"items", target}}},
-        {"device.connection", 1, "Connection state", "Copy logical connection and reconnect generation; not an acquisition fence.", ToolEffect::Observe, ToolEgress::Metadata, available, reason, empty, state},
-        {"device.connect", 1, "Connect exact target", "Connect an exact discovered identity at a known generation; never silently replace a connected target.", ToolEffect::Device, ToolEgress::Metadata, available, reason,
-            object({{"deviceId", identity}, {"expectedGeneration", generation}}, {"deviceId", "expectedGeneration"}), state},
-        {"device.disconnect", 1, "Disconnect target", "Use existing stopped/drained SDK teardown at a known generation; failures are explicit.", ToolEffect::Device, ToolEgress::Metadata, available, reason,
-            object({{"expectedGeneration", generation}}, {"expectedGeneration"}), state}
-    };
+namespace {
+DeviceConnectionError connectionError(DeviceParameterError error) {
+    return error == DeviceParameterError::Busy ? DeviceConnectionError::Busy : DeviceConnectionError::Unavailable;
+}
 }
 
-ApiResult<void> CameraSourceController::requestTool(const QString& name, int version, QJsonObject arguments, IToolProvider::Completion completion) {
+std::string CameraSourceController::connectionIdFor(const CameraConnectionState& state) const {
+    return state.connected ? _parameterInstance + ":" + std::to_string(state.generation) : std::string();
+}
+
+DeviceConnectionState CameraSourceController::copiedConnectionState(const CameraConnectionState& state) const {
+    return {state.connected, state.connected && _isGrabbing.load(), connectionIdFor(state),
+        state.connected ? state.deviceId : std::string(), state.connected ? state.displayName : std::string(), std::nullopt};
+}
+
+DeviceConnectionCapabilities CameraSourceController::connectionCapabilities() const {
     Q_ASSERT(QThread::currentThread() == thread());
-    if (version != 1) return ApiResult<void>::failure(ApiErrorCode::Unsupported, "Unsupported device tool version.");
-    if (!completion) return ApiResult<void>::failure(ApiErrorCode::InvalidArgument, "A device completion is required.");
-    if (!_camera || _parameterClosing) return ApiResult<void>::failure(ApiErrorCode::Unavailable, "Camera controller is unavailable.");
-    const bool connect = name == "device.connect", disconnect = name == "device.disconnect";
-    if (!connect && !disconnect && name != "device.targets" && name != "device.discover" && name != "device.connection")
-        return ApiResult<void>::failure(ApiErrorCode::NotFound, "The device tool is not declared.");
-    quint64 generation = 0;
-    if (connect || disconnect) {
-        const auto value = arguments.value("expectedGeneration"); bool valid = false;
-        generation = value.toString().toULongLong(&valid);
-        if (!value.isString() || !valid || QString::number(generation) != value.toString()
-            || (connect && (!arguments.value("deviceId").isString() || arguments.value("deviceId").toString().isEmpty())))
-            return ApiResult<void>::failure(ApiErrorCode::InvalidArgument, "Exact device identity and canonical unsigned generation are required.");
-        for (const auto& key : arguments.keys()) if (key != "expectedGeneration" && !(connect && key == "deviceId"))
-            return ApiResult<void>::failure(ApiErrorCode::InvalidArgument, "Unexpected device argument.");
-    } else if (!arguments.isEmpty()) return ApiResult<void>::failure(ApiErrorCode::InvalidArgument, "Observation tools take empty arguments.");
-    const auto admitted = scheduleParameterWork([this, name, arguments, generation, completion = std::move(completion)] {
-        using Result = ApiResult<QJsonValue>;
-        const auto deliver = [&completion](Result result) noexcept {
-            // A consumer exception is not a backend failure and must never redeliver completion.
-            try { completion(std::move(result)); } catch (...) {}
-        };
-        try {
-            if (name == "device.targets" || name == "device.discover") {
-                QJsonArray targets;
-                QStringList labels;
-                for (const auto& item : _camera->deviceCatalog(name == "device.discover")) {
-                    targets.append(QJsonObject{{"id", QString::fromStdString(item.id)}, {"displayName", QString::fromStdString(item.displayName)}});
-                    labels.append(QString::fromStdString(item.displayName));
-                }
-                if (name == "device.discover") emit deviceCatalogChanged(labels);
-                deliver(Result::success(targets)); return;
-            }
-            auto state = _camera->connectionState();
-            if (name != "device.connection") {
-                const auto outcome = _camera->controlConnection(name == "device.connect", arguments.value("deviceId").toString().toStdString(), generation, &state);
-                if (outcome != CameraConnectionOutcome::Success) {
-                    const auto code = outcome == CameraConnectionOutcome::Busy ? ApiErrorCode::Busy
-                        : outcome == CameraConnectionOutcome::Conflict || outcome == CameraConnectionOutcome::AlreadyConnected ? ApiErrorCode::Conflict
-                        : outcome == CameraConnectionOutcome::NotFound ? ApiErrorCode::NotFound : ApiErrorCode::Unavailable;
-                    deliver(Result::failure(code, outcome == CameraConnectionOutcome::AlreadyConnected ? "Disconnect the current target explicitly before connecting another."
-                        : outcome == CameraConnectionOutcome::Conflict ? "The connection generation changed."
-                        : outcome == CameraConnectionOutcome::Busy ? "The existing lifecycle/feature authority is busy."
-                        : outcome == CameraConnectionOutcome::NotFound ? "The exact target is absent from the module catalog."
-                        : "The SDK connection command failed; accepted effects may have occurred.",
-                        {{"effect", outcome == CameraConnectionOutcome::Failed ? "unknown" : "none"}})); return;
-                }
-            }
-            deliver(Result::success(QJsonObject{{"connected", state.connected}, {"connectionGeneration", QString::number(state.generation)},
-                {"deviceId", QString::fromStdString(state.deviceId)}, {"displayName", QString::fromStdString(state.displayName)}}));
-        } catch (const Pylon::GenericException& error) {
-            deliver(Result::failure(ApiErrorCode::Unavailable, QString::fromUtf8(error.GetDescription())));
-        } catch (const std::exception& error) {
-            deliver(Result::failure(ApiErrorCode::Unavailable, QString::fromUtf8(error.what())));
-        } catch (...) {
-            deliver(Result::failure(ApiErrorCode::Unavailable, "The owning device command failed."));
-        }
+    if (!_camera || _parameterClosing) {
+        const DeviceConnectionAvailability closed{false, "Camera controller lifetime is unavailable."};
+        return {closed, closed, closed, closed, closed, closed};
+    }
+    const DeviceConnectionAvailability yes{true, {}};
+    const DeviceConnectionAvailability acquisition{false, "Camera acquisition uses source.start and source.stop."};
+    return {yes, yes, yes, yes, acquisition, acquisition};
+}
+
+DeviceConnectionResult CameraSourceController::scheduleConnectionWork(std::function<DeviceConnectionResult()> work,
+    IDeviceConnectionControl::Completion completion) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!completion) return {DeviceConnectionError::InvalidArgument, "Missing completion callback."};
+    if (!_camera) return {DeviceConnectionError::Unavailable, "Camera controller is unavailable."};
+    const auto admitted = scheduleParameterWork([work = std::move(work), completion = std::move(completion)] {
+        DeviceConnectionResult result;
+        try { result = work(); }
+        catch (const Pylon::GenericException& error) { result = {DeviceConnectionError::BackendFailure, error.GetDescription(), DeviceConnectionEffect::Unknown}; }
+        catch (const std::exception& error) { result = {DeviceConnectionError::BackendFailure, error.what(), DeviceConnectionEffect::Unknown}; }
+        catch (...) { result = {DeviceConnectionError::BackendFailure, "The owning device command failed.", DeviceConnectionEffect::Unknown}; }
+        // A consumer exception is not a backend failure and must never redeliver completion.
+        try { completion(std::move(result)); } catch (...) {}
     });
-    return admitted.error == DeviceParameterError::None ? ApiResult<void>::success()
-        : ApiResult<void>::failure(admitted.error == DeviceParameterError::Busy ? ApiErrorCode::Busy : ApiErrorCode::Unavailable, QString::fromStdString(admitted.message));
+    if (admitted.error == DeviceParameterError::None) return {};
+    return {connectionError(admitted.error), admitted.message};
+}
+
+DeviceConnectionResult CameraSourceController::catalogWork(bool refresh, TargetsCompletion completion) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!completion) return {DeviceConnectionError::InvalidArgument, "Missing completion callback."};
+    if (!_camera) return {DeviceConnectionError::Unavailable, "Camera controller is unavailable."};
+    const auto admitted = scheduleParameterWork([this, refresh, completion = std::move(completion)] {
+        DeviceConnectionTargets copied;
+        try {
+            QStringList labels;
+            for (const auto& item : _camera->deviceCatalog(refresh)) {
+                copied.targets.push_back({item.id, item.displayName, {}});
+                labels.append(QString::fromStdString(item.displayName));
+            }
+            if (refresh) emit deviceCatalogChanged(labels);
+        } catch (const std::exception& error) {
+            copied = {{DeviceConnectionError::BackendFailure, error.what()}, {}};
+        } catch (...) {
+            copied = {{DeviceConnectionError::BackendFailure, "The camera discovery authority failed."}, {}};
+        }
+        try { completion(std::move(copied)); } catch (...) {}
+    });
+    if (admitted.error == DeviceParameterError::None) return {};
+    return {connectionError(admitted.error), admitted.message};
+}
+
+DeviceConnectionResult CameraSourceController::requestConnectionTargets(TargetsCompletion completion) {
+    return catalogWork(false, std::move(completion));
+}
+
+DeviceConnectionResult CameraSourceController::requestDiscover(TargetsCompletion completion) {
+    return catalogWork(true, std::move(completion));
+}
+
+DeviceConnectionResult CameraSourceController::requestConnectionState(IDeviceConnectionControl::Completion completion) {
+    return scheduleConnectionWork([this]() -> DeviceConnectionResult {
+        return {{}, {}, {}, copiedConnectionState(_camera->connectionState())};
+    }, std::move(completion));
+}
+
+/** @brief Maps lifecycle outcomes; only an SDK command failure leaves the effect uncertain. */
+DeviceConnectionResult CameraSourceController::connectionOutcome(CameraConnectionOutcome outcome, const CameraConnectionState& state) const {
+    switch (outcome) {
+    case CameraConnectionOutcome::Success: return {{}, {}, DeviceConnectionEffect::Applied, copiedConnectionState(state)};
+    case CameraConnectionOutcome::Busy: return {DeviceConnectionError::Busy, "The existing lifecycle/feature authority is busy."};
+    case CameraConnectionOutcome::Conflict: return {DeviceConnectionError::Conflict, "The connection changed; observe it again."};
+    case CameraConnectionOutcome::AlreadyConnected:
+        return {DeviceConnectionError::Conflict, "Disconnect the current target explicitly before connecting another."};
+    case CameraConnectionOutcome::NotFound: return {DeviceConnectionError::NotFound, "The exact target is absent from the module catalog."};
+    case CameraConnectionOutcome::Failed: break;
+    }
+    return {DeviceConnectionError::BackendFailure, "The SDK connection command failed; accepted effects may have occurred.",
+        DeviceConnectionEffect::Unknown, copiedConnectionState(state)};
+}
+
+DeviceConnectionResult CameraSourceController::requestConnect(std::string targetId, IDeviceConnectionControl::Completion completion) {
+    return scheduleConnectionWork([this, targetId = std::move(targetId)]() -> DeviceConnectionResult {
+        auto state = _camera->connectionState();
+        if (state.connected)
+            return {DeviceConnectionError::Conflict, "Disconnect the current target explicitly before connecting another."};
+        const auto outcome = _camera->controlConnection(true, targetId, state.generation, &state);
+        return connectionOutcome(outcome, state);
+    }, std::move(completion));
+}
+
+DeviceConnectionResult CameraSourceController::requestDisconnect(std::string connectionId, IDeviceConnectionControl::Completion completion) {
+    return scheduleConnectionWork([this, connectionId = std::move(connectionId)]() -> DeviceConnectionResult {
+        auto state = _camera->connectionState();
+        if (!state.connected) return {DeviceConnectionError::Disconnected, "The camera is disconnected."};
+        if (connectionIdFor(state) != connectionId) return {DeviceConnectionError::Conflict, "The connection changed; observe it again."};
+        const auto outcome = _camera->controlConnection(false, {}, state.generation, &state);
+        return connectionOutcome(outcome, state);
+    }, std::move(completion));
 }
