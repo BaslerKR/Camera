@@ -317,12 +317,12 @@ QList<ToolDescriptor> CameraSourceController::toolDescriptors() const {
     const bool available = _camera && !_parameterClosing;
     const QString reason = available ? QString() : QStringLiteral("Camera controller lifetime is unavailable.");
     return {
-        {"device.targets", 1, "Cached device targets", "Copy exact module-owned device identities; no refresh or implicit selection.", ToolEffect::Observe, available, reason, empty, {{"type", "array"}, {"items", target}}},
-        {"device.discover", 1, "Discover device targets", "Refresh through the existing system discovery authority on a bounded worker.", ToolEffect::Observe, available, reason, empty, {{"type", "array"}, {"items", target}}},
-        {"device.connection", 1, "Connection state", "Copy logical connection and reconnect generation; not an acquisition fence.", ToolEffect::Observe, available, reason, empty, state},
-        {"device.connect", 1, "Connect exact target", "Connect an exact discovered identity at a known generation; never silently replace a connected target.", ToolEffect::Device, available, reason,
+        {"device.targets", 1, "Cached device targets", "Copy exact module-owned device identities; no refresh or implicit selection.", ToolEffect::Observe, ToolEgress::Metadata, available, reason, empty, {{"type", "array"}, {"items", target}}},
+        {"device.discover", 1, "Discover device targets", "Refresh through the existing system discovery authority on a bounded worker.", ToolEffect::Observe, ToolEgress::Metadata, available, reason, empty, {{"type", "array"}, {"items", target}}},
+        {"device.connection", 1, "Connection state", "Copy logical connection and reconnect generation; not an acquisition fence.", ToolEffect::Observe, ToolEgress::Metadata, available, reason, empty, state},
+        {"device.connect", 1, "Connect exact target", "Connect an exact discovered identity at a known generation; never silently replace a connected target.", ToolEffect::Device, ToolEgress::Metadata, available, reason,
             object({{"deviceId", identity}, {"expectedGeneration", generation}}, {"deviceId", "expectedGeneration"}), state},
-        {"device.disconnect", 1, "Disconnect target", "Use existing stopped/drained SDK teardown at a known generation; failures are explicit.", ToolEffect::Device, available, reason,
+        {"device.disconnect", 1, "Disconnect target", "Use existing stopped/drained SDK teardown at a known generation; failures are explicit.", ToolEffect::Device, ToolEgress::Metadata, available, reason,
             object({{"expectedGeneration", generation}}, {"expectedGeneration"}), state}
     };
 }

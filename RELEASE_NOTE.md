@@ -1,3 +1,7 @@
+## Unreleased
+
+- Declare what kind of data each automation tool returns, so Playground can limit what connected assistants receive. Requires a Playground release with the updated automation interface; earlier releases do not list this package's automation tools.
+
 ## v1.2.1 (2026-10-20)
 
 - Use the shared neutral camera artwork for the package icon.
