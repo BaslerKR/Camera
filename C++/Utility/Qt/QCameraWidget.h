@@ -22,7 +22,10 @@
 #include <QStatusBar>
 #include <QCheckBox>
 #include <QLineEdit>
+#include <QElapsedTimer>
 #include <QTimer>
+#include <chrono>
+#include <cstdint>
 #include <QSet>
 #include "Camera.h"
 
@@ -88,6 +91,12 @@ private:
 
     bool _rebuildScheduled = false;
     QTimer *_nodeUpdateTimer = nullptr;
+    QTimer *_diagnosticsTimer = nullptr;
+    QElapsedTimer _diagnosticsClock;
+    std::chrono::steady_clock::time_point _diagnosticsSample{};
+    bool _hasDiagnosticsSample = false;
+    std::uint64_t _lastDelivered = 0;
+    qint64 _lastDiagnosticsLogMs = 0;
     std::mutex _nodeUpdateMutex;
     QSet<QString> _pendingNodeUpdates;
     bool _nodeUpdateDrainScheduled = false;
@@ -97,6 +106,8 @@ private:
     void logMessage(const QString& msg, bool isError = false);
     void updateGrabState(bool grabbing);
     void updateStatusLabel();
+    void updateDiagnostics();
+    void setDiagnosticsVisible(bool visible);
 
     template <typename Func, typename Cleanup>
     void runAsyncWrite(Func&& writeFunc, Cleanup&& cleanupFunc) {

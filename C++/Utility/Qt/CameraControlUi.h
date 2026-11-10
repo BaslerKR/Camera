@@ -18,4 +18,6 @@ struct CameraControlUi {
     QToolButton* _toolGrabLive = nullptr;
     QStatusBar* _statusBar = nullptr;
     QLabel* _statusLabel = nullptr;
+    QLabel* _failedLabel = nullptr;
+    QLabel* _fpsLabel = nullptr;
 };

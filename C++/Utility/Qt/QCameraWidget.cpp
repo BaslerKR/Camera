@@ -1,5 +1,6 @@
 #include "QCameraWidget.h"
 #ifdef QT_GUI_LIB
+#include <QStyle>
 #include <QToolButton>
 #include <QAction>
 #include <QDebug>
@@ -42,6 +43,10 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
     _nodeUpdateTimer->setSingleShot(true);
     _nodeUpdateTimer->setInterval(100);
     connect(_nodeUpdateTimer, &QTimer::timeout, this, &QCameraWidget::drainNodeUpdates);
+
+    _diagnosticsTimer = new QTimer(this);
+    _diagnosticsTimer->setInterval(1000);
+    connect(_diagnosticsTimer, &QTimer::timeout, this, &QCameraWidget::updateDiagnostics);
 
 
     updateGrabState(false);
@@ -165,6 +170,7 @@ void QCameraWidget::prepareForShutdown()
 {
     _shuttingDown.store(true, std::memory_order_release);
     if(_nodeUpdateTimer) _nodeUpdateTimer->stop();
+    if(_diagnosticsTimer) _diagnosticsTimer->stop();
     {
         std::lock_guard<std::mutex> lock(_nodeUpdateMutex);
         _pendingNodeUpdates.clear();
@@ -1080,6 +1086,18 @@ void QCameraWidget::updateGrabState(bool grabbing)
 {
     const bool wasGrabbing = _grabbing.exchange(grabbing, std::memory_order_acq_rel);
     updateAcquisitionControls();
+    if (grabbing && !wasGrabbing) {
+        _lastDelivered = 0;
+        _hasDiagnosticsSample = false;
+        _lastDiagnosticsLogMs = 0;
+        _diagnosticsClock.start();
+        setDiagnosticsVisible(true);
+        _diagnosticsTimer->start();
+    } else if (!grabbing && wasGrabbing) {
+        _diagnosticsTimer->stop();
+        _hasDiagnosticsSample = false;
+        setDiagnosticsVisible(false);
+    }
     if(grabbing){
         if(_nodeUpdateTimer) _nodeUpdateTimer->stop();
         std::lock_guard<std::mutex> lock(_nodeUpdateMutex);
@@ -1104,5 +1122,74 @@ void QCameraWidget::updateStatusLabel()
     const bool opened = _camera && _camera->isOpened();
     _statusLabel->setText(!opened ? QStringLiteral("Idle")
         : _grabbing ? QStringLiteral("Live") : QStringLiteral("Connected"));
+}
+
+void QCameraWidget::setDiagnosticsVisible(const bool visible)
+{
+    if (visible) {
+        if (_failedLabel) {
+            _failedLabel->hide();
+            _failedLabel->setText(QStringLiteral("0 failed"));
+            _failedLabel->setProperty("failedState", QStringLiteral("normal"));
+        }
+        if (_fpsLabel) {
+            _fpsLabel->setText(QStringLiteral("0.0 fps"));
+            _fpsLabel->show();
+        }
+    } else {
+        if (_failedLabel) _failedLabel->hide();
+        if (_fpsLabel) _fpsLabel->hide();
+    }
+}
+
+void QCameraWidget::updateDiagnostics()
+{
+    if (!_camera || _shuttingDown.load(std::memory_order_acquire)
+        || !_grabbing.load(std::memory_order_acquire)) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    const auto diagnostics = _camera->runtimeDiagnostics();
+    double fps = 0.0;
+    if (_hasDiagnosticsSample) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            now - _diagnosticsSample).count();
+        if (elapsed > 0 && diagnostics.delivered >= _lastDelivered) {
+            fps = static_cast<double>(diagnostics.delivered - _lastDelivered)
+                * 1.0e9 / static_cast<double>(elapsed);
+        }
+    }
+    _lastDelivered = diagnostics.delivered;
+    _diagnosticsSample = now;
+    _hasDiagnosticsSample = true;
+
+    if (_failedLabel) {
+        const bool showFailed = diagnostics.failed > 0;
+        if (showFailed) {
+            _failedLabel->setText(QStringLiteral("%1 failed").arg(
+                static_cast<qulonglong>(diagnostics.failed)));
+            if (_failedLabel->property("failedState").toString()
+                != QStringLiteral("warning")) {
+                _failedLabel->setProperty("failedState", QStringLiteral("warning"));
+                _failedLabel->style()->unpolish(_failedLabel);
+                _failedLabel->style()->polish(_failedLabel);
+            }
+        }
+        _failedLabel->setVisible(showFailed);
+    }
+    if (_fpsLabel) {
+        _fpsLabel->setText(QStringLiteral("%1 fps").arg(fps, 0, 'f', 1));
+    }
+
+    const qint64 elapsed = _diagnosticsClock.elapsed();
+    if (elapsed - _lastDiagnosticsLogMs >= 5000) {
+        qInfo().noquote() << QStringLiteral(
+            "[Camera UI] diagnostics: camera=%1 live=%2 failed=%3 fps=%4")
+            .arg(QString::fromStdString(_camera->getConnectedCameraName()))
+            .arg(diagnostics.grabbing ? QStringLiteral("true") : QStringLiteral("false"))
+            .arg(static_cast<qulonglong>(diagnostics.failed))
+            .arg(fps, 0, 'f', 1);
+        _lastDiagnosticsLogMs = elapsed;
+    }
 }
 #endif

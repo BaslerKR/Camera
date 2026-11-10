@@ -86,3 +86,10 @@ bool CameraSourceController::supports3D() const {
     const PylonScene3DProfile profile = _camera->scene3DProfile();
     return profile.family != PylonScene3DProfile::DeviceFamily::Image2D;
 }
+
+SourceRuntimeDiagnostics CameraSourceController::runtimeDiagnostics(
+    const unsigned sourceIndex) const {
+    if (!_camera || sourceIndex != 0U) return {};
+    const auto diagnostics = _camera->runtimeDiagnostics();
+    return {diagnostics.grabbing, diagnostics.delivered, diagnostics.failed};
+}

@@ -9,11 +9,22 @@
 #include <chrono>
 #include <exception>
 #include <initializer_list>
+#include <iomanip>
 #include <limits>
 #include <optional>
+#include <sstream>
 #include <string>
 
 namespace {
+
+std::string fpsText(const std::uint64_t frames, const std::int64_t elapsedMs)
+{
+    if(elapsedMs <= 0) return "0.0";
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(1)
+        << (static_cast<double>(frames) * 1000.0 / static_cast<double>(elapsedMs));
+    return out.str();
+}
 
 template<typename Callback>
 using CallbackRegistry = std::unordered_map<size_t, Callback>;
@@ -554,6 +565,8 @@ void Camera::grab(const size_t frames){
         const bool triggerMode = _currentCamera.TriggerMode.GetValue()
             == Basler_UniversalCameraParams::TriggerModeEnums::TriggerMode_On;
         _grabErrorCount.store(0, std::memory_order_release);
+        _runDelivered.store(0, std::memory_order_release);
+        _runFailed.store(0, std::memory_order_release);
         if(triggerMode){
             _currentCamera.MaxNumBuffer = 30;
             _currentCamera.StartGrabbing(GrabStrategy_OneByOne, GrabLoop_ProvidedByUser);
@@ -585,6 +598,7 @@ void Camera::grab(const size_t frames){
                     if(_currentCamera.RetrieveResult(1000, grabResult, Pylon::TimeoutHandling_Return)){
                         if(grabResult->GrabSucceeded()){
                             auto seq = _frameSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
+                            _runDelivered.fetch_add(1, std::memory_order_relaxed);
                             const auto callbackStarted = std::chrono::steady_clock::now();
                             if(_streamKind.load(std::memory_order_acquire) == StreamKind::MultiPart3D){
                                 try{
@@ -619,8 +633,13 @@ void Camera::grab(const size_t frames){
                             ++delivered;
                             const auto now = std::chrono::steady_clock::now();
                             if(now >= nextProgressLog){
+                                const auto progressMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    now - workerStarted).count();
                                 CameraSystem::syslog("[DEBUG] Grab worker progress: frames="
-                                    + std::to_string(delivered) + ", lastCallbackMs="
+                                    + std::to_string(delivered) + ", failed="
+                                    + std::to_string(_runFailed.load(std::memory_order_relaxed))
+                                    + ", fps=" + fpsText(delivered, progressMs)
+                                    + ", lastCallbackMs="
                                     + std::to_string(callbackTime.count()) + ", maxCallbackMs="
                                     + std::to_string(maximumCallbackTime.count()) + ".");
                                 nextProgressLog = now + std::chrono::seconds(10);
@@ -633,6 +652,7 @@ void Camera::grab(const size_t frames){
                             }
                         } else {
                             ++failedResults;
+                            _runFailed.fetch_add(1, std::memory_order_relaxed);
                             if (CameraGrabDiagnostics::shouldReportFailure(failedResults)) {
                                 const auto cameraName = getConnectedCameraName();
                                 const auto errorDescription = grabResult->GetErrorDescription();
@@ -677,7 +697,10 @@ void Camera::grab(const size_t frames){
             const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - workerStarted).count();
             CameraSystem::syslog("[DEBUG] Grab worker finished: frames="
-                + std::to_string(delivered) + ", elapsedMs=" + std::to_string(elapsedMs)
+                + std::to_string(delivered) + ", failed="
+                + std::to_string(_runFailed.load(std::memory_order_relaxed))
+                + ", fps=" + fpsText(delivered, elapsedMs)
+                + ", elapsedMs=" + std::to_string(elapsedMs)
                 + ", maxCallbackMs=" + std::to_string(maximumCallbackTime.count())
                 + ", slowCallbacks=" + std::to_string(slowCallbackCount) + ".");
         });
@@ -720,6 +743,13 @@ void Camera::stop(){
 void Camera::requestStop()
 {
     _isRunning.store(false, std::memory_order_release);
+}
+
+CameraRuntimeDiagnostics Camera::runtimeDiagnostics() const noexcept
+{
+    return {_isRunning.load(std::memory_order_acquire),
+        _runDelivered.load(std::memory_order_acquire),
+        _runFailed.load(std::memory_order_acquire)};
 }
 
 std::vector<string> Camera::getUpdatedCameraList() const {

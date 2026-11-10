@@ -14,6 +14,7 @@
 #include "PylonScene3DProfile.h"
 #include <thread>
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <unordered_map>
@@ -23,6 +24,12 @@ using namespace Pylon;
 using namespace std;
 
 class CameraSystem;
+/** @brief Live producer counters for the Camera device statusbar. */
+struct CameraRuntimeDiagnostics {
+    bool grabbing = false;
+    std::uint64_t delivered = 0;
+    std::uint64_t failed = 0;
+};
 /** @brief Copies a transport-owned target identity independently of feature widgets. */
 struct CameraDeviceDescriptor { std::string id; std::string displayName; };
 /** @brief Copies current logical connection identity without querying SDK features. */
@@ -120,6 +127,8 @@ public:
     void stop();
     /** Requests worker stop without joining the caller. */
     void requestStop();
+    /** @brief Returns live producer counters for the device statusbar. */
+    [[nodiscard]] CameraRuntimeDiagnostics runtimeDiagnostics() const noexcept;
 
     std::vector<std::string> getUpdatedCameraList() const;
     std::vector<std::string> getCachedCameraList() const;
@@ -193,6 +202,8 @@ private:
     std::atomic<size_t> _frameSeq{0};
     std::atomic<size_t> _frameTarget{0};
     std::atomic<size_t> _grabErrorCount{0};
+    std::atomic<std::uint64_t> _runDelivered{0};
+    std::atomic<std::uint64_t> _runFailed{0};
     std::atomic<StreamKind> _streamKind{StreamKind::Image2D};
     std::vector<std::string> _registeredNodeEventNames;
     mutable std::mutex _scene3DProfileMutex;
