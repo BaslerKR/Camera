@@ -1,5 +1,6 @@
 #include "Utility/Qt/QCameraWidget.h"
 #include "CameraSystem.h"
+#include <QLabel>
 #include <QtTest>
 
 namespace {
@@ -18,6 +19,16 @@ public:
     QToolButton* connection() const { return _toolConnect; }
     QToolButton* single() const { return _toolGrabOne; }
     QToolButton* live() const { return _toolGrabLive; }
+    QLabel* failedBubble() const { return _failedLabel; }
+    QLabel* fpsBubble() const { return _fpsLabel; }
+    void setFakeDiagnostics(const CameraRuntimeDiagnostics& diagnostics) { _fakeDiagnostics = diagnostics; }
+    void refreshDiagnostics() { updateDiagnostics(); }
+
+protected:
+    CameraRuntimeDiagnostics runtimeDiagnostics() const override { return _fakeDiagnostics; }
+
+private:
+    CameraRuntimeDiagnostics _fakeDiagnostics;
 };
 }
 
@@ -52,6 +63,34 @@ private slots:
         QVERIFY(!widget.connection()->isEnabled());
         QVERIFY(!widget.single()->isEnabled());
         QVERIFY(!widget.live()->isEnabled());
+    }
+    void diagnosticsBubblesFollowLiveAndFailureState() {
+        CameraSystem system;
+        ObservedCamera camera(&system);
+        ControlWidget widget(nullptr, &camera);
+        camera.publishGrabState(true);
+        QTRY_VERIFY(widget.live()->isChecked());
+
+        widget.setFakeDiagnostics({true, 0, 0});
+        widget.refreshDiagnostics();
+        QVERIFY(!widget.fpsBubble()->isHidden());
+        QVERIFY(widget.failedBubble()->isHidden());
+
+        widget.setFakeDiagnostics({true, 10, 3});
+        widget.refreshDiagnostics();
+        QVERIFY(!widget.fpsBubble()->isHidden());
+        QVERIFY(!widget.failedBubble()->isHidden());
+        QCOMPARE(widget.failedBubble()->property("failedState").toString(),
+                 QStringLiteral("warning"));
+
+        widget.setFakeDiagnostics({true, 20, 0});
+        widget.refreshDiagnostics();
+        QVERIFY(widget.failedBubble()->isHidden());
+
+        camera.publishGrabState(false);
+        QTRY_VERIFY(!widget.live()->isChecked());
+        QVERIFY(widget.fpsBubble()->isHidden());
+        QVERIFY(widget.failedBubble()->isHidden());
     }
 };
 QTEST_MAIN(AcquisitionControlsTest)

@@ -1142,14 +1142,19 @@ void QCameraWidget::setDiagnosticsVisible(const bool visible)
     }
 }
 
+CameraRuntimeDiagnostics QCameraWidget::runtimeDiagnostics() const
+{
+    return _camera ? _camera->runtimeDiagnostics() : CameraRuntimeDiagnostics{};
+}
+
 void QCameraWidget::updateDiagnostics()
 {
-    if (!_camera || _shuttingDown.load(std::memory_order_acquire)
+    if (_shuttingDown.load(std::memory_order_acquire)
         || !_grabbing.load(std::memory_order_acquire)) {
         return;
     }
     const auto now = std::chrono::steady_clock::now();
-    const auto diagnostics = _camera->runtimeDiagnostics();
+    const auto diagnostics = runtimeDiagnostics();
     double fps = 0.0;
     if (_hasDiagnosticsSample) {
         const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1183,9 +1188,12 @@ void QCameraWidget::updateDiagnostics()
 
     const qint64 elapsed = _diagnosticsClock.elapsed();
     if (elapsed - _lastDiagnosticsLogMs >= 5000) {
+        const QString camera = _camera
+            ? QString::fromStdString(_camera->getConnectedCameraName())
+            : QStringLiteral("camera");
         qInfo().noquote() << QStringLiteral(
             "[Camera UI] diagnostics: camera=%1 live=%2 failed=%3 fps=%4")
-            .arg(QString::fromStdString(_camera->getConnectedCameraName()))
+            .arg(camera)
             .arg(diagnostics.grabbing ? QStringLiteral("true") : QStringLiteral("false"))
             .arg(static_cast<qulonglong>(diagnostics.failed))
             .arg(fps, 0, 'f', 1);

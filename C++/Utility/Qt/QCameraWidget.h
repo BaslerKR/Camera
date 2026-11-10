@@ -56,6 +56,12 @@ public:
     void collectExpandedNodeNames(QTreeWidgetItem* item, QSet<QString>& expandedNodeNames) const;
     void restoreExpandedNodeNames(QTreeWidgetItem* item, const QSet<QString>& expandedNodeNames);
 
+protected:
+    /** @brief Returns the live producer counters; tests may override with a fake source. */
+    [[nodiscard]] virtual CameraRuntimeDiagnostics runtimeDiagnostics() const;
+    /** @brief Samples the counters and refreshes the telemetry bubbles. */
+    void updateDiagnostics();
+
 private:
     bool isCameraReady() const;
     GenApi::INode* resolveNode(const QString& nodeName) const;
@@ -106,7 +112,6 @@ private:
     void logMessage(const QString& msg, bool isError = false);
     void updateGrabState(bool grabbing);
     void updateStatusLabel();
-    void updateDiagnostics();
     void setDiagnosticsVisible(bool visible);
 
     template <typename Func, typename Cleanup>

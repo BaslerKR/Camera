@@ -1,7 +1,6 @@
 #pragma once
 #include "AbstractSourceController.h"
 #include "Camera.h"
-#include "DeviceDiagnostics.h"
 #include "DeviceConnectionControl.h"
 #include "DeviceParameterControl.h"
 #include <map>
@@ -26,8 +25,6 @@ public:
     bool isGrabbing() const override;
     void setFrameConsumer(FrameConsumer consumer) override;
     bool supports3D() const override;
-    /** @brief Returns producer counters for the device statusbar. */
-    [[nodiscard]] SourceRuntimeDiagnostics runtimeDiagnostics(unsigned sourceIndex) const;
     /** @brief Copies current remote-device parameters without widget state. */
     DeviceParameterResult parameters(std::vector<DeviceParameterDescriptor>* output);
     /** @brief Reads an exact connection-scoped parameter. */
