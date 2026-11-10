@@ -21,16 +21,6 @@ namespace {
     return request;
 }
 
-class CameraReadyGuard final
-{
-public:
-    explicit CameraReadyGuard(Camera* camera) noexcept : _camera(camera) {}
-    ~CameraReadyGuard() { if (_camera) _camera->ready(); }
-
-private:
-    Camera* _camera;
-};
-
 } // namespace
 
 class PylonGraphicsFrameStream::Impl final
@@ -66,7 +56,6 @@ PylonGraphicsFrameStream::Impl::Impl(
         [this, callbackToken](const Pylon::CPylonImage& image, const std::size_t sequence) {
             GraphicsFrameCallbackGate::Lease lease(callbackToken);
             if (!lease) return;
-            CameraReadyGuard ready(_camera);
             try
             {
                 GraphicsImage graphicsImage = _adapter.convertGraphicsImage(image, sequence);
@@ -91,7 +80,6 @@ PylonGraphicsFrameStream::Impl::Impl(
         [this, callbackToken](const Pylon::CPylonDataContainer& container, const std::size_t) {
             GraphicsFrameCallbackGate::Lease lease(callbackToken);
             if (!lease) return;
-            CameraReadyGuard ready(_camera);
             try
             {
                 auto frame = _adapter.convertGraphicsFrame(

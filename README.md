@@ -1,6 +1,6 @@
 # Camera
 
-Camera is a C++17 acquisition library for Basler cameras supported by the pylon SDK. It owns SDK initialization, discovery, connection state, 2D and multipart 3D grab callbacks, and producer backpressure.
+Camera is a C++17 acquisition library for Basler cameras supported by the pylon SDK. It owns SDK initialization, discovery, connection state, 2D and multipart 3D grab callbacks, and the free-run latest-image drop policy.
 
 ## Capabilities
 
@@ -71,11 +71,10 @@ CameraSystem system;
 Camera* camera = system.addCamera();
 
 const auto callbackId = camera->registerGrabCallback(
-    [camera](const Pylon::CPylonImage& image, std::size_t sequence) {
+    [](const Pylon::CPylonImage& image, std::size_t sequence) {
         if (image.IsValid()) {
-            // Consume the SDK-backed image before returning the credit.
+            // Own a copy before returning; the SDK reuses the buffer afterwards.
         }
-        camera->ready();
     });
 
 if (camera->open()) {
@@ -83,7 +82,7 @@ if (camera->open()) {
 }
 ```
 
-Grab callbacks run on an acquisition thread. Do not update GUI objects directly from a callback. For continuous free-run acquisition, call `ready()` only after the consumer has finished with the current 2D or multipart frame; the credit is bounded and the next frame otherwise remains blocked. The Qt control coalesces duplicate feature-node notifications and defers live feature-tree refresh until grabbing stops, preventing camera-event traffic from growing the GUI event queue. Deregister callbacks, stop acquisition, close the camera, and remove it from `CameraSystem` before destroying dependent consumer state.
+Grab callbacks run on an acquisition thread. Do not update GUI objects directly from a callback. Free-run acquisition uses `GrabStrategy_LatestImageOnly` with six SDK buffers; a callback return does not release a host admission credit, and the acquisition worker never waits for consumer processing. When the consumer falls behind, pylon keeps the newest completed image and overwrites older buffered images instead of stalling acquisition. The Qt control coalesces duplicate feature-node notifications and defers live feature-tree refresh until grabbing stops, preventing camera-event traffic from growing the GUI event queue. Deregister callbacks, stop acquisition, close the camera, and remove it from `CameraSystem` before destroying dependent consumer state.
 
 Long-running acquisition logs a sampled worker-progress record every ten seconds and warns when a frame callback takes at least 500 ms. These diagnostics distinguish SDK receive activity from consumer/presentation backpressure without changing ordered frame delivery.
 

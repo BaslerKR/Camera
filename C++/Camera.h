@@ -16,7 +16,6 @@
 #include <atomic>
 #include <functional>
 #include <mutex>
-#include <condition_variable>
 #include <unordered_map>
 #include <vector>
 
@@ -110,8 +109,6 @@ public:
      * @brief Removes every registered 3D grab callback.
      */
     void clearGrab3DCallbacks();
-    /** Returns one consumer credit when free-run backpressure is active. */
-    void ready();
 
     /**
      * Arms pylon acquisition and starts the frame-receive worker.
@@ -192,11 +189,6 @@ private:
     std::mutex _nodeCallbackMutex;
     std::unordered_map<size_t, NodeCallback> _nodeCallbacks;
     std::atomic<size_t> _nextNodeCallbackId{1};
-
-    std::mutex _permitMutex;
-    std::condition_variable _permitCondition;
-    std::atomic<int> _permits{0};
-    std::atomic<bool> _permitBackpressureEnabled{false};
 
     std::atomic<size_t> _frameSeq{0};
     std::atomic<size_t> _frameTarget{0};
