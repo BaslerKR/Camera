@@ -59,11 +59,16 @@ void CameraSourceController::registerCallbacks() {
 
     _graphicsStream = std::make_unique<PylonGraphicsFrameStream>(
         _camera,
-        [this](GraphicsFrame&& payload, const unsigned int sourceIndex) {
+        [this](GraphicsFrame&& payload, const unsigned int sourceIndex,
+               const CameraFrameCapture& capture) {
             if (!_frameConsumer) return;
             SessionFrame frame;
             frame.payload = std::move(payload);
             frame.frameSeq = _frameSeq.fetch_add(1, std::memory_order_relaxed);
+            frame.capture.valid = capture.valid;
+            frame.capture.generation = capture.generation;
+            frame.capture.sequence = capture.sequence;
+            frame.capture.triggerId = capture.triggerId;
             _frameConsumer(std::move(frame), sourceIndex);
         });
 }
@@ -77,6 +82,38 @@ void CameraSourceController::deregisterCallbacks() {
         _camera->deregisterStatusCallback(_statusCallbackId);
         _statusCallbackId = 0;
     }
+}
+
+SourceProducerCapabilities CameraSourceController::producerCapabilities(const unsigned sourceIndex) const {
+    static_cast<void>(sourceIndex);
+    SourceProducerCapabilities capabilities;
+    capabilities.captureIdentity = true;
+    capabilities.captureCounter = true;
+    capabilities.deviceDropCount = true;
+    if (_camera) {
+        capabilities.trigger = _camera->softwareTriggerAvailable();
+        capabilities.poolSize = _camera->streamBufferCount();
+    }
+    return capabilities;
+}
+
+std::optional<SourceCaptureMark> CameraSourceController::captureCounter(const unsigned sourceIndex) const {
+    if (!_camera || sourceIndex != 0U) return std::nullopt;
+    const auto mark = _camera->captureCounter();
+    if (!mark) return std::nullopt;
+    return SourceCaptureMark{mark->generation, mark->value};
+}
+
+std::optional<SourceCaptureMark> CameraSourceController::requestTrigger(const unsigned sourceIndex) {
+    if (!_camera || sourceIndex != 0U) return std::nullopt;
+    const auto mark = _camera->requestSoftwareTrigger();
+    if (!mark) return std::nullopt;
+    return SourceCaptureMark{mark->generation, mark->value};
+}
+
+std::uint64_t CameraSourceController::deviceDropCount(const unsigned sourceIndex) const {
+    if (!_camera || sourceIndex != 0U) return 0;
+    return _camera->deviceDropCount();
 }
 
 bool CameraSourceController::supports3D() const {

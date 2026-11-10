@@ -553,14 +553,26 @@ void Camera::grab(const size_t frames){
 
         const bool triggerMode = _currentCamera.TriggerMode.GetValue()
             == Basler_UniversalCameraParams::TriggerModeEnums::TriggerMode_On;
-        _grabErrorCount.store(0, std::memory_order_release);
+        bool softwareTrigger = false;
         if(triggerMode){
-            _currentCamera.MaxNumBuffer = 30;
+            try{
+                softwareTrigger = _currentCamera.TriggerSource.GetValue()
+                    == Basler_UniversalCameraParams::TriggerSourceEnums::TriggerSource_Software;
+            }catch(const GenericException&){
+                softwareTrigger = false;
+            }
+        }
+        _grabErrorCount.store(0, std::memory_order_release);
+        const std::uint32_t bufferCount = triggerMode ? 30U : 6U;
+        _currentCamera.MaxNumBuffer = bufferCount;
+        if(triggerMode){
             _currentCamera.StartGrabbing(GrabStrategy_OneByOne, GrabLoop_ProvidedByUser);
         }else{
-            _currentCamera.MaxNumBuffer = 6;
             _currentCamera.StartGrabbing(GrabStrategy_LatestImageOnly, GrabLoop_ProvidedByUser);
         }
+        _streamBufferCount.store(bufferCount, std::memory_order_release);
+        // A new run starts a new capture generation; block ids restart with it.
+        _capture.beginRun(softwareTrigger);
 
         _isRunning.store(true, std::memory_order_release);
         _frameTarget.store(frames, std::memory_order_release);
@@ -585,11 +597,14 @@ void Camera::grab(const size_t frames){
                     if(_currentCamera.RetrieveResult(1000, grabResult, Pylon::TimeoutHandling_Return)){
                         if(grabResult->GrabSucceeded()){
                             auto seq = _frameSeq.fetch_add(1, std::memory_order_acq_rel) + 1;
+                            const CameraFrameCapture capture = _capture.noteDelivered(
+                                grabResult->GetBlockID(),
+                                static_cast<std::uint64_t>(grabResult->GetNumberOfSkippedImages()));
                             const auto callbackStarted = std::chrono::steady_clock::now();
                             if(_streamKind.load(std::memory_order_acquire) == StreamKind::MultiPart3D){
                                 try{
                                     auto container = grabResult->GetDataContainer();
-                                    dispatchCallbacks(_grab3DCallbackMutex, _grab3DCallbacks, container, seq);
+                                    dispatchCallbacks(_grab3DCallbackMutex, _grab3DCallbacks, container, seq, capture);
                                 }catch(const GenericException &e){
                                     CameraSystem::syslog(std::string("[WARN] [Camera System] GetDataContainer exception: ") + e.GetDescription(), true);
                                 }catch(const std::exception &e){
@@ -600,7 +615,7 @@ void Camera::grab(const size_t frames){
                             }else{
                                 CPylonImage image;
                                 image.AttachGrabResultBuffer(grabResult);
-                                dispatchCallbacks(_grabCallbackMutex, _grabCallbacks, image, seq);
+                                dispatchCallbacks(_grabCallbackMutex, _grabCallbacks, image, seq, capture);
                             }
 
                             const auto callbackTime = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -633,6 +648,8 @@ void Camera::grab(const size_t frames){
                             }
                         } else {
                             ++failedResults;
+                            // An incomplete result (for example a buffer underrun) is a device drop.
+                            _capture.noteFailedResult();
                             if (CameraGrabDiagnostics::shouldReportFailure(failedResults)) {
                                 const auto cameraName = getConnectedCameraName();
                                 const auto errorDescription = grabResult->GetErrorDescription();
@@ -665,6 +682,9 @@ void Camera::grab(const size_t frames){
                 CameraSystem::syslog("Unknown exception in Camera::grab thread.", true);
             }
             _isRunning.store(false, std::memory_order_release);
+            // Waits only for an in-flight software trigger, so none reaches a stopped stream.
+            _capture.endRun();
+            _streamBufferCount.store(0, std::memory_order_release);
             try{
                 if(_currentCamera.IsGrabbing()) _currentCamera.StopGrabbing();
             }catch(const GenericException &e){
@@ -683,6 +703,8 @@ void Camera::grab(const size_t frames){
         });
     }catch(const GenericException &e){
         _isRunning.store(false, std::memory_order_release);
+        _capture.endRun();
+        _streamBufferCount.store(0, std::memory_order_release);
         try{
             if(_currentCamera.IsGrabbing()) _currentCamera.StopGrabbing();
         }catch(...){
@@ -690,6 +712,8 @@ void Camera::grab(const size_t frames){
         CameraSystem::syslog(e.GetDescription(),true);
     }catch(const std::exception &e){
         _isRunning.store(false, std::memory_order_release);
+        _capture.endRun();
+        _streamBufferCount.store(0, std::memory_order_release);
         try{
             if(_currentCamera.IsGrabbing()) _currentCamera.StopGrabbing();
         }catch(...){
@@ -715,6 +739,44 @@ void Camera::stop(){
     }catch(const std::exception &e){
         CameraSystem::syslog(std::string("Camera stop failed: ") + e.what(), true);
     }
+}
+
+std::optional<CameraCaptureTracker::Mark> Camera::captureCounter() const noexcept
+{
+    return _capture.counter();
+}
+
+bool Camera::softwareTriggerAvailable() const noexcept
+{
+    return _capture.softwareTriggerAvailable();
+}
+
+std::optional<CameraCaptureTracker::Mark> Camera::requestSoftwareTrigger()
+{
+    return _capture.requestTrigger([this]{
+        try{
+            if(!_deviceAvailable.load(std::memory_order_acquire) || !_currentCamera.IsGrabbing()){
+                return false;
+            }
+            _currentCamera.ExecuteSoftwareTrigger();
+            return true;
+        }catch(const GenericException &e){
+            CameraSystem::syslog(std::string("[WARN] Software trigger failed: ") + e.GetDescription(), true);
+        }catch(const std::exception &e){
+            CameraSystem::syslog(std::string("[WARN] Software trigger failed: ") + e.what(), true);
+        }
+        return false;
+    });
+}
+
+std::uint64_t Camera::deviceDropCount() const noexcept
+{
+    return _capture.dropCount();
+}
+
+std::uint32_t Camera::streamBufferCount() const noexcept
+{
+    return _streamBufferCount.load(std::memory_order_acquire);
 }
 
 void Camera::requestStop()

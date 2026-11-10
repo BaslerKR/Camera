@@ -11,7 +11,9 @@
 
 #include <pylon/PylonIncludes.h>
 #include <pylon/BaslerUniversalInstantCamera.h>
+#include "CameraCaptureTracker.h"
 #include "PylonScene3DProfile.h"
+#include <optional>
 #include <thread>
 #include <atomic>
 #include <functional>
@@ -74,7 +76,13 @@ public:
     CameraConnectionOutcome controlConnection(bool connect, const std::string& deviceId, std::uint64_t expectedGeneration,
         CameraConnectionState* result);
 
-    using GrabCallback = std::function<void(const CPylonImage&, size_t frame)>;
+    /**
+     * @brief Receives one 2D grab result.
+     * @note `frame` is the module delivery counter for display; `capture`
+     *       carries the pylon block id and acquisition-run generation.
+     */
+    using GrabCallback = std::function<void(const CPylonImage&, size_t frame,
+                                            const CameraFrameCapture& capture)>;
     /**
      * @brief Registers a callback for 2D grab results.
      * @param cb Callback invoked for every successfully grabbed 2D frame.
@@ -92,7 +100,8 @@ public:
      */
     void clearGrabCallbacks();
 
-    using Grab3DCallback = std::function<void(const Pylon::CPylonDataContainer&, size_t frame)>;
+    using Grab3DCallback = std::function<void(const Pylon::CPylonDataContainer&, size_t frame,
+                                              const CameraFrameCapture& capture)>;
     /**
      * @brief Registers a callback for 3D grab results.
      * @param cb Callback invoked for every successfully grabbed 3D container.
@@ -118,6 +127,23 @@ public:
     void grab(size_t frames=0);
     /** Requests stop and joins the frame-receive worker. */
     void stop();
+
+    /**
+     * @brief Returns the generation and newest delivered block-id sequence of the running grab.
+     * @note Lock-free and non-blocking; `nullopt` when no grab runs.
+     */
+    [[nodiscard]] std::optional<CameraCaptureTracker::Mark> captureCounter() const noexcept;
+    /** @brief Returns whether the running grab is in trigger mode with a software trigger source. */
+    [[nodiscard]] bool softwareTriggerAvailable() const noexcept;
+    /**
+     * @brief Executes one software trigger on the running trigger-mode grab.
+     * @return The generation and trigger id that the triggered frame carries, or `nullopt`.
+     */
+    std::optional<CameraCaptureTracker::Mark> requestSoftwareTrigger();
+    /** @brief Returns pylon skipped images plus failed grab results since the camera was created. */
+    [[nodiscard]] std::uint64_t deviceDropCount() const noexcept;
+    /** @brief Returns the `MaxNumBuffer` of the running grab, or zero when no grab runs. */
+    [[nodiscard]] std::uint32_t streamBufferCount() const noexcept;
     /** Requests worker stop without joining the caller. */
     void requestStop();
 
@@ -194,6 +220,8 @@ private:
     std::atomic<size_t> _frameTarget{0};
     std::atomic<size_t> _grabErrorCount{0};
     std::atomic<StreamKind> _streamKind{StreamKind::Image2D};
+    CameraCaptureTracker _capture;
+    std::atomic<std::uint32_t> _streamBufferCount{0};
     std::vector<std::string> _registeredNodeEventNames;
     mutable std::mutex _scene3DProfileMutex;
     PylonScene3DProfile _scene3DProfile;

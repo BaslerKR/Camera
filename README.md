@@ -71,7 +71,8 @@ CameraSystem system;
 Camera* camera = system.addCamera();
 
 const auto callbackId = camera->registerGrabCallback(
-    [](const Pylon::CPylonImage& image, std::size_t sequence) {
+    [](const Pylon::CPylonImage& image, std::size_t sequence,
+       const CameraFrameCapture& capture) {
         if (image.IsValid()) {
             // Own a copy before returning; the SDK reuses the buffer afterwards.
         }
@@ -83,6 +84,8 @@ if (camera->open()) {
 ```
 
 Grab callbacks run on an acquisition thread. Do not update GUI objects directly from a callback. Free-run acquisition uses `GrabStrategy_LatestImageOnly` with six SDK buffers; a callback return does not release a host admission credit, and the acquisition worker never waits for consumer processing. When the consumer falls behind, pylon keeps the newest completed image and overwrites older buffered images instead of stalling acquisition. The Qt control coalesces duplicate feature-node notifications and defers live feature-tree refresh until grabbing stops, preventing camera-event traffic from growing the GUI event queue. Deregister callbacks, stop acquisition, close the camera, and remove it from `CameraSystem` before destroying dependent consumer state.
+
+Capture identity: every grab callback receives a `CameraFrameCapture`. Its `sequence` comes from the pylon `GetBlockID()` of the grab result; a block id that moves backwards (the GigE Vision 1.x id wraps from 65535 to 1) is unwrapped so the sequence stays monotonic, and a repeated id or `UINT64_MAX` leaves `valid` false. `generation` increases on every `grab()` start, which follows every reconnect or format change. The callback `sequence` argument remains the module delivery counter for display. `captureCounter()` returns the cached sequence of the newest delivered result without locking; a frame already captured but not yet retrieved by the worker can therefore exceed it. In trigger mode with `TriggerSource=Software`, `requestSoftwareTrigger()` executes `ExecuteSoftwareTrigger()` and returns an id that the next delivered frames carry until the following request. `deviceDropCount()` adds pylon skipped images and failed (for example underrun) grab results.
 
 Long-running acquisition logs a sampled worker-progress record every ten seconds and warns when a frame callback takes at least 500 ms. These diagnostics distinguish SDK receive activity from consumer/presentation backpressure without changing ordered frame delivery.
 

@@ -27,6 +27,7 @@ endif()
 
 set(HEADERS
     Camera.h
+    CameraCaptureTracker.h
     CameraGrabDiagnostics.h
     CameraSystem.h
     PylonScene3DProfile.h
@@ -271,6 +272,18 @@ if(CAMERA_BUILD_PLAYGROUND_ADAPTER)
             NAME camera_grab_diagnostics_test
             COMMAND camera_grab_diagnostics_test
         )
+
+        add_executable(camera_capture_tracker_test
+            Utility/PlaygroundAdapter/Tests/CaptureTrackerTest.cpp
+        )
+        target_link_libraries(camera_capture_tracker_test
+            PRIVATE
+                Camera::PlaygroundAdapter
+        )
+        add_test(
+            NAME camera_capture_tracker_test
+            COMMAND camera_capture_tracker_test
+        )
     endif()
 endif()
 
@@ -376,7 +389,8 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
 endif()
 
 # Keep contract assertions active in Release validation.
-foreach(module_test IN ITEMS camera_graphics_image_adapter_test camera_grab_diagnostics_test)
+foreach(module_test IN ITEMS camera_graphics_image_adapter_test camera_grab_diagnostics_test
+        camera_capture_tracker_test)
     if(TARGET ${module_test})
         target_compile_options(${module_test} PRIVATE
             $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG>

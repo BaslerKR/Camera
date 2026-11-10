@@ -26,7 +26,7 @@ namespace {
 class PylonGraphicsFrameStream::Impl final
 {
 public:
-    Impl(Camera* camera, GraphicsFrameCallback callback);
+    Impl(Camera* camera, PylonFrameCallback callback);
     ~Impl();
 
     Impl(const Impl&) = delete;
@@ -34,7 +34,7 @@ public:
 
 private:
     Camera* _camera = nullptr;
-    GraphicsFrameCallback _callback;
+    PylonFrameCallback _callback;
     PylonGraphicsFrameAdapter _adapter;
     GraphicsFrameCallbackGate _callbackGate;
     Camera::CallbackId _grabCallbackId = 0;
@@ -43,7 +43,7 @@ private:
 
 PylonGraphicsFrameStream::Impl::Impl(
     Camera* camera,
-    GraphicsFrameCallback callback)
+    PylonFrameCallback callback)
     : _camera(camera), _callback(std::move(callback))
 {
     if (!_camera || !_callback)
@@ -53,7 +53,8 @@ PylonGraphicsFrameStream::Impl::Impl(
 
     const auto callbackToken = _callbackGate.token();
     _grabCallbackId = _camera->registerGrabCallback(
-        [this, callbackToken](const Pylon::CPylonImage& image, const std::size_t sequence) {
+        [this, callbackToken](const Pylon::CPylonImage& image, const std::size_t sequence,
+                              const CameraFrameCapture& capture) {
             GraphicsFrameCallbackGate::Lease lease(callbackToken);
             if (!lease) return;
             try
@@ -63,7 +64,7 @@ PylonGraphicsFrameStream::Impl::Impl(
 
                 GraphicsFrame frame;
                 frame.addImage("image", std::move(graphicsImage), "Image");
-                _callback(std::move(frame), 0U);
+                _callback(std::move(frame), 0U, capture);
             }
             catch (const std::exception& error)
             {
@@ -77,14 +78,15 @@ PylonGraphicsFrameStream::Impl::Impl(
         });
 
     _grab3DCallbackId = _camera->registerGrab3DCallback(
-        [this, callbackToken](const Pylon::CPylonDataContainer& container, const std::size_t) {
+        [this, callbackToken](const Pylon::CPylonDataContainer& container, const std::size_t,
+                              const CameraFrameCapture& capture) {
             GraphicsFrameCallbackGate::Lease lease(callbackToken);
             if (!lease) return;
             try
             {
                 auto frame = _adapter.convertGraphicsFrame(
                     container, cameraGraphicsFrameRequest(), _camera->scene3DProfile());
-                if (frame.has_value()) _callback(std::move(*frame), 0U);
+                if (frame.has_value()) _callback(std::move(*frame), 0U, capture);
             }
             catch (const std::exception& error)
             {
@@ -115,7 +117,7 @@ PylonGraphicsFrameStream::Impl::~Impl()
 
 PylonGraphicsFrameStream::PylonGraphicsFrameStream(
     Camera* camera,
-    GraphicsFrameCallback callback)
+    PylonFrameCallback callback)
     : _impl(std::make_unique<Impl>(camera, std::move(callback)))
 {
 }

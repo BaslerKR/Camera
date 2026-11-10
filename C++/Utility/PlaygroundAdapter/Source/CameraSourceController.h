@@ -25,6 +25,18 @@ public:
     bool isGrabbing() const override;
     void setFrameConsumer(FrameConsumer consumer) override;
     bool supports3D() const override;
+    /**
+     * @brief Reports pylon block-id capture identity and the cached delivered-block counter.
+     * @note Trigger is reported only while a trigger-mode grab with a software
+     *       trigger source runs. Pool size is the running grab's `MaxNumBuffer`.
+     */
+    SourceProducerCapabilities producerCapabilities(unsigned sourceIndex) const override;
+    /** @brief Returns the newest delivered block-id sequence without waiting. */
+    std::optional<SourceCaptureMark> captureCounter(unsigned sourceIndex) const override;
+    /** @brief Executes `ExecuteSoftwareTrigger()` on a software-trigger grab. */
+    std::optional<SourceCaptureMark> requestTrigger(unsigned sourceIndex) override;
+    /** @brief Returns pylon skipped images plus failed grab results. */
+    std::uint64_t deviceDropCount(unsigned sourceIndex) const override;
     /** @brief Copies current remote-device parameters without widget state. */
     DeviceParameterResult parameters(std::vector<DeviceParameterDescriptor>* output);
     /** @brief Reads an exact connection-scoped parameter. */
