@@ -20,6 +20,8 @@ public:
     explicit CameraSourceController(Camera* camera, QObject* parent = nullptr);
     ~CameraSourceController() override;
 
+    /** @brief Copies producer counters used by the device statusbar. */
+    std::optional<SourceRuntimeDiagnostics> sourceRuntimeDiagnostics(unsigned sourceIndex) const override;
     void start() override;
     void stop() override;
     bool isGrabbing() const override;

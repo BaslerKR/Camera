@@ -87,3 +87,10 @@ bool CameraSourceController::supports3D() const {
     return profile.family != PylonScene3DProfile::DeviceFamily::Image2D;
 }
 
+
+std::optional<SourceRuntimeDiagnostics> CameraSourceController::sourceRuntimeDiagnostics(unsigned sourceIndex) const
+{
+    if (sourceIndex != 0 || !_camera) return std::nullopt;
+    const auto value = _camera->runtimeDiagnostics();
+    return SourceRuntimeDiagnostics{value.grabbing, value.delivered, value.failed};
+}
