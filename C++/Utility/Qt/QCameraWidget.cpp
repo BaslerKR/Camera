@@ -1134,7 +1134,8 @@ void QCameraWidget::setDiagnosticsVisible(const bool visible)
         }
         if (_fpsLabel) {
             _fpsLabel->setText(QStringLiteral("0.0 fps"));
-            _fpsLabel->show();
+            // Telemetry bubbles are Debug-only; the 1 s tick re-checks host Debug.
+            _fpsLabel->setVisible(cameraDiagnosticLog().isDebugEnabled());
         }
     } else {
         if (_failedLabel) _failedLabel->hide();
@@ -1168,9 +1169,13 @@ void QCameraWidget::updateDiagnostics()
     _diagnosticsSample = now;
     _hasDiagnosticsSample = true;
 
+    // Host Debug toggles the diagnostics.* debug level without a signal, so
+    // each tick re-reads it. Counters and FPS keep sampling while hidden, so
+    // enabling Debug shows current values on the next tick.
+    const bool debug = cameraDiagnosticLog().isDebugEnabled();
     if (_failedLabel) {
-        const bool showFailed = diagnostics.failed > 0;
-        if (showFailed) {
+        const bool hasFailed = diagnostics.failed > 0;
+        if (hasFailed) {
             _failedLabel->setText(QStringLiteral("%1 failed").arg(
                 static_cast<qulonglong>(diagnostics.failed)));
             if (_failedLabel->property("failedState").toString()
@@ -1180,18 +1185,19 @@ void QCameraWidget::updateDiagnostics()
                 _failedLabel->style()->polish(_failedLabel);
             }
         }
-        _failedLabel->setVisible(showFailed);
+        _failedLabel->setVisible(debug && hasFailed);
     }
     if (_fpsLabel) {
         _fpsLabel->setText(QStringLiteral("%1 fps").arg(fps, 0, 'f', 1));
+        _fpsLabel->setVisible(debug);
     }
 
     const qint64 elapsed = _diagnosticsClock.elapsed();
-    if (elapsed - _lastDiagnosticsLogMs >= 5000) {
+    if (debug && elapsed - _lastDiagnosticsLogMs >= 5000) {
         const QString camera = _camera
             ? QString::fromStdString(_camera->getConnectedCameraName())
             : QStringLiteral("camera");
-        qInfo().noquote() << QStringLiteral(
+        qCDebug(cameraDiagnosticLog).noquote() << QStringLiteral(
             "[Camera UI] diagnostics: camera=%1 live=%2 failed=%3 fps=%4")
             .arg(camera)
             .arg(diagnostics.grabbing ? QStringLiteral("true") : QStringLiteral("false"))

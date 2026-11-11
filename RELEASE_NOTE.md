@@ -2,7 +2,8 @@
 
 - Expose producer runtime counters through the common source diagnostics query, using the same observations as the device panel.
 
-- Show live producer telemetry in the device statusbar: an `fps` bubble over the delivered-frame delta and a warning `failed` bubble only when a grab result failed. Both disappear when grabbing stops; `RetrieveResult` timeouts are not counted as failures.
+- Show live producer telemetry in the device statusbar while Playground Debug is on: an `fps` bubble over the delivered-frame delta and a warning `failed` bubble only when a grab result failed. Turning Debug on or off during Live takes effect within one second and shows current values, because counting continues while the bubbles are hidden. Both disappear when grabbing stops; `RetrieveResult` timeouts are not counted as failures.
+- Write the five-second `[Camera UI] diagnostics` line to System Logs only while Debug is on. Incomplete-grab warnings and errors are still always logged.
 - Remove the free-run consumer `ready()` permit. Grab callbacks no longer wait for downstream processing, and free-run acquisition keeps the newest pylon result instead of pacing the SDK worker behind the consumer. The free-run `MaxNumBuffer` rises from 5 to 6, adding about 127 MB of SDK buffer storage at 127 MP.
 - Connect, disconnect and discover cameras through Playground's standard device connection tools, which work the same for every device. The connection is identified by one id that changes on every reconnect and also addresses device features; Single and Live stay on the common source controls. Builds against Plugin SDK 0.2 and requires a Playground release with the standard device connection interface.
 - Run the adapter connection and parameter tests (`camera_parameter_control_test`) with the owner tests; their emulator cases skip when the pylon camera emulator is not installed.
