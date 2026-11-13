@@ -1,5 +1,9 @@
 ## Unreleased
 
+## v1.3.0 (2026-11-13)
+
+- Require Playground 0.6.6 or later; this package uses the device plugin interface introduced in that release.
+
 - Expose producer runtime counters through the common source diagnostics query, using the same observations as the device panel.
 
 - Show live producer telemetry in the device statusbar while Playground Debug is on: an `fps` bubble over the delivered-frame delta and a warning `failed` bubble only when a grab result failed. Turning Debug on or off during Live takes effect within one second and shows current values, because counting continues while the bubbles are hidden. Both disappear when grabbing stops; `RetrieveResult` timeouts are not counted as failures.
@@ -8,6 +12,8 @@
 - Connect, disconnect and discover cameras through Playground's standard device connection tools, which work the same for every device. The connection is identified by one id that changes on every reconnect and also addresses device features; Single and Live stay on the common source controls. Builds against Plugin SDK 0.2 and requires a Playground release with the standard device connection interface.
 - Run the adapter connection and parameter tests (`camera_parameter_control_test`) with the owner tests; their emulator cases skip when the pylon camera emulator is not installed.
 - Declare what kind of data each automation tool returns, so Playground can limit what connected assistants receive. Requires a Playground release with the updated automation interface; earlier releases do not list this package's automation tools.
+
+- Take the binary display name from the package definition.
 
 ## v1.2.1 (2026-10-20)
 
@@ -26,17 +32,11 @@
 
 - Discover Linux pylon config packages from explicit CMake paths, PYLON_ROOT, and /opt/pylon before trying the SDK find module; preserve Windows and macOS discovery.
 
-## Unreleased
-
-- Align the plugin binary display name with the package manifest as `Camera` to avoid a metadata mismatch warning during loading.
-- Take the binary display name from the package definition.
-
 ## v1.2.2 (2026-10-29)
 
 - Disable connection changes and single-grab commands during acquisition; recompute availability after pending operations and restore it after stop. Reject connection toggles while acquisition is active.
 
 - Show the next Live grab command with cameras/stop artwork in all pointer and focus states, and keep its tooltip and accessible name synchronized with acquisition state.
-
 
 - Connect icons name the current state (`disconnected`/`connect`); a consumer theme can preview the other state on hover.
 
