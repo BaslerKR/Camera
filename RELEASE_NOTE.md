@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Deliver Basler blaze 3D range data through the GraphicsEngine range writer into Playground shared frame storage. The range channels are written once into provided storage; an empty result drops the range. The explicit point cloud is unchanged.
+
 ## v1.4.0 (2026-11-14)
 
 - Require Playground 0.7.0 or later; this package uses the frame storage interface introduced in that release.

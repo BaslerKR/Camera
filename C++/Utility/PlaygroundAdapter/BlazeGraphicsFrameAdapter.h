@@ -6,11 +6,42 @@
  */
 
 #include "engine/GraphicsFrameAdapter.h"
+#include "engine/GraphicsImageWriter.h"
 
 #include <pylon/PylonIncludes.h>
 
 #include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <mutex>
 #include <optional>
+
+/** @brief One scalar component view mapped from a pylon data container. */
+struct BlazeScalarSource
+{
+    const std::uint8_t* data = nullptr;
+    std::size_t stride = 0;
+    Pylon::EPixelType pixelType = Pylon::PixelType_Mono8;
+};
+
+/**
+ * @brief Neutral source data for the blaze conversion.
+ *
+ * The pylon adapter fills this from its data container; tests build the same
+ * view directly so the conversion math is covered without a device.
+ */
+struct BlazeRangeSource
+{
+    /** Coord3D_ABC32f samples. */
+    const std::uint8_t* coordinates = nullptr;
+    std::size_t coordinateStride = 0;
+    int width = 0;
+    int height = 0;
+    BlazeScalarSource intensity;
+    BlazeScalarSource confidence;
+    bool hasIntensity = false;
+    bool hasConfidence = false;
+};
 
 class BlazeGraphicsFrameAdapter final
     : public GraphicsFrameAdapter<BlazeGraphicsFrameAdapter, Pylon::CPylonDataContainer>
@@ -21,10 +52,21 @@ public:
 
     using GraphicsFrameAdapter<BlazeGraphicsFrameAdapter, Pylon::CPylonDataContainer>::convertFrame;
 
+    /** Sets where range samples are written; empty restores storage of the adapter's own. */
+    void setFrameStorage(GraphicsImageStorage storage);
+
+    /** Converts a neutral source view; the pylon adapter and tests share it. */
+    [[nodiscard]] std::optional<GraphicsFrame> convertSource(
+        const BlazeRangeSource& source,
+        const GraphicsFrameRequest& request) const;
+
 private:
     friend class GraphicsFrameAdapter<BlazeGraphicsFrameAdapter, Pylon::CPylonDataContainer>;
 
     [[nodiscard]] std::optional<GraphicsFrame> convertGraphicsFrame(
         const Pylon::CPylonDataContainer& container,
         const GraphicsFrameRequest& request) const;
+
+    mutable std::mutex _storageMutex;
+    GraphicsImageStorage _storage;
 };
