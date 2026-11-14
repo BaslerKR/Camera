@@ -212,7 +212,7 @@ struct BlazeFrameOptions
 void copyScalarComponent(const Pylon::CPylonDataComponent& component,
                          const std::size_t width,
                          const std::size_t height,
-                         std::vector<float>& values,
+                         GraphicsSampleBuffer<float>& values,
                          const BlazeFrameOptions& options)
 {
     const auto pixelType = component.GetPixelType();
