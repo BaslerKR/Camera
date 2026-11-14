@@ -6,6 +6,7 @@
  */
 
 #include "engine/GraphicsFrameAdapter.h"
+#include "engine/GraphicsImageWriter.h"
 
 #include <memory>
 
@@ -17,6 +18,9 @@ class PylonGraphicsFrameStream final
 public:
     PylonGraphicsFrameStream(Camera* camera, GraphicsFrameCallback callback);
     ~PylonGraphicsFrameStream();
+
+    /** Forwards the storage 2D images are copied into; callable while grabbing. */
+    void setFrameStorage(GraphicsImageStorage storage);
 
     PylonGraphicsFrameStream(const PylonGraphicsFrameStream&) = delete;
     PylonGraphicsFrameStream& operator=(const PylonGraphicsFrameStream&) = delete;

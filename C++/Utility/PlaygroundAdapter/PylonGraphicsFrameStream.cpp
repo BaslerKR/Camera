@@ -32,6 +32,11 @@ public:
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
 
+    void setFrameStorage(GraphicsImageStorage storage)
+    {
+        _adapter.setFrameStorage(std::move(storage));
+    }
+
 private:
     Camera* _camera = nullptr;
     GraphicsFrameCallback _callback;
@@ -118,6 +123,11 @@ PylonGraphicsFrameStream::PylonGraphicsFrameStream(
     GraphicsFrameCallback callback)
     : _impl(std::make_unique<Impl>(camera, std::move(callback)))
 {
+}
+
+void PylonGraphicsFrameStream::setFrameStorage(GraphicsImageStorage storage)
+{
+    if (_impl) _impl->setFrameStorage(std::move(storage));
 }
 
 PylonGraphicsFrameStream::~PylonGraphicsFrameStream() = default;

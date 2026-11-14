@@ -1,5 +1,11 @@
 ## Unreleased
 
+## v1.4.0 (2026-11-14)
+
+- Require Playground 0.7.0 or later; this package uses the frame storage interface introduced in that release.
+
+- Deliver 2D live images directly into Playground's shared frame storage, so scripts and viewers can reuse each image without an extra copy. A frame is skipped when Playground cannot provide storage; 3D scenes are unchanged.
+
 ## v1.3.0 (2026-11-13)
 
 - Require Playground 0.6.6 or later; this package uses the device plugin interface introduced in that release.

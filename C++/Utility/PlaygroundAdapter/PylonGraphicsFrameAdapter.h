@@ -4,14 +4,19 @@
 #include "Camera.h"
 #include "PylonScene3DProfile.h"
 #include "engine/GraphicsFrame.h"
+#include "engine/GraphicsImageWriter.h"
 
-#include <optional>
 #include <cstdint>
+#include <mutex>
+#include <optional>
 
 class PylonGraphicsFrameAdapter final
 {
 public:
     PylonGraphicsFrameAdapter() = default;
+
+    /** Sets where 2D images are copied; empty restores storage of the adapter's own. */
+    void setFrameStorage(GraphicsImageStorage storage);
 
     [[nodiscard]] std::optional<GraphicsFrame> convertGraphicsFrame(
         const Pylon::CPylonDataContainer& container,
@@ -25,4 +30,6 @@ public:
 
 private:
     BlazeGraphicsFrameAdapter _blazeAdapter;
+    mutable std::mutex _storageMutex;
+    GraphicsImageStorage _storage;
 };
