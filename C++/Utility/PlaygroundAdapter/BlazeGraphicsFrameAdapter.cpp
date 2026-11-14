@@ -1,5 +1,7 @@
 #include "BlazeGraphicsFrameAdapter.h"
 
+#include "graphics/data/GraphicsRangeFrameWriter.h"
+
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -209,81 +211,59 @@ struct BlazeFrameOptions
     }
 }
 
-void copyScalarComponent(const Pylon::CPylonDataComponent& component,
-                         const std::size_t width,
-                         const std::size_t height,
-                         GraphicsSampleBuffer<float>& values,
-                         const BlazeFrameOptions& options)
+void writeScalarComponent(const BlazeScalarSource& component,
+                          const std::size_t width,
+                          const std::size_t height,
+                          float* values,
+                          const BlazeFrameOptions& options)
 {
-    const auto pixelType = component.GetPixelType();
-    const std::size_t pixelBytes = bytesPerPixel(pixelType);
-    if (pixelBytes == 0U || !hasSameExtent(component, width, height))
+    if (values == nullptr || component.data == nullptr || component.stride == 0U)
     {
         return;
     }
 
-    const auto* src = static_cast<const std::uint8_t*>(component.GetData());
-    if (src == nullptr)
-    {
-        return;
-    }
-
-    std::size_t stride = 0;
-    if (!componentStride(component, pixelBytes, stride))
-    {
-        return;
-    }
-
-    values.resize(width * height);
     GRAPHICSENGINE_OMP_PARALLEL_FOR
     for (std::ptrdiff_t ySigned = 0; ySigned < static_cast<std::ptrdiff_t>(height); ++ySigned)
     {
         const auto y = static_cast<std::size_t>(ySigned);
-        const auto* row = src + y * stride;
+        const auto* row = component.data + y * component.stride;
         for (std::size_t x = 0; x < width; ++x)
         {
-            values[orientedIndex(x, y, width, height, options)] = readScalar(row, x, pixelType);
+            values[orientedIndex(x, y, width, height, options)] =
+                readScalar(row, x, component.pixelType);
         }
     }
 }
 
-struct ScalarComponentView
+[[nodiscard]] std::optional<BlazeScalarSource> scalarComponentSource(
+    const Pylon::CPylonDataComponent& component,
+    const std::size_t width,
+    const std::size_t height)
 {
-    const std::uint8_t* data = nullptr;
-    std::size_t stride = 0;
-    Pylon::EPixelType pixelType = Pylon::PixelType_Mono8;
-    bool valid = false;
-};
-
-[[nodiscard]] ScalarComponentView scalarComponentView(const Pylon::CPylonDataComponent& component,
-                                                      const std::size_t width,
-                                                      const std::size_t height)
-{
-    ScalarComponentView view;
     const auto pixelType = component.GetPixelType();
     const std::size_t pixelBytes = bytesPerPixel(pixelType);
     if (pixelBytes == 0U || !hasSameExtent(component, width, height))
     {
-        return view;
+        return std::nullopt;
     }
 
     const auto* src = static_cast<const std::uint8_t*>(component.GetData());
     if (src == nullptr)
     {
-        return view;
+        return std::nullopt;
     }
 
     std::size_t stride = 0;
     if (!componentStride(component, pixelBytes, stride))
     {
-        return view;
+        return std::nullopt;
     }
 
-    view.data = src;
-    view.stride = stride;
-    view.pixelType = pixelType;
-    view.valid = true;
-    return view;
+    BlazeScalarSource source;
+    source.data = src;
+    source.stride = stride;
+    source.pixelType = pixelType;
+    return source;
 }
 
 [[nodiscard]] bool isFinitePoint(const Coord3DPoint& point) noexcept
@@ -305,7 +285,7 @@ struct ScalarComponentView
                                                  const std::size_t stride,
                                                  const std::size_t width,
                                                  const std::size_t height,
-                                                 const ScalarComponentView& pointColorSource,
+                                                 const BlazeScalarSource* pointColorSource,
                                                  const BlazeFrameOptions& options)
 {
     std::vector<std::size_t> rowValidCounts(height, 0U);
@@ -331,7 +311,7 @@ struct ScalarComponentView
         return cloud;
     }
 
-    const bool hasPointColor = pointColorSource.valid && options.includePointCloudColors;
+    const bool hasPointColor = pointColorSource != nullptr && options.includePointCloudColors;
     cloud.xyz.resize(validPointCount * 3U);
     if (hasPointColor)
     {
@@ -345,7 +325,7 @@ struct ScalarComponentView
         {
             const auto y = static_cast<std::size_t>(ySigned);
             const auto* row = reinterpret_cast<const Coord3DPoint*>(src + y * stride);
-            const auto* intensityRow = pointColorSource.valid ? pointColorSource.data + y * pointColorSource.stride : nullptr;
+            const auto* intensityRow = pointColorSource != nullptr ? pointColorSource->data + y * pointColorSource->stride : nullptr;
             for (std::size_t x = 0; x < width; ++x)
             {
                 const Coord3DPoint& point = row[x];
@@ -355,7 +335,7 @@ struct ScalarComponentView
                 cloud.xyz[tupleOffset + 2U] = options.rotatePointCloudAroundX180 ? -point.z : point.z;
                 if (hasPointColor && intensityRow != nullptr)
                 {
-                    const std::uint8_t gray = readScalarRgb8(intensityRow, x, pointColorSource.pixelType);
+                    const std::uint8_t gray = readScalarRgb8(intensityRow, x, pointColorSource->pixelType);
                     cloud.rgb[tupleOffset] = gray;
                     cloud.rgb[tupleOffset + 1U] = gray;
                     cloud.rgb[tupleOffset + 2U] = gray;
@@ -379,7 +359,7 @@ struct ScalarComponentView
     {
         const auto y = static_cast<std::size_t>(ySigned);
         const auto* row = reinterpret_cast<const Coord3DPoint*>(src + y * stride);
-        const auto* intensityRow = pointColorSource.valid ? pointColorSource.data + y * pointColorSource.stride : nullptr;
+        const auto* intensityRow = pointColorSource != nullptr ? pointColorSource->data + y * pointColorSource->stride : nullptr;
         std::size_t out = rowOffsets[y];
         for (std::size_t x = 0; x < width; ++x)
         {
@@ -395,7 +375,7 @@ struct ScalarComponentView
             cloud.xyz[tupleOffset + 2U] = options.rotatePointCloudAroundX180 ? -point.z : point.z;
             if (hasPointColor && intensityRow != nullptr)
             {
-                const std::uint8_t gray = readScalarRgb8(intensityRow, x, pointColorSource.pixelType);
+                const std::uint8_t gray = readScalarRgb8(intensityRow, x, pointColorSource->pixelType);
                 cloud.rgb[tupleOffset] = gray;
                 cloud.rgb[tupleOffset + 1U] = gray;
                 cloud.rgb[tupleOffset + 2U] = gray;
@@ -407,9 +387,30 @@ struct ScalarComponentView
     return cloud;
 }
 
+[[nodiscard]] bool hasInvalidPoint(
+    const BlazeRangeSource& source,
+    const std::size_t width,
+    const std::size_t height) noexcept
+{
+    for (std::size_t y = 0; y < height; ++y)
+    {
+        const auto* row = reinterpret_cast<const Coord3DPoint*>(
+            source.coordinates + y * source.coordinateStride);
+        for (std::size_t x = 0; x < width; ++x)
+        {
+            if (!isFinitePoint(row[x]))
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 std::optional<GraphicsFrame> buildBlazeFrame(
-    const Pylon::CPylonDataContainer& container,
-    const BlazeFrameOptions& options)
+    const BlazeRangeSource& source,
+    const BlazeFrameOptions& options,
+    const GraphicsImageStorage& storage)
 {
     const bool wantsRangeFrame = hasGraphicsFrameComponent(options.components, GraphicsFrameComponent::Range);
     const bool wantsPointCloud = hasGraphicsFrameComponent(options.components, GraphicsFrameComponent::PointCloud);
@@ -417,7 +418,192 @@ std::optional<GraphicsFrame> buildBlazeFrame(
     {
         return std::nullopt;
     }
+    if (source.coordinates == nullptr || source.coordinateStride == 0U
+        || source.width <= 0 || source.height <= 0)
+    {
+        return std::nullopt;
+    }
 
+    const std::size_t width = static_cast<std::size_t>(source.width);
+    const std::size_t height = static_cast<std::size_t>(source.height);
+    const std::size_t pixelCount = width * height;
+    const bool allValid = !hasInvalidPoint(source, width, height);
+    const bool includeIntensity = wantsRangeFrame && options.includeRangeAuxiliaryChannels
+        && source.hasIntensity;
+    const bool includeConfidence = wantsRangeFrame && options.includeRangeAuxiliaryChannels
+        && source.hasConfidence;
+    const BlazeScalarSource* const pointColorSource =
+        wantsPointCloud && options.includePointCloudColors && source.hasIntensity
+        ? &source.intensity : nullptr;
+
+    std::optional<GraphicsRangeFrameWriter> writer;
+    if (wantsRangeFrame)
+    {
+        GraphicsRangeFrameLayout layout;
+        layout.width = source.width;
+        layout.height = source.height;
+        layout.channels.x = true;
+        layout.channels.y = true;
+        layout.channels.validMask = !allValid;
+        layout.channels.intensity = includeIntensity;
+        layout.channels.confidence = includeConfidence;
+        writer.emplace(layout, storage);
+        if (!writer->isValid())
+        {
+            return std::nullopt;
+        }
+    }
+
+    PointCloudData cloud;
+    RangeFrame frame;
+    if (writer.has_value())
+    {
+        float* const xValues = writer->xData();
+        float* const yValues = writer->yData();
+        float* const zValues = writer->zData();
+        std::uint8_t* const mask = writer->validMaskData();
+        for (std::size_t y = 0; y < height; ++y)
+        {
+            const auto* row = reinterpret_cast<const Coord3DPoint*>(
+                source.coordinates + y * source.coordinateStride);
+            const auto* intensityRow = pointColorSource != nullptr
+                ? pointColorSource->data + y * pointColorSource->stride : nullptr;
+            for (std::size_t x = 0; x < width; ++x)
+            {
+                const std::size_t index = orientedIndex(x, y, width, height, options);
+                const Coord3DPoint& point = row[x];
+                const bool valid = isFinitePoint(point);
+                const float worldY = options.rotatePointCloudAroundX180 ? -point.y : point.y;
+                const float worldZ = options.rotatePointCloudAroundX180 ? -point.z : point.z;
+
+                xValues[index] = point.x;
+                yValues[index] = worldY;
+                zValues[index] = point.z;
+                if (mask != nullptr)
+                {
+                    mask[index] = valid ? 1U : 0U;
+                }
+
+                if (wantsPointCloud)
+                {
+                    if (!valid)
+                    {
+                        continue;
+                    }
+
+                    cloud.xyz.push_back(point.x);
+                    cloud.xyz.push_back(worldY);
+                    cloud.xyz.push_back(worldZ);
+                    if (intensityRow != nullptr)
+                    {
+                        const std::uint8_t gray = scalarToRgb8(
+                            readScalar(intensityRow, x, pointColorSource->pixelType),
+                            pointColorSource->pixelType);
+                        cloud.rgb.push_back(gray);
+                        cloud.rgb.push_back(gray);
+                        cloud.rgb.push_back(gray);
+                    }
+                }
+            }
+        }
+
+        if (includeIntensity)
+        {
+            writeScalarComponent(source.intensity, width, height, writer->intensityData(), options);
+        }
+        if (includeConfidence)
+        {
+            writeScalarComponent(source.confidence, width, height, writer->confidenceData(), options);
+        }
+
+        frame = writer->takeFrame();
+        frame.lengthUnit = GraphicsLengthUnit::Millimeter;
+        frame.zScale = options.rotatePointCloudAroundX180 ? -1.0 : 1.0;
+        frame.xyCoordinateMode = RangeFrameXYCoordinateMode::ExplicitXY;
+        frame.rangeField = {
+            "basler.blaze.z-coordinate",
+            "Z coordinate",
+            "mm",
+            MeasurementValueDomain::Calibrated,
+            MeasurementSampleKind::GridSample,
+            32U};
+        frame.intensityField = {
+            "basler.blaze.intensity",
+            "Intensity",
+            "",
+            MeasurementValueDomain::Native,
+            MeasurementSampleKind::GridSample,
+            0U};
+        frame.confidenceField = {
+            "basler.blaze.confidence",
+            "Confidence",
+            "",
+            MeasurementValueDomain::Native,
+            MeasurementSampleKind::GridSample,
+            0U};
+        frame.sensorType = "Basler blaze";
+        if (includeIntensity)
+        {
+            frame.intensityBits = scalarBits(source.intensity.pixelType);
+            frame.intensityField.bitsPerSample = frame.intensityBits;
+        }
+        if (includeConfidence)
+        {
+            frame.confidenceBits = scalarBits(source.confidence.pixelType);
+            frame.confidenceField.bitsPerSample = frame.confidenceBits;
+        }
+    }
+    else if (wantsPointCloud)
+    {
+        cloud = buildPointCloudOnly(source.coordinates, source.coordinateStride, width, height,
+            pointColorSource, options);
+    }
+
+    GraphicsFrame scene;
+    scene.metadata.sourceName = "Basler blaze";
+    if (frame.isValid())
+    {
+        scene.addRange("range", std::move(frame), "Range", "primary");
+        scene.ranges.back().initialView = blazeInitialView(1.0);
+    }
+    if (cloud.isValid())
+    {
+        scene.addPointCloud("point-cloud", std::move(cloud), "Point Cloud", "primary",
+                            blazeInitialView(1.15));
+    }
+
+    if (!scene.isValid())
+    {
+        return std::nullopt;
+    }
+
+    return scene;
+}
+
+} // namespace
+
+void BlazeGraphicsFrameAdapter::setFrameStorage(GraphicsImageStorage storage)
+{
+    std::lock_guard<std::mutex> lock(_storageMutex);
+    _storage = std::move(storage);
+}
+
+std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertSource(
+    const BlazeRangeSource& source,
+    const GraphicsFrameRequest& request) const
+{
+    GraphicsImageStorage storage;
+    {
+        std::lock_guard<std::mutex> lock(_storageMutex);
+        storage = _storage;
+    }
+    return buildBlazeFrame(source, blazeFrameOptionsFromRequest(request), storage);
+}
+
+std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertGraphicsFrame(
+    const Pylon::CPylonDataContainer& container,
+    const GraphicsFrameRequest& request) const
+{
     const auto range = findComponentByType(container, Pylon::ComponentType_Range);
     if (!range.IsValid() || range.GetPixelType() != Pylon::PixelType_Coord3D_ABC32f)
     {
@@ -443,166 +629,25 @@ std::optional<GraphicsFrame> buildBlazeFrame(
         return std::nullopt;
     }
 
-    const std::size_t pixelCount = width * height;
-    RangeFrame frame;
-    if (wantsRangeFrame)
+    BlazeRangeSource source;
+    source.coordinates = src;
+    source.coordinateStride = stride;
+    source.width = static_cast<int>(width);
+    source.height = static_cast<int>(height);
+    if (const auto intensity = scalarComponentSource(
+            findComponentByType(container, Pylon::ComponentType_Intensity), width, height))
     {
-        frame.width = static_cast<int>(width);
-        frame.height = static_cast<int>(height);
-        frame.lengthUnit = GraphicsLengthUnit::Millimeter;
-        frame.zScale = options.rotatePointCloudAroundX180 ? -1.0 : 1.0;
-        frame.rangeField = {
-            "basler.blaze.z-coordinate",
-            "Z coordinate",
-            "mm",
-            MeasurementValueDomain::Calibrated,
-            MeasurementSampleKind::GridSample,
-            32U};
-        frame.intensityField = {
-            "basler.blaze.intensity",
-            "Intensity",
-            "",
-            MeasurementValueDomain::Native,
-            MeasurementSampleKind::GridSample,
-            0U};
-        frame.confidenceField = {
-            "basler.blaze.confidence",
-            "Confidence",
-            "",
-            MeasurementValueDomain::Native,
-            MeasurementSampleKind::GridSample,
-            0U};
-        frame.sensorType = "Basler blaze";
-        frame.zValues.resize(pixelCount);
-        frame.xValues.resize(pixelCount);
-        frame.yValues.resize(pixelCount);
-        frame.xyCoordinateMode = RangeFrameXYCoordinateMode::ExplicitXY;
-        frame.validMask.clear();
-        frame.intensity.clear();
-        frame.confidence.clear();
+        source.intensity = *intensity;
+        source.hasIntensity = true;
+    }
+    if (const auto confidence = scalarComponentSource(
+            findComponentByType(container, Pylon::ComponentType_Confidence), width, height))
+    {
+        source.confidence = *confidence;
+        source.hasConfidence = true;
     }
 
-    PointCloudData cloud;
-    if (wantsPointCloud && wantsRangeFrame)
-    {
-        cloud.xyz.reserve(pixelCount * 3U);
-        cloud.xyz.clear();
-    }
-    cloud.rgb.clear();
-
-    bool rangeAllValid = true;
-    const auto intensity = findComponentByType(container, Pylon::ComponentType_Intensity);
-    const ScalarComponentView pointColorSource = (wantsPointCloud && options.includePointCloudColors)
-        ? scalarComponentView(intensity, width, height)
-        : ScalarComponentView{};
-    if (pointColorSource.valid && wantsRangeFrame)
-    {
-        cloud.rgb.reserve(pixelCount * 3U);
-    }
-
-    if (wantsPointCloud && !wantsRangeFrame)
-    {
-        cloud = buildPointCloudOnly(src,
-                                    stride,
-                                    width,
-                                    height,
-                                    pointColorSource,
-                                    options);
-    }
-
-    if (wantsRangeFrame)
-    {
-        for (std::size_t y = 0; y < height; ++y)
-        {
-            const auto* row = reinterpret_cast<const Coord3DPoint*>(src + y * stride);
-            const auto* intensityRow = pointColorSource.valid ? pointColorSource.data + y * pointColorSource.stride : nullptr;
-            for (std::size_t x = 0; x < width; ++x)
-            {
-                const std::size_t index = orientedIndex(x, y, width, height, options);
-                const Coord3DPoint& point = row[x];
-                const bool valid = isFinitePoint(point);
-                const float worldY = options.rotatePointCloudAroundX180 ? -point.y : point.y;
-                const float worldZ = options.rotatePointCloudAroundX180 ? -point.z : point.z;
-
-                frame.xValues[index] = point.x;
-                frame.yValues[index] = worldY;
-                frame.zValues[index] = point.z;
-                if (!valid)
-                {
-                    if (rangeAllValid)
-                    {
-                        frame.validMask.assign(pixelCount, 1U);
-                        rangeAllValid = false;
-                    }
-                    frame.validMask[index] = 0U;
-                }
-
-                if (wantsPointCloud)
-                {
-                    if (!valid)
-                    {
-                        continue;
-                    }
-
-                    cloud.xyz.push_back(point.x);
-                    cloud.xyz.push_back(worldY);
-                    cloud.xyz.push_back(worldZ);
-                    if (intensityRow != nullptr)
-                    {
-                        const std::uint8_t gray = scalarToRgb8(readScalar(intensityRow, x, pointColorSource.pixelType),
-                                                               pointColorSource.pixelType);
-                        cloud.rgb.push_back(gray);
-                        cloud.rgb.push_back(gray);
-                        cloud.rgb.push_back(gray);
-                    }
-                }
-            }
-        }
-    }
-
-    if (wantsRangeFrame && options.includeRangeAuxiliaryChannels)
-    {
-        copyScalarComponent(intensity, width, height, frame.intensity, options);
-        frame.intensityBits = frame.intensity.empty() ? 0U : scalarBits(intensity.GetPixelType());
-        frame.intensityField.bitsPerSample = frame.intensityBits;
-    }
-
-    const auto confidence = findComponentByType(container, Pylon::ComponentType_Confidence);
-    if (wantsRangeFrame && options.includeRangeAuxiliaryChannels)
-    {
-        copyScalarComponent(confidence, width, height, frame.confidence, options);
-        frame.confidenceBits = frame.confidence.empty() ? 0U : scalarBits(confidence.GetPixelType());
-        frame.confidenceField.bitsPerSample = frame.confidenceBits;
-    }
-
-    GraphicsFrame scene;
-    scene.metadata.sourceName = "Basler blaze";
-    if (frame.isValid())
-    {
-        scene.addRange("range", std::move(frame), "Range", "primary");
-        scene.ranges.back().initialView = blazeInitialView(1.0);
-    }
-    if (cloud.isValid())
-    {
-        scene.addPointCloud("point-cloud", std::move(cloud), "Point Cloud", "primary",
-                            blazeInitialView(1.15));
-    }
-
-    if (!scene.isValid())
-    {
-        return std::nullopt;
-    }
-
-    return scene;
-}
-
-}
-
-std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertGraphicsFrame(
-    const Pylon::CPylonDataContainer& container,
-    const GraphicsFrameRequest& request) const
-{
-    auto scene = buildBlazeFrame(container, blazeFrameOptionsFromRequest(request));
+    auto scene = convertSource(source, request);
     if (scene.has_value())
     {
         scene->metadata.sourceName = "Basler blaze";

@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 
 int main()
@@ -115,5 +116,75 @@ int main()
     assert(!adapter.convertGraphicsFrame(emptyContainer, {}, profile).has_value());
     profile.family = PylonScene3DProfile::DeviceFamily::StereoAce;
     assert(!adapter.convertGraphicsFrame(emptyContainer, {}, profile).has_value());
+
+    // Blaze conversion through the neutral source seam: XYZ arrays, validity
+    // mask, auxiliary channels and the explicit point cloud keep the previous
+    // values, and a provided storage function receives the range block.
+    {
+        const float coordinates[] = {
+            1.0F, 2.0F, 3.0F,
+            4.0F, 5.0F, 6.0F,
+            7.0F, 8.0F, 9.0F,
+            std::numeric_limits<float>::quiet_NaN(), 11.0F, 12.0F};
+        const std::uint16_t intensitySamples[] = {100U, 200U, 300U, 400U};
+        const std::uint16_t confidenceSamples[] = {7U, 8U, 9U, 10U};
+
+        BlazeRangeSource source;
+        source.coordinates = reinterpret_cast<const std::uint8_t*>(coordinates);
+        source.coordinateStride = sizeof(float) * 3U * 2U;
+        source.width = 2;
+        source.height = 2;
+        source.intensity.data = reinterpret_cast<const std::uint8_t*>(intensitySamples);
+        source.intensity.stride = sizeof(std::uint16_t) * 2U;
+        source.intensity.pixelType = Pylon::PixelType_Mono16;
+        source.hasIntensity = true;
+        source.confidence.data = reinterpret_cast<const std::uint8_t*>(confidenceSamples);
+        source.confidence.stride = sizeof(std::uint16_t) * 2U;
+        source.confidence.pixelType = Pylon::PixelType_Confidence16;
+        source.hasConfidence = true;
+
+        std::size_t storageCalls = 0U;
+        std::shared_ptr<std::uint8_t> storageBlock;
+        GraphicsImageStorage storage = [&](const std::size_t bytes) {
+            ++storageCalls;
+            storageBlock = std::shared_ptr<std::uint8_t>(
+                new std::uint8_t[bytes], std::default_delete<std::uint8_t[]>());
+            return storageBlock;
+        };
+
+        BlazeGraphicsFrameAdapter blaze;
+        blaze.setFrameStorage(storage);
+        const auto scene = blaze.convertSource(source, {});
+        assert(scene.has_value());
+        assert(storageCalls == 1U && storageBlock != nullptr);
+        assert(scene->ranges.size() == 1U && scene->pointClouds.size() == 1U);
+
+        const RangeFrame& range = scene->ranges.front().payload;
+        assert(range.width == 2 && range.height == 2);
+        assert(range.zValues.isBorrowed());
+        assert(range.zValues.data() == reinterpret_cast<const float*>(storageBlock.get()));
+        assert(range.xValues[0] == 1.0F && range.yValues[0] == 2.0F && range.zValues[0] == 3.0F);
+        assert(range.xValues[1] == 4.0F && range.yValues[1] == 5.0F && range.zValues[1] == 6.0F);
+        assert(range.xValues[2] == 7.0F && range.zValues[2] == 9.0F);
+        assert(range.validMask.size() == 4U);
+        assert(range.validMask[0] == 1U && range.validMask[1] == 1U
+            && range.validMask[2] == 1U && range.validMask[3] == 0U);
+        assert(range.intensity.size() == 4U && range.intensity[2] == 300.0F);
+        assert(range.intensityBits == 16U);
+        assert(range.confidence.size() == 4U && range.confidence[3] == 10.0F);
+        assert(range.confidenceBits == 16U);
+        assert(range.xyCoordinateMode == RangeFrameXYCoordinateMode::ExplicitXY);
+        assert(range.zScale == 1.0);
+
+        const PointCloudData& cloud = scene->pointClouds.front().payload;
+        assert(cloud.xyz.size() == 9U);
+        assert(cloud.xyz[0] == 1.0F && cloud.xyz[1] == 2.0F && cloud.xyz[2] == 3.0F);
+        assert(cloud.xyz[6] == 7.0F && cloud.xyz[8] == 9.0F);
+        assert(cloud.rgb.size() == 9U);
+        assert(cloud.rgb[0] == std::uint8_t(100U >> 8U));
+
+        blaze.setFrameStorage([](const std::size_t) { return std::shared_ptr<std::uint8_t>(); });
+        assert(!blaze.convertSource(source, {}).has_value());
+    }
     return 0;
 }
