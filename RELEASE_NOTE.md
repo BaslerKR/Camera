@@ -1,6 +1,6 @@
 ## Unreleased
 
-- Copy 2D pylon images into host-provided frame storage when Playground supplies it (`IFrameStorageClient`); without it the adapter keeps storage of its own. An empty storage result drops that frame. 3D scenes are unchanged. Needs a Playground release that ships `FrameStorage.h`.
+- Copy 2D pylon images through the GraphicsEngine image writer into host-provided frame storage when Playground supplies it (`IFrameStorageClient`), including the Mono10/Mono12 shift after the pylon converter; without provided storage the writer allocates ordinary memory. An empty storage result drops that frame. 3D scenes are unchanged. Needs a Playground release that ships `FrameStorage.h` and the writer.
 
 ## v1.3.0 (2026-11-13)
 

@@ -14,11 +14,7 @@ CameraSourceController::CameraSourceController(Camera* camera, QObject* parent)
 void CameraSourceController::setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider)
 {
     if (!_graphicsStream) return;
-    if (!provider) {
-        _graphicsStream->setFrameStorage({});
-        return;
-    }
-    _graphicsStream->setFrameStorage([provider](const std::size_t bytes) { return provider->acquire(bytes); });
+    _graphicsStream->setFrameStorage(frameStorageFunction(std::move(provider)));
 }
 
 CameraSourceController::~CameraSourceController() {

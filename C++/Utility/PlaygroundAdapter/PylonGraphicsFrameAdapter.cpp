@@ -6,12 +6,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <limits>
-#include <exception>
-#include <memory>
 #include <utility>
-#include <vector>
 
 namespace {
 
@@ -98,7 +94,7 @@ struct Coord3DPoint
     return false;
 }
 
-[[nodiscard]] GraphicsImage makeOwnedImage(
+[[nodiscard]] GraphicsImage writeImage(
     const int width,
     const int height,
     const int stride,
@@ -107,37 +103,26 @@ struct Coord3DPoint
     const int sourceFormat,
     const void* source,
     const std::size_t size,
-    const std::uint8_t declaredMonoSourceBits = 0U,
-    const std::uint64_t frameSequence = 0U,
-    const PylonGraphicsFrameAdapter::FrameStorage& storage = {})
+    const std::uint8_t declaredMonoSourceBits,
+    const std::uint64_t frameSequence,
+    const GraphicsImageStorage& storage,
+    const GraphicsImageWriterOperation operation)
 {
-    GraphicsImage image;
-    if (source == nullptr || width <= 0 || height <= 0 || stride <= 0 || size == 0U)
-    {
-        return image;
-    }
+    GraphicsImageWriterSource writerSource;
+    writerSource.data = static_cast<const std::uint8_t*>(source);
+    writerSource.size = size;
+    writerSource.width = width;
+    writerSource.height = height;
+    writerSource.stride = stride;
+    writerSource.pixelFormat = pixelFormat;
+    writerSource.bitsPerPixel = bitsPerPixel;
+    writerSource.sourceFormat = sourceFormat;
+    writerSource.declaredMonoSourceBits = declaredMonoSourceBits;
+    writerSource.frameSequence = frameSequence;
+    writerSource.operation = operation;
 
-    // The one copy out of the SDK buffer. An empty result means no storage is free: the image
-    // stays invalid and the caller drops the frame.
-    std::shared_ptr<std::uint8_t> bytes = storage
-        ? storage(size)
-        : std::shared_ptr<std::uint8_t>(new std::uint8_t[size], std::default_delete<std::uint8_t[]>());
-    if (!bytes)
-    {
-        return image;
-    }
-    std::memcpy(bytes.get(), source, size);
-    image.storage = std::move(bytes);
-    image.size = size;
-    image.width = width;
-    image.height = height;
-    image.stride = stride;
-    image.bitsPerPixel = bitsPerPixel;
-    image.declaredMonoSourceBits = declaredMonoSourceBits;
-    image.sourceFormat = sourceFormat;
-    image.pixelFormat = pixelFormat;
-    image.frameSequence = frameSequence;
-    return image.isValid() ? image : GraphicsImage{};
+    // The one copy out of the SDK buffer. An empty storage result drops the frame.
+    return writeGraphicsImage(writerSource, storage);
 }
 
 [[nodiscard]] GraphicsImagePixelFormat graphicsPixelFormat(
@@ -188,7 +173,7 @@ struct Coord3DPoint
         return {};
     }
 
-    return makeOwnedImage(
+    return writeImage(
         static_cast<int>(component.GetWidth()),
         static_cast<int>(component.GetHeight()),
         static_cast<int>(stride),
@@ -198,7 +183,9 @@ struct Coord3DPoint
         component.GetData(),
         component.GetDataSize(),
         0U,
-        frameSequence);
+        frameSequence,
+        {},
+        GraphicsImageWriterOperation::Copy);
 }
 
 [[nodiscard]] bool pylonStride(const Pylon::CPylonImage& image, int& stride)
@@ -255,7 +242,7 @@ struct Coord3DPoint
     const int bitsPerPixel,
     const std::uint8_t declaredMonoSourceBits,
     const std::uint64_t frameSequence,
-    const PylonGraphicsFrameAdapter::FrameStorage& storage)
+    const GraphicsImageStorage& storage)
 {
     Pylon::CPylonImage converted;
     Pylon::CImageFormatConverter converter;
@@ -268,7 +255,10 @@ struct Coord3DPoint
     {
         return {};
     }
-    GraphicsImage image = makeOwnedImage(
+    const bool shiftMono16 = outputPixelType == Pylon::PixelType_Mono16
+        && declaredMonoSourceBits > 0U
+        && declaredMonoSourceBits < 16U;
+    return writeImage(
         static_cast<int>(converted.GetWidth()),
         static_cast<int>(converted.GetHeight()),
         stride,
@@ -279,30 +269,16 @@ struct Coord3DPoint
         converted.GetImageSize(),
         declaredMonoSourceBits,
         frameSequence,
-        storage);
-
-    if (image.isValid()
-        && outputPixelType == Pylon::PixelType_Mono16
-        && declaredMonoSourceBits > 0U
-        && declaredMonoSourceBits < 16U)
-    {
-        const int storageShift = 16 - static_cast<int>(declaredMonoSourceBits);
-        auto* samples = reinterpret_cast<std::uint16_t*>(
-            const_cast<std::uint8_t*>(image.storage.get()));
-        const std::size_t sampleCount = image.size / sizeof(std::uint16_t);
-        for (std::size_t index = 0; index < sampleCount; ++index)
-        {
-            samples[index] = static_cast<std::uint16_t>(samples[index] >> storageShift);
-        }
-    }
-
-    return image;
+        storage,
+        shiftMono16
+            ? GraphicsImageWriterOperation::ShiftMono16
+            : GraphicsImageWriterOperation::Copy);
 }
 
 [[nodiscard]] GraphicsImage pylonImageToGraphicsImage(
     const Pylon::CPylonImage& pylonImage,
     const std::uint64_t frameSequence,
-    const PylonGraphicsFrameAdapter::FrameStorage& storage)
+    const GraphicsImageStorage& storage)
 {
     if (pylonImage.GetWidth() == 0
         || pylonImage.GetHeight() == 0
@@ -319,7 +295,7 @@ struct Coord3DPoint
         const int bitsPerPixel = GraphicsImageValidation::packedBitsPerPixel(pixelFormat);
         if (pixelFormat != GraphicsImagePixelFormat::Unknown && bitsPerPixel != 0)
         {
-            return makeOwnedImage(
+            return writeImage(
                 static_cast<int>(pylonImage.GetWidth()),
                 static_cast<int>(pylonImage.GetHeight()),
                 stride,
@@ -330,7 +306,8 @@ struct Coord3DPoint
                 pylonImage.GetImageSize(),
                 0U,
                 frameSequence,
-                storage);
+                storage,
+                GraphicsImageWriterOperation::Copy);
         }
     }
 
@@ -759,7 +736,7 @@ void registerColorImageToRange(
 
 } // namespace
 
-void PylonGraphicsFrameAdapter::setFrameStorage(FrameStorage storage)
+void PylonGraphicsFrameAdapter::setFrameStorage(GraphicsImageStorage storage)
 {
     std::lock_guard<std::mutex> lock(_storageMutex);
     _storage = std::move(storage);
@@ -769,7 +746,7 @@ GraphicsImage PylonGraphicsFrameAdapter::convertGraphicsImage(
     const Pylon::CPylonImage& image,
     const std::uint64_t frameSequence) const
 {
-    FrameStorage storage;
+    GraphicsImageStorage storage;
     {
         std::lock_guard<std::mutex> lock(_storageMutex);
         storage = _storage;

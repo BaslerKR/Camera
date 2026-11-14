@@ -32,7 +32,7 @@ public:
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
 
-    void setFrameStorage(FrameStorage storage)
+    void setFrameStorage(GraphicsImageStorage storage)
     {
         _adapter.setFrameStorage(std::move(storage));
     }
@@ -125,7 +125,7 @@ PylonGraphicsFrameStream::PylonGraphicsFrameStream(
 {
 }
 
-void PylonGraphicsFrameStream::setFrameStorage(FrameStorage storage)
+void PylonGraphicsFrameStream::setFrameStorage(GraphicsImageStorage storage)
 {
     if (_impl) _impl->setFrameStorage(std::move(storage));
 }

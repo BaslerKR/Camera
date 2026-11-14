@@ -6,10 +6,8 @@
  */
 
 #include "engine/GraphicsFrameAdapter.h"
+#include "engine/GraphicsImageWriter.h"
 
-#include <cstddef>
-#include <cstdint>
-#include <functional>
 #include <memory>
 
 class Camera;
@@ -21,10 +19,8 @@ public:
     PylonGraphicsFrameStream(Camera* camera, GraphicsFrameCallback callback);
     ~PylonGraphicsFrameStream();
 
-    /** Storage for one image; see PylonGraphicsFrameAdapter::FrameStorage. */
-    using FrameStorage = std::function<std::shared_ptr<std::uint8_t>(std::size_t bytes)>;
     /** Forwards the storage 2D images are copied into; callable while grabbing. */
-    void setFrameStorage(FrameStorage storage);
+    void setFrameStorage(GraphicsImageStorage storage);
 
     PylonGraphicsFrameStream(const PylonGraphicsFrameStream&) = delete;
     PylonGraphicsFrameStream& operator=(const PylonGraphicsFrameStream&) = delete;
