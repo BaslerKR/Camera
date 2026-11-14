@@ -11,6 +11,16 @@ CameraSourceController::CameraSourceController(Camera* camera, QObject* parent)
     registerCallbacks();
 }
 
+void CameraSourceController::setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider)
+{
+    if (!_graphicsStream) return;
+    if (!provider) {
+        _graphicsStream->setFrameStorage({});
+        return;
+    }
+    _graphicsStream->setFrameStorage([provider](const std::size_t bytes) { return provider->acquire(bytes); });
+}
+
 CameraSourceController::~CameraSourceController() {
     _parameterClosing = true;
     const auto workers = _parameterWorkers;

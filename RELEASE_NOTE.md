@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Copy 2D pylon images into host-provided frame storage when Playground supplies it (`IFrameStorageClient`); without it the adapter keeps storage of its own. An empty storage result drops that frame. 3D scenes are unchanged. Needs a Playground release that ships `FrameStorage.h`.
+
 ## v1.3.0 (2026-11-13)
 
 - Require Playground 0.6.6 or later; this package uses the device plugin interface introduced in that release.

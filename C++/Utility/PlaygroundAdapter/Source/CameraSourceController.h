@@ -3,6 +3,7 @@
 #include "Camera.h"
 #include "DeviceConnectionControl.h"
 #include "DeviceParameterControl.h"
+#include "FrameStorage.h"
 #include <map>
 #include <QSet>
 #include <QThread>
@@ -11,10 +12,12 @@
 
 class PylonGraphicsFrameStream;
 
-class CameraSourceController : public AbstractSourceController, public IDeviceParameterControl, public IDeviceConnectionControl {
+class CameraSourceController : public AbstractSourceController, public IDeviceParameterControl, public IDeviceConnectionControl,
+                               public IFrameStorageClient {
     Q_OBJECT
-    Q_INTERFACES(IDeviceParameterControl IDeviceConnectionControl)
+    Q_INTERFACES(IDeviceParameterControl IDeviceConnectionControl IFrameStorageClient)
 public:
+    void setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider) override;
     using Completion = IDeviceParameterControl::Completion;
     using TargetsCompletion = IDeviceConnectionControl::TargetsCompletion;
     explicit CameraSourceController(Camera* camera, QObject* parent = nullptr);

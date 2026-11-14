@@ -5,6 +5,10 @@
 #include "PylonScene3DProfile.h"
 #include "engine/GraphicsFrame.h"
 
+#include <cstddef>
+#include <functional>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <cstdint>
 
@@ -12,6 +16,14 @@ class PylonGraphicsFrameAdapter final
 {
 public:
     PylonGraphicsFrameAdapter() = default;
+
+    /**
+     * Storage for one image: returns at least `bytes` writable bytes, or empty to drop the frame.
+     * Must not wait; called on grab threads.
+     */
+    using FrameStorage = std::function<std::shared_ptr<std::uint8_t>(std::size_t bytes)>;
+    /** Sets where 2D images are copied; empty restores storage of the adapter's own. */
+    void setFrameStorage(FrameStorage storage);
 
     [[nodiscard]] std::optional<GraphicsFrame> convertGraphicsFrame(
         const Pylon::CPylonDataContainer& container,
@@ -25,4 +37,6 @@ public:
 
 private:
     BlazeGraphicsFrameAdapter _blazeAdapter;
+    mutable std::mutex _storageMutex;
+    FrameStorage _storage;
 };
