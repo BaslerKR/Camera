@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Use the shared Resources `deviceCounter` statusbar bubble for live fps telemetry instead of the removed `deviceFps` role; the monospace presentation is unchanged.
+
 - Build against the widget-free device runtime SDK: the contract target is `Playground::DeviceRuntimeContract`, headers live under `DeviceRuntime/Contract`, and the interface is `IDeviceRuntime`. The temporary widget library resolves Qt Widgets and Resources itself until U2 removes it.
 
 - Claim one network or USB camera per session through Playground's host hardware-resource claims. The key is the camera serial, so a second session of this package is refused with the owning session named instead of reaching the transport. The claim is released on disconnect and session close, and a camera without a serial keeps the SDK's native arbitration.
