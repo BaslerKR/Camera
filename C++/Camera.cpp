@@ -371,7 +371,7 @@ void Camera::close(){
 
 bool Camera::closeLocked(){
     try{
-        stop();
+        stopLocked();
         _deviceAvailable.store(false, std::memory_order_release);
         _streamKind.store(StreamKind::Image2D, std::memory_order_release);
         resetAcquisitionCapabilities("Camera is disconnected.");
@@ -835,12 +835,13 @@ void Camera::setAcquisitionCapabilities(CameraAcquisitionCapabilities capabiliti
 
 void Camera::refreshAcquisitionCapabilities()
 {
-    bool busy = false;
     CameraAcquisitionCapabilities capabilities;
     try {
+        // A stop/refresh waits for a short change observation instead of silently skipping,
+        // so Single availability cannot stay stale until the next write.
         if (!accessFeatures([&](GenApi::INodeMap& nodeMap, std::uint64_t) {
             capabilities = observeAcquisitionCapabilities(nodeMap);
-        }, &busy)) return;
+        })) return;
     } catch (const GenericException&) {
         return;
     } catch (const std::exception&) {
@@ -857,11 +858,12 @@ void Camera::resetAcquisitionCapabilities(const std::string& reason)
 bool Camera::writeAcquisitionMode(const std::string& desired, std::string* previous,
     std::string* current, std::string* reason)
 {
-    bool busy = false;
     bool observed = false;
     std::string failure;
     CameraAcquisitionCapabilities capabilities;
     try {
+        // An acquisition action waits for short feature observation instead of failing
+        // with Busy, so a change subscription never blocks a lifecycle request.
         const bool admitted = accessFeatures([&](GenApi::INodeMap& nodeMap, std::uint64_t) {
             auto* node = nodeMap.GetNode("AcquisitionMode");
             if (!node) {
@@ -886,11 +888,9 @@ bool Camera::writeAcquisitionMode(const std::string& desired, std::string* previ
             }
             capabilities = observeAcquisitionCapabilities(nodeMap);
             observed = true;
-        }, &busy);
+        });
         if (!admitted) {
-            if (reason) *reason = busy
-                ? "Camera feature work is busy; retry after it finishes."
-                : "Camera is disconnected.";
+            if (reason) *reason = "Camera is disconnected.";
             return false;
         }
     } catch (const GenericException& error) {
@@ -911,7 +911,7 @@ bool Camera::writeAcquisitionMode(const std::string& desired, std::string* previ
     return true;
 }
 
-void Camera::stop(){
+void Camera::stopLocked(){
     try{
         requestStop();
 
@@ -923,14 +923,18 @@ void Camera::stop(){
             CameraSystem::syslog("[DEBUG] Camera stop joined grab worker in "
                 + std::to_string(joinMs) + " ms.");
         }
-        // A parameter write during grabbing can observe a locked AcquisitionMode; re-observe
-        // after the SDK has unlocked it so Single is not left unavailable.
-        refreshAcquisitionCapabilities();
     }catch(const GenericException &e){
         CameraSystem::syslog(e.GetDescription(),true);
     }catch(const std::exception &e){
         CameraSystem::syslog(std::string("Camera stop failed: ") + e.what(), true);
     }
+}
+
+void Camera::stop(){
+    // The lifecycle lock is not held here, so the capability refresh can wait for a short
+    // feature observation after the SDK unlocked AcquisitionMode.
+    stopLocked();
+    refreshAcquisitionCapabilities();
 }
 
 void Camera::requestStop()
