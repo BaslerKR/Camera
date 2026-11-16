@@ -857,11 +857,12 @@ void Camera::resetAcquisitionCapabilities(const std::string& reason)
 bool Camera::writeAcquisitionMode(const std::string& desired, std::string* previous,
     std::string* current, std::string* reason)
 {
-    bool busy = false;
     bool observed = false;
     std::string failure;
     CameraAcquisitionCapabilities capabilities;
     try {
+        // An acquisition action waits for short feature observation instead of failing
+        // with Busy, so a change subscription never blocks a lifecycle request.
         const bool admitted = accessFeatures([&](GenApi::INodeMap& nodeMap, std::uint64_t) {
             auto* node = nodeMap.GetNode("AcquisitionMode");
             if (!node) {
@@ -886,11 +887,9 @@ bool Camera::writeAcquisitionMode(const std::string& desired, std::string* previ
             }
             capabilities = observeAcquisitionCapabilities(nodeMap);
             observed = true;
-        }, &busy);
+        });
         if (!admitted) {
-            if (reason) *reason = busy
-                ? "Camera feature work is busy; retry after it finishes."
-                : "Camera is disconnected.";
+            if (reason) *reason = "Camera is disconnected.";
             return false;
         }
     } catch (const GenericException& error) {
