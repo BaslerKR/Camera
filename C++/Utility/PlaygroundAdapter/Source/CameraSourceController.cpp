@@ -20,6 +20,7 @@ CameraSourceController::CameraSourceController(Camera* camera, IDevicePluginReso
     : AbstractSourceController(parent), _camera(camera), _claims(claims), _claim(claim) {
     _parameterInstance = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     registerCallbacks();
+    startChangeWorker();
 }
 
 void CameraSourceController::setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider)
@@ -35,6 +36,11 @@ void CameraSourceController::releaseClaim() {
 
 CameraSourceController::~CameraSourceController() {
     _parameterClosing = true;
+    if (_camera && _nodeCallbackId != 0) {
+        _camera->deregisterNodeUpdatedCallback(_nodeCallbackId);
+        _nodeCallbackId = 0;
+    }
+    stopChangeWorker();
     const auto workers = _parameterWorkers;
     for (auto* worker : workers) {
         disconnect(worker, nullptr, this, nullptr);
@@ -76,9 +82,16 @@ void CameraSourceController::registerCallbacks() {
     _statusCallbackId = _camera->registerStatusCallback([this](Camera::Status status, bool on) {
         if (status == Camera::GrabbingStatus) {
             _isGrabbing = on;
+            // Acquisition start/stop re-observes writability, because the device locks
+            // transport-layer parameters only while the pylon TLParamsLocked value is set.
+            enqueueParameterChange("Root");
             emit diagnosticAcquisitionChanged(on, QStringLiteral("camera"));
+        } else if (status == Camera::ConnectionStatus && !on) {
+            enqueueParameterConnectionLost("The camera is disconnected.");
         }
     });
+    _nodeCallbackId = _camera->registerNodeUpdatedCallback(
+        [this](const std::string& nodeName) { enqueueParameterChange(nodeName); });
 
     _graphicsStream = std::make_unique<PylonGraphicsFrameStream>(
         _camera,
@@ -96,6 +109,10 @@ void CameraSourceController::deregisterCallbacks() {
 
     _graphicsStream.reset();
 
+    if (_nodeCallbackId != 0) {
+        _camera->deregisterNodeUpdatedCallback(_nodeCallbackId);
+        _nodeCallbackId = 0;
+    }
     if (_statusCallbackId != 0) {
         _camera->deregisterStatusCallback(_statusCallbackId);
         _statusCallbackId = 0;

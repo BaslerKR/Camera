@@ -7,11 +7,16 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <algorithm>
+#include <condition_variable>
 #include <future>
 #include <chrono>
+#include <map>
 #include <memory>
-#include <atomic>
+#include <mutex>
+#include <optional>
+#include <set>
 #include <stdexcept>
+#include <thread>
 
 namespace {
 
@@ -50,6 +55,263 @@ public:
 private:
     QSet<QString> _held;
 };
+
+/** @brief Collects change callbacks and can hold one delta to force queue overflow. */
+class ChangeCollector {
+public:
+    IDeviceParameterControl::ChangeListener listener()
+    {
+        return [this](DeviceParameterChange change) { accept(std::move(change)); };
+    }
+    bool waitFor(const std::size_t count, const int timeoutMs)
+    {
+        std::unique_lock<std::mutex> lock(_mutex);
+        return _condition.wait_for(lock, std::chrono::milliseconds(timeoutMs),
+            [this, count] { return _changes.size() >= count; });
+    }
+    bool waitForResync(const int timeoutMs)
+    {
+        std::unique_lock<std::mutex> lock(_mutex);
+        return _condition.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
+            for (const auto& change : _changes) if (change.resync) return true;
+            return false;
+        });
+    }
+    std::optional<DeviceParameterChange> at(const std::size_t index)
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        if (index >= _changes.size()) return std::nullopt;
+        return _changes[index];
+    }
+    std::vector<DeviceParameterChange> snapshot()
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        return _changes;
+    }
+    std::size_t size() const
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        return _changes.size();
+    }
+    void holdDeltas(const bool hold)
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _hold = hold;
+    }
+    bool waitUntilHeld(const int timeoutMs)
+    {
+        std::unique_lock<std::mutex> lock(_mutex);
+        return _condition.wait_for(lock, std::chrono::milliseconds(timeoutMs),
+            [this] { return _holding; });
+    }
+    void releaseHeld()
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _hold = false;
+        _holding = false;
+        _release.notify_all();
+        _condition.notify_all();
+    }
+
+private:
+    void accept(DeviceParameterChange change)
+    {
+        std::unique_lock<std::mutex> lock(_mutex);
+        const bool hold = _hold && !_holding && change.kind == DeviceParameterChangeKind::Delta
+            && !change.resync && change.error == DeviceParameterError::None;
+        if (hold) {
+            _holding = true;
+            _condition.notify_all();
+            _release.wait(lock, [this] { return !_holding; });
+        }
+        _changes.push_back(std::move(change));
+        _condition.notify_all();
+    }
+    mutable std::mutex _mutex;
+    std::condition_variable _condition;
+    std::condition_variable _release;
+    std::vector<DeviceParameterChange> _changes;
+    bool _hold = false;
+    bool _holding = false;
+};
+
+/** @brief Mirrors the module's GenApi tree mapping without calling its private helpers. */
+struct ExpectedTree {
+    std::vector<std::string> categoryPath;
+    DeviceParameterVisibility visibility = DeviceParameterVisibility::Primary;
+    DeviceParameterRepresentation representation = DeviceParameterRepresentation::Automatic;
+    std::vector<DeviceParameterSelectorRelation> relations;
+    bool producerShared = false;
+};
+
+ExpectedTree expectedTree(GenApi::INode* node, const DeviceParameterKind kind)
+{
+    ExpectedTree expected;
+    GenApi::INode* current = node;
+    std::set<GenApi::INode*> visited;
+    for (int depth = 0; depth < 32; ++depth) {
+        GenApi::NodeList_t parents;
+        current->GetParents(parents);
+        GenApi::INode* category = nullptr;
+        for (auto* parent : parents) {
+            if (parent->GetPrincipalInterfaceType() == GenApi::intfICategory) {
+                category = parent;
+                break;
+            }
+        }
+        if (!category || !visited.insert(category).second) break;
+        const std::string name = category->GetName().c_str();
+        if (name == "Root") break;
+        if (name == "TransportLayerControl") expected.producerShared = true;
+        auto segment = std::string(category->GetDisplayName().c_str());
+        if (segment.empty()) segment = name;
+        if (segment.size() > deviceParameterCategorySegmentLimit)
+            segment.resize(deviceParameterCategorySegmentLimit);
+        if (!segment.empty()) expected.categoryPath.push_back(std::move(segment));
+        current = category;
+    }
+    std::reverse(expected.categoryPath.begin(), expected.categoryPath.end());
+    if (expected.categoryPath.size() > deviceParameterCategoryDepthLimit)
+        expected.categoryPath.resize(deviceParameterCategoryDepthLimit);
+    switch (node->GetVisibility()) {
+    case GenApi::Expert: expected.visibility = DeviceParameterVisibility::Advanced; break;
+    case GenApi::Guru: expected.visibility = DeviceParameterVisibility::Expert; break;
+    case GenApi::Invisible: expected.visibility = DeviceParameterVisibility::Hidden; break;
+    default: expected.visibility = DeviceParameterVisibility::Primary; break;
+    }
+    if (kind == DeviceParameterKind::Enumeration) {
+        expected.representation = DeviceParameterRepresentation::Choice;
+    } else if (kind == DeviceParameterKind::Boolean) {
+        expected.representation = DeviceParameterRepresentation::Toggle;
+    } else if (kind == DeviceParameterKind::String) {
+        expected.representation = DeviceParameterRepresentation::Text;
+    } else if (kind == DeviceParameterKind::Integer || kind == DeviceParameterKind::Float) {
+        const auto representation = kind == DeviceParameterKind::Integer
+            ? GenApi::CIntegerPtr(node)->GetRepresentation()
+            : GenApi::CFloatPtr(node)->GetRepresentation();
+        switch (representation) {
+        case GenApi::Logarithmic: expected.representation = DeviceParameterRepresentation::Slider; break;
+        case GenApi::Boolean: expected.representation = DeviceParameterRepresentation::Toggle; break;
+        case GenApi::HexNumber:
+        case GenApi::IPV4Address:
+        case GenApi::MACAddress: expected.representation = DeviceParameterRepresentation::Text; break;
+        case GenApi::Linear:
+        case GenApi::PureNumber: expected.representation = DeviceParameterRepresentation::Number; break;
+        default: expected.representation = DeviceParameterRepresentation::Automatic; break;
+        }
+    }
+    std::map<std::string, DeviceParameterSelectorRole> relations;
+    GenApi::CSelectorPtr selector(node);
+    if (selector) {
+        GenApi::FeatureList_t selected;
+        selector->GetSelectedFeatures(selected);
+        for (const auto feature : selected) {
+            GenApi::INode* related = feature->GetNode();
+            if (!related) continue;
+            auto name = std::string(related->GetName().c_str());
+            if (name.size() > deviceParameterSelectorRelationNameLimit) continue;
+            relations.emplace(std::move(name), DeviceParameterSelectorRole::Selects);
+        }
+        GenApi::FeatureList_t selecting;
+        selector->GetSelectingFeatures(selecting);
+        for (const auto feature : selecting) {
+            GenApi::INode* related = feature->GetNode();
+            if (!related) continue;
+            auto name = std::string(related->GetName().c_str());
+            if (name.size() > deviceParameterSelectorRelationNameLimit) continue;
+            relations.emplace(std::move(name), DeviceParameterSelectorRole::SelectedBy);
+        }
+    }
+    for (auto& entry : relations) {
+        if (expected.relations.size() >= deviceParameterSelectorRelationLimit) break;
+        expected.relations.push_back({entry.first, entry.second});
+    }
+    return expected;
+}
+
+/** @brief Restricts test writes to stable image-format and exposure features. */
+bool safeChangeName(const std::string& name)
+{
+    static const std::set<std::string> allowed{
+        "Width", "Height", "OffsetX", "OffsetY", "AcquisitionFrameRate",
+        "AcquisitionFrameRateEnable", "BinningHorizontal", "BinningVertical",
+        "BlackLevel", "ChunkModeActive", "DigitalShift", "ExposureTime",
+        "ExposureTimeAbs", "ExposureTimeBaseAbs", "ExposureTimeRaw", "Gain",
+        "GainRaw", "Gamma", "LineDebouncerTime", "TriggerDelay", "LineIndex",
+        "LineInverterBool0", "ForceFailedBufferCount", "ForcedFailedBuffersRemaining",
+        "AutoExposureTimeLowerLimit", "AutoExposureTimeUpperLimit", "AutoGainLowerLimit",
+        "AutoGainUpperLimit", "ReverseX", "ReverseY"};
+    return allowed.count(name) > 0;
+}
+
+/** @brief Selects a writable scalar with a different valid value. */
+struct WritableCandidate {
+    DeviceParameterDescriptor descriptor;
+    DeviceParameterValue value;
+};
+std::optional<WritableCandidate> writableChange(const DeviceParameterDescriptor& descriptor)
+{
+    if (!descriptor.available || !descriptor.writable || !descriptor.value) return std::nullopt;
+    if (!descriptor.target.selectors.empty() || !safeChangeName(descriptor.target.name))
+        return std::nullopt;
+    for (const auto& relation : descriptor.selectorRelations)
+        if (relation.role == DeviceParameterSelectorRole::Selects) return std::nullopt;
+    switch (descriptor.kind) {
+    case DeviceParameterKind::Integer: {
+        const auto current = std::get<std::int64_t>(*descriptor.value);
+        if (!descriptor.integerMinimum || !descriptor.integerMaximum) return std::nullopt;
+        const auto step = descriptor.integerIncrement.value_or(1);
+        if (step <= 0 || *descriptor.integerMinimum >= *descriptor.integerMaximum) return std::nullopt;
+        auto candidate = *descriptor.integerMinimum;
+        if (candidate == current) {
+            if (candidate > *descriptor.integerMaximum - step) return std::nullopt;
+            candidate += step;
+        }
+        return WritableCandidate{descriptor, candidate};
+    }
+    case DeviceParameterKind::Float: {
+        if (!descriptor.floatMinimum || !descriptor.floatMaximum) return std::nullopt;
+        if (!(*descriptor.floatMinimum < *descriptor.floatMaximum)) return std::nullopt;
+        auto candidate = *descriptor.floatMinimum;
+        if (candidate == std::get<double>(*descriptor.value)) candidate = *descriptor.floatMaximum;
+        return WritableCandidate{descriptor, candidate};
+    }
+    case DeviceParameterKind::Boolean:
+        return WritableCandidate{descriptor, !std::get<bool>(*descriptor.value)};
+    default:
+        return std::nullopt;
+    }
+}
+
+/**
+ * @brief Reports whether any observed name changes writability in the collected order.
+ * @note The snapshot establishes the baseline; the first delta that flips a name matches.
+ */
+std::string findEmulator(CameraSystem& system)
+{
+    for (const auto& name : system.getCameraList()) {
+        if (std::string(system.getCameraInfo(name).GetDeviceClass().c_str()) == "BaslerCamEmu")
+            return name;
+    }
+    return {};
+}
+
+bool sawWritabilityTransition(const std::vector<DeviceParameterChange>& changes,
+    const bool fromWritable, const bool toWritable)
+{
+    std::map<std::string, bool> writable;
+    for (const auto& change : changes) {
+        if (change.error != DeviceParameterError::None) continue;
+        for (const auto& descriptor : change.descriptors) {
+            const auto previous = writable.find(descriptor.target.name);
+            if (previous != writable.end() && previous->second == fromWritable
+                && descriptor.writable == toWritable)
+                return true;
+            writable[descriptor.target.name] = descriptor.writable;
+        }
+    }
+    return false;
+}
 
 } // namespace
 
@@ -423,6 +685,233 @@ private slots:
         QCOMPARE(controller.writeParameter(stale, requested, {}).error, DeviceParameterError::Conflict);
         camera->deregisterNodeUpdatedCallback(callback);
         camera->close();
+    }
+    void parameterTreeCarriesGenApiStructure() {
+        qputenv("PYLON_CAMEMU", "1");
+        auto& system = *_system;
+        const auto emulator = findEmulator(system);
+        if (emulator.empty()) QSKIP("The pylon camera emulator is not installed.");
+        auto* camera = system.addCamera(); QVERIFY(camera);
+        {
+            CameraSourceController controller(camera);
+            QVERIFY(camera->open(emulator));
+            std::vector<DeviceParameterDescriptor> inventory;
+            const auto listed = controller.parameters(&inventory);
+            QVERIFY2(listed.error == DeviceParameterError::None, listed.message.c_str());
+            QVERIFY(!inventory.empty());
+            std::map<std::string, ExpectedTree> expected;
+            QVERIFY(camera->accessFeatures([&](GenApi::INodeMap& map, std::uint64_t) {
+                GenApi::NodeList_t nodes;
+                map.GetNodes(nodes);
+                for (auto* node : nodes) {
+                    const auto type = node->GetPrincipalInterfaceType();
+                    if (type != GenApi::intfIInteger && type != GenApi::intfIFloat
+                        && type != GenApi::intfIBoolean && type != GenApi::intfIString
+                        && type != GenApi::intfIEnumeration && type != GenApi::intfICommand)
+                        continue;
+                    DeviceParameterKind kind = DeviceParameterKind::String;
+                    switch (type) {
+                    case GenApi::intfIInteger: kind = DeviceParameterKind::Integer; break;
+                    case GenApi::intfIFloat: kind = DeviceParameterKind::Float; break;
+                    case GenApi::intfIBoolean: kind = DeviceParameterKind::Boolean; break;
+                    case GenApi::intfIEnumeration: kind = DeviceParameterKind::Enumeration; break;
+                    case GenApi::intfICommand: kind = DeviceParameterKind::Command; break;
+                    default: break;
+                    }
+                    expected.emplace(node->GetName().c_str(), expectedTree(node, kind));
+                }
+            }));
+            std::size_t withCategory = 0, withRelations = 0, producerShared = 0;
+            for (const auto& descriptor : inventory) {
+                const auto found = expected.find(descriptor.target.name);
+                QVERIFY2(found != expected.end(), descriptor.target.name.c_str());
+                QCOMPARE(descriptor.categoryPath, found->second.categoryPath);
+                QVERIFY(descriptor.visibility == found->second.visibility);
+                QVERIFY(descriptor.representation == found->second.representation);
+                QCOMPARE(descriptor.selectorRelations, found->second.relations);
+                QCOMPARE(descriptor.producerShared, found->second.producerShared);
+                std::string reason;
+                QVERIFY2(deviceParameterTreeValid(descriptor, &reason), reason.c_str());
+                if (!descriptor.categoryPath.empty()) ++withCategory;
+                if (!descriptor.selectorRelations.empty()) ++withRelations;
+                if (descriptor.producerShared) ++producerShared;
+            }
+            QVERIFY(withCategory > 0);
+            QVERIFY(producerShared > 0);
+            // LineSelector selects the per-line features; the emulator exposes that tree.
+            QVERIFY2(withRelations > 0, "No descriptor carried a GenApi selector relationship.");
+            camera->close();
+        }
+        system.removeCamera(camera);
+    }
+    void parameterChangesDeliverSnapshotDeltaAndWritability() {
+        qputenv("PYLON_CAMEMU", "1");
+        auto& system = *_system;
+        const auto emulator = findEmulator(system);
+        if (emulator.empty()) QSKIP("The pylon camera emulator is not installed.");
+        auto* camera = system.addCamera(); QVERIFY(camera);
+        {
+            CameraSourceController controller(camera);
+            auto* capability = qobject_cast<IDeviceParameterControl*>(&controller);
+            auto* connection = qobject_cast<IDeviceConnectionControl*>(&controller);
+            QVERIFY(capability && connection);
+            QVERIFY(camera->open(emulator));
+            std::vector<DeviceParameterDescriptor> inventory;
+            QVERIFY(controller.parameters(&inventory).error == DeviceParameterError::None);
+            QVERIFY(!inventory.empty());
+            const auto connectionId = inventory.front().target.connectionId;
+            ChangeCollector collector;
+            QCOMPARE(capability->requestParameterChanges(connectionId, "watch-1",
+                collector.listener()).error, DeviceParameterError::None);
+            QVERIFY(collector.waitFor(1, 5000));
+            const auto snapshot = collector.at(0);
+            QVERIFY(snapshot && snapshot->kind == DeviceParameterChangeKind::Snapshot);
+            QVERIFY(!snapshot->resync);
+            QCOMPARE(snapshot->sequence, std::uint64_t(1));
+            QCOMPARE(snapshot->descriptors.size(), inventory.size());
+            QCOMPARE(snapshot->subscriptionId, std::string("watch-1"));
+
+            std::optional<WritableCandidate> written;
+            for (const auto& descriptor : inventory) {
+                if (descriptor.target.name != "Width") continue;
+                written = writableChange(descriptor);
+            }
+            if (!written) {
+                for (const auto& descriptor : inventory) {
+                    written = writableChange(descriptor);
+                    if (written) break;
+                }
+            }
+            QVERIFY(written.has_value());
+            const auto result = controller.writeParameter(written->descriptor.target,
+                written->value, written->descriptor.revision);
+            QVERIFY2(result.error == DeviceParameterError::None, result.message.c_str());
+            QVERIFY(collector.waitFor(2, 5000));
+            std::uint64_t baseRevision = 0;
+            for (const auto& descriptor : snapshot->descriptors)
+                if (descriptor.target.name == written->descriptor.target.name)
+                    baseRevision = descriptor.revision;
+            bool sawWrittenDelta = false;
+            for (const auto& change : collector.snapshot()) {
+                if (change.kind != DeviceParameterChangeKind::Delta) continue;
+                for (const auto& descriptor : change.descriptors) {
+                    if (descriptor.target.name != written->descriptor.target.name) continue;
+                    if (!descriptor.value || *descriptor.value != written->value) continue;
+                    sawWrittenDelta = change.sequence > snapshot->sequence
+                        && descriptor.revision > baseRevision;
+                }
+            }
+            QVERIFY2(sawWrittenDelta, "The write did not deliver a revision-stamped delta.");
+
+            const auto waitTransition = [&](const bool from, const bool to) {
+                QElapsedTimer timer;
+                timer.start();
+                while (timer.elapsed() < 15000) {
+                    if (sawWritabilityTransition(collector.snapshot(), from, to)) return true;
+                    QTest::qWait(50);
+                }
+                return false;
+            };
+            auto live = std::make_shared<std::promise<DeviceConnectionResult>>();
+            auto liveFuture = live->get_future();
+            QCOMPARE(connection->requestLiveStart(connectionId,
+                [live](DeviceConnectionResult value) { live->set_value(std::move(value)); }).error,
+                DeviceConnectionError::None);
+            QVERIFY(liveFuture.wait_for(std::chrono::seconds(30)) == std::future_status::ready);
+            QCOMPARE(liveFuture.get().error, DeviceConnectionError::None);
+            QVERIFY2(waitTransition(true, false),
+                "Live start did not deliver a writability delta from the device lock.");
+            auto stopped = std::make_shared<std::promise<DeviceConnectionResult>>();
+            auto stoppedFuture = stopped->get_future();
+            QCOMPARE(connection->requestLiveStop(connectionId,
+                [stopped](DeviceConnectionResult value) { stopped->set_value(std::move(value)); }).error,
+                DeviceConnectionError::None);
+            QVERIFY(stoppedFuture.wait_for(std::chrono::seconds(30)) == std::future_status::ready);
+            QCOMPARE(stoppedFuture.get().error, DeviceConnectionError::None);
+            QVERIFY2(waitTransition(false, true),
+                "Live stop did not re-observe the unlocked writability.");
+
+            auto released = std::make_shared<std::promise<DeviceParameterResult>>();
+            auto releasedFuture = released->get_future();
+            QCOMPARE(capability->releaseParameterChanges(connectionId, "watch-1",
+                [released](DeviceParameterResult value) { released->set_value(std::move(value)); }).error,
+                DeviceParameterError::None);
+            QVERIFY(releasedFuture.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
+            QCOMPARE(releasedFuture.get().error, DeviceParameterError::None);
+            const auto delivered = collector.size();
+            QTest::qWait(300);
+            QCOMPARE(collector.size(), delivered);
+            QCOMPARE(capability->releaseParameterChanges(connectionId, "watch-1",
+                [](DeviceParameterResult) {}).error, DeviceParameterError::NotFound);
+            camera->close();
+        }
+        system.removeCamera(camera);
+    }
+    void parameterChangeOverflowResyncs() {
+        qputenv("PYLON_CAMEMU", "1");
+        auto& system = *_system;
+        const auto emulator = findEmulator(system);
+        if (emulator.empty()) QSKIP("The pylon camera emulator is not installed.");
+        auto* camera = system.addCamera(); QVERIFY(camera);
+        {
+            CameraSourceController controller(camera);
+            auto* capability = qobject_cast<IDeviceParameterControl*>(&controller);
+            QVERIFY(capability);
+            QVERIFY(camera->open(emulator));
+            std::vector<DeviceParameterDescriptor> inventory;
+            QVERIFY(controller.parameters(&inventory).error == DeviceParameterError::None);
+            QVERIFY(!inventory.empty());
+            const auto connectionId = inventory.front().target.connectionId;
+            ChangeCollector collector;
+            QCOMPARE(capability->requestParameterChanges(connectionId, "watch-overflow",
+                collector.listener()).error, DeviceParameterError::None);
+            QVERIFY(collector.waitFor(1, 5000));
+            collector.holdDeltas(true);
+            std::optional<WritableCandidate> held;
+            for (const auto& descriptor : inventory) {
+                if (descriptor.target.name != "Width") continue;
+                held = writableChange(descriptor);
+            }
+            QVERIFY(held.has_value());
+            QVERIFY(controller.writeParameter(held->descriptor.target, held->value,
+                held->descriptor.revision).error == DeviceParameterError::None);
+            QVERIFY(collector.waitUntilHeld(5000));
+
+            std::size_t changed = 0;
+            std::set<std::string> used{held->descriptor.target.name};
+            for (const auto& descriptor : inventory) {
+                if (changed >= deviceParameterChangeQueueLimit + 4) break;
+                if (used.count(descriptor.target.name)) continue;
+                const auto candidate = writableChange(descriptor);
+                if (!candidate) continue;
+                if (controller.writeParameter(candidate->descriptor.target, candidate->value,
+                        candidate->descriptor.revision).error != DeviceParameterError::None)
+                    continue;
+                used.insert(descriptor.target.name);
+                ++changed;
+            }
+            collector.releaseHeld();
+            if (changed < deviceParameterChangeQueueLimit + 1) {
+                collector.holdDeltas(false);
+                QSKIP("The emulator does not expose enough writable scalar features to overflow the queue.");
+            }
+            QVERIFY(collector.waitForResync(15000));
+            bool sawResync = false;
+            for (const auto& change : collector.snapshot()) {
+                if (!change.resync) continue;
+                sawResync = true;
+                QCOMPARE(change.kind, DeviceParameterChangeKind::Snapshot);
+                QVERIFY(!change.overflowReason.empty());
+                QVERIFY(change.sequence > 1);
+                QVERIFY(change.descriptors.size() >= inventory.size());
+            }
+            QVERIFY2(sawResync, "The bounded change queue did not deliver a resync snapshot.");
+            collector.holdDeltas(false);
+            QCOMPARE(capability->releaseParameterChanges(connectionId, "watch-overflow",
+                [](DeviceParameterResult) {}).error, DeviceParameterError::None);
+            camera->close();
+        }
+        system.removeCamera(camera);
     }
     void emulatedSingleAndLiveFollowAcquisitionMode() {
         qputenv("PYLON_CAMEMU", "1");
