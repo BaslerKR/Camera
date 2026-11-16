@@ -313,9 +313,14 @@ private slots:
         frames.store(0);
         auto live = invoke([&](auto done) { return connection->requestLiveStart(connectionId, done); });
         QVERIFY2(live.error == DeviceConnectionError::None, live.message.c_str());
+        // A parameter write while Live can observe AcquisitionMode as locked; stop must
+        // re-observe it before Single availability is offered again.
+        camera->notifyFeaturesChanged();
         QVERIFY(waitFrames(2));
         auto stopped = invoke([&](auto done) { return connection->requestLiveStop(connectionId, done); });
         QVERIFY2(stopped.error == DeviceConnectionError::None, stopped.message.c_str());
+        const auto afterStop = connection->connectionCapabilities();
+        QVERIFY2(afterStop.single.available, afterStop.single.reason.c_str());
         QVERIFY2(readMode(&mode, &modeError), modeError.c_str());
         QCOMPARE(mode, std::string("Continuous"));
 

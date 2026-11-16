@@ -149,6 +149,8 @@ public:
     CameraAcquisitionStart startAcquisition(CameraAcquisitionAction action, GrabFinished finished);
     /** @brief Copies cached Single availability without an SDK wait. */
     [[nodiscard]] CameraAcquisitionCapabilities acquisitionCapabilities() const;
+    /** @brief Refreshes the cached Single availability through the existing feature admission. */
+    void refreshAcquisitionCapabilities();
     /** Requests stop and joins the frame-receive worker. */
     void stop();
     /** Requests worker stop without joining the caller. */
@@ -252,8 +254,6 @@ private:
     CameraAcquisitionCapabilities observeAcquisitionCapabilities(GenApi::INodeMap& nodeMap) const;
     /** @brief Stores one copied capability snapshot. */
     void setAcquisitionCapabilities(CameraAcquisitionCapabilities capabilities);
-    /** @brief Refreshes the cached capability through the existing feature admission. */
-    void refreshAcquisitionCapabilities();
     /** @brief Reports a disconnected lifetime instead of a stale capability. */
     void resetAcquisitionCapabilities(const std::string& reason);
 

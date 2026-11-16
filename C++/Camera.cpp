@@ -916,6 +916,9 @@ void Camera::stop(){
             CameraSystem::syslog("[DEBUG] Camera stop joined grab worker in "
                 + std::to_string(joinMs) + " ms.");
         }
+        // A parameter write during grabbing can observe a locked AcquisitionMode; re-observe
+        // after the SDK has unlocked it so Single is not left unavailable.
+        refreshAcquisitionCapabilities();
     }catch(const GenericException &e){
         CameraSystem::syslog(e.GetDescription(),true);
     }catch(const std::exception &e){

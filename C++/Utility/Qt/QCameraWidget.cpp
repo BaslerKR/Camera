@@ -1115,6 +1115,10 @@ void QCameraWidget::logMessage(const QString& message, bool error)
 void QCameraWidget::updateGrabState(bool grabbing)
 {
     const bool wasGrabbing = _grabbing.exchange(grabbing, std::memory_order_acq_rel);
+    // A parameter refresh during Live can cache a locked (unwritable) AcquisitionMode; the
+    // pylon callback runs after the SDK releases acquisition, so re-observe before enabling
+    // Grab One again.
+    if (!grabbing && _camera && !_shuttingDown) _camera->refreshAcquisitionCapabilities();
     updateAcquisitionControls();
     if (grabbing && !wasGrabbing) {
         _lastDelivered = 0;
