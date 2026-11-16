@@ -7,11 +7,9 @@
 #include <cstdint>
 #include <limits>
 #include <utility>
-#include <vector>
 
 namespace {
 #define GRAPHICSENGINE_OMP_PARALLEL_FOR _Pragma("omp parallel for")
-#define GRAPHICSENGINE_OMP_PARALLEL_FOR_REDUCTION_SUM _Pragma("omp parallel for reduction(+:validPointCount)")
 
 // Forward declare struct coordinates for blaze 3D
 struct Coord3DPoint
@@ -174,26 +172,6 @@ struct BlazeFrameOptions
     }
 }
 
-[[nodiscard]] std::uint8_t scalarToRgb8(const float value, const Pylon::EPixelType pixelType) noexcept
-{
-    if (!std::isfinite(value))
-    {
-        return 0U;
-    }
-
-    switch (pixelType)
-    {
-    case Pylon::PixelType_Mono8:
-    case Pylon::PixelType_Confidence8:
-        return static_cast<std::uint8_t>(value);
-    case Pylon::PixelType_Mono16:
-    case Pylon::PixelType_Confidence16:
-        return static_cast<std::uint8_t>(static_cast<std::uint16_t>(value) >> 8U);
-    default:
-        return 255U;
-    }
-}
-
 [[nodiscard]] std::uint8_t readScalarRgb8(const std::uint8_t* row,
                                           const std::size_t x,
                                           const Pylon::EPixelType pixelType) noexcept
@@ -281,112 +259,6 @@ void writeScalarComponent(const BlazeScalarSource& component,
     return view;
 }
 
-[[nodiscard]] PointCloudData buildPointCloudOnly(const std::uint8_t* src,
-                                                 const std::size_t stride,
-                                                 const std::size_t width,
-                                                 const std::size_t height,
-                                                 const BlazeScalarSource* pointColorSource,
-                                                 const BlazeFrameOptions& options)
-{
-    std::vector<std::size_t> rowValidCounts(height, 0U);
-    std::size_t validPointCount = 0U;
-
-    GRAPHICSENGINE_OMP_PARALLEL_FOR_REDUCTION_SUM
-    for (std::ptrdiff_t ySigned = 0; ySigned < static_cast<std::ptrdiff_t>(height); ++ySigned)
-    {
-        const auto y = static_cast<std::size_t>(ySigned);
-        const auto* row = reinterpret_cast<const Coord3DPoint*>(src + y * stride);
-        std::size_t rowCount = 0U;
-        for (std::size_t x = 0; x < width; ++x)
-        {
-            rowCount += isFinitePoint(row[x]) ? 1U : 0U;
-        }
-        rowValidCounts[y] = rowCount;
-        validPointCount += rowCount;
-    }
-
-    PointCloudData cloud;
-    if (validPointCount == 0U)
-    {
-        return cloud;
-    }
-
-    const bool hasPointColor = pointColorSource != nullptr && options.includePointCloudColors;
-    cloud.xyz.resize(validPointCount * 3U);
-    if (hasPointColor)
-    {
-        cloud.rgb.resize(validPointCount * 3U);
-    }
-
-    if (validPointCount == width * height)
-    {
-        GRAPHICSENGINE_OMP_PARALLEL_FOR
-        for (std::ptrdiff_t ySigned = 0; ySigned < static_cast<std::ptrdiff_t>(height); ++ySigned)
-        {
-            const auto y = static_cast<std::size_t>(ySigned);
-            const auto* row = reinterpret_cast<const Coord3DPoint*>(src + y * stride);
-            const auto* intensityRow = pointColorSource != nullptr ? pointColorSource->data + y * pointColorSource->stride : nullptr;
-            for (std::size_t x = 0; x < width; ++x)
-            {
-                const Coord3DPoint& point = row[x];
-                const std::size_t tupleOffset = (y * width + x) * 3U;
-                cloud.xyz[tupleOffset] = point.x;
-                cloud.xyz[tupleOffset + 1U] = options.rotatePointCloudAroundX180 ? -point.y : point.y;
-                cloud.xyz[tupleOffset + 2U] = options.rotatePointCloudAroundX180 ? -point.z : point.z;
-                if (hasPointColor && intensityRow != nullptr)
-                {
-                    const std::uint8_t gray = readScalarRgb8(intensityRow, x, pointColorSource->pixelType);
-                    cloud.rgb[tupleOffset] = gray;
-                    cloud.rgb[tupleOffset + 1U] = gray;
-                    cloud.rgb[tupleOffset + 2U] = gray;
-                }
-            }
-        }
-
-        return cloud;
-    }
-
-    std::vector<std::size_t> rowOffsets(height);
-    std::size_t offset = 0U;
-    for (std::size_t y = 0; y < height; ++y)
-    {
-        rowOffsets[y] = offset;
-        offset += rowValidCounts[y];
-    }
-
-    GRAPHICSENGINE_OMP_PARALLEL_FOR
-    for (std::ptrdiff_t ySigned = 0; ySigned < static_cast<std::ptrdiff_t>(height); ++ySigned)
-    {
-        const auto y = static_cast<std::size_t>(ySigned);
-        const auto* row = reinterpret_cast<const Coord3DPoint*>(src + y * stride);
-        const auto* intensityRow = pointColorSource != nullptr ? pointColorSource->data + y * pointColorSource->stride : nullptr;
-        std::size_t out = rowOffsets[y];
-        for (std::size_t x = 0; x < width; ++x)
-        {
-            const Coord3DPoint& point = row[x];
-            if (!isFinitePoint(point))
-            {
-                continue;
-            }
-
-            const std::size_t tupleOffset = out * 3U;
-            cloud.xyz[tupleOffset] = point.x;
-            cloud.xyz[tupleOffset + 1U] = options.rotatePointCloudAroundX180 ? -point.y : point.y;
-            cloud.xyz[tupleOffset + 2U] = options.rotatePointCloudAroundX180 ? -point.z : point.z;
-            if (hasPointColor && intensityRow != nullptr)
-            {
-                const std::uint8_t gray = readScalarRgb8(intensityRow, x, pointColorSource->pixelType);
-                cloud.rgb[tupleOffset] = gray;
-                cloud.rgb[tupleOffset + 1U] = gray;
-                cloud.rgb[tupleOffset + 2U] = gray;
-            }
-            ++out;
-        }
-    }
-
-    return cloud;
-}
-
 [[nodiscard]] bool hasInvalidPoint(
     const BlazeRangeSource& source,
     const std::size_t width,
@@ -426,137 +298,115 @@ std::optional<GraphicsFrame> buildBlazeFrame(
 
     const std::size_t width = static_cast<std::size_t>(source.width);
     const std::size_t height = static_cast<std::size_t>(source.height);
-    const std::size_t pixelCount = width * height;
     const bool allValid = !hasInvalidPoint(source, width, height);
+    // A point cloud is derived from the range by the consumer, so a
+    // PointCloud-only request still carries the range. Its RGB channel keeps
+    // the grayscale intensity colours the explicit cloud used to carry.
     const bool includeIntensity = wantsRangeFrame && options.includeRangeAuxiliaryChannels
         && source.hasIntensity;
     const bool includeConfidence = wantsRangeFrame && options.includeRangeAuxiliaryChannels
         && source.hasConfidence;
+    const bool includePointColors = wantsPointCloud && options.includePointCloudColors
+        && source.hasIntensity && source.intensity.data != nullptr;
     const BlazeScalarSource* const pointColorSource =
-        wantsPointCloud && options.includePointCloudColors && source.hasIntensity
-        ? &source.intensity : nullptr;
+        includePointColors ? &source.intensity : nullptr;
 
-    std::optional<GraphicsRangeFrameWriter> writer;
-    if (wantsRangeFrame)
+    GraphicsRangeFrameLayout layout;
+    layout.width = source.width;
+    layout.height = source.height;
+    layout.channels.x = true;
+    layout.channels.y = true;
+    layout.channels.validMask = !allValid;
+    layout.channels.intensity = includeIntensity;
+    layout.channels.confidence = includeConfidence;
+    layout.channels.rgb = includePointColors;
+    GraphicsRangeFrameWriter writer(layout, storage);
+    if (!writer.isValid())
     {
-        GraphicsRangeFrameLayout layout;
-        layout.width = source.width;
-        layout.height = source.height;
-        layout.channels.x = true;
-        layout.channels.y = true;
-        layout.channels.validMask = !allValid;
-        layout.channels.intensity = includeIntensity;
-        layout.channels.confidence = includeConfidence;
-        writer.emplace(layout, storage);
-        if (!writer->isValid())
-        {
-            return std::nullopt;
-        }
+        return std::nullopt;
     }
 
-    PointCloudData cloud;
-    RangeFrame frame;
-    if (writer.has_value())
+    float* const xValues = writer.xData();
+    float* const yValues = writer.yData();
+    float* const zValues = writer.zData();
+    std::uint8_t* const mask = writer.validMaskData();
+    std::uint8_t* const rgb = writer.rgbData();
+    for (std::size_t y = 0; y < height; ++y)
     {
-        float* const xValues = writer->xData();
-        float* const yValues = writer->yData();
-        float* const zValues = writer->zData();
-        std::uint8_t* const mask = writer->validMaskData();
-        for (std::size_t y = 0; y < height; ++y)
+        const auto* row = reinterpret_cast<const Coord3DPoint*>(
+            source.coordinates + y * source.coordinateStride);
+        const auto* intensityRow = pointColorSource != nullptr
+            ? pointColorSource->data + y * pointColorSource->stride : nullptr;
+        for (std::size_t x = 0; x < width; ++x)
         {
-            const auto* row = reinterpret_cast<const Coord3DPoint*>(
-                source.coordinates + y * source.coordinateStride);
-            const auto* intensityRow = pointColorSource != nullptr
-                ? pointColorSource->data + y * pointColorSource->stride : nullptr;
-            for (std::size_t x = 0; x < width; ++x)
+            const std::size_t index = orientedIndex(x, y, width, height, options);
+            const Coord3DPoint& point = row[x];
+            const bool valid = isFinitePoint(point);
+            const float worldY = options.rotatePointCloudAroundX180 ? -point.y : point.y;
+
+            xValues[index] = point.x;
+            yValues[index] = worldY;
+            zValues[index] = point.z;
+            if (mask != nullptr)
             {
-                const std::size_t index = orientedIndex(x, y, width, height, options);
-                const Coord3DPoint& point = row[x];
-                const bool valid = isFinitePoint(point);
-                const float worldY = options.rotatePointCloudAroundX180 ? -point.y : point.y;
-                const float worldZ = options.rotatePointCloudAroundX180 ? -point.z : point.z;
-
-                xValues[index] = point.x;
-                yValues[index] = worldY;
-                zValues[index] = point.z;
-                if (mask != nullptr)
-                {
-                    mask[index] = valid ? 1U : 0U;
-                }
-
-                if (wantsPointCloud)
-                {
-                    if (!valid)
-                    {
-                        continue;
-                    }
-
-                    cloud.xyz.push_back(point.x);
-                    cloud.xyz.push_back(worldY);
-                    cloud.xyz.push_back(worldZ);
-                    if (intensityRow != nullptr)
-                    {
-                        const std::uint8_t gray = scalarToRgb8(
-                            readScalar(intensityRow, x, pointColorSource->pixelType),
-                            pointColorSource->pixelType);
-                        cloud.rgb.push_back(gray);
-                        cloud.rgb.push_back(gray);
-                        cloud.rgb.push_back(gray);
-                    }
-                }
+                mask[index] = valid ? 1U : 0U;
+            }
+            if (rgb != nullptr)
+            {
+                const std::uint8_t gray = readScalarRgb8(
+                    intensityRow, x, pointColorSource->pixelType);
+                const std::size_t colorOffset = index * 3U;
+                rgb[colorOffset] = gray;
+                rgb[colorOffset + 1U] = gray;
+                rgb[colorOffset + 2U] = gray;
             }
         }
-
-        if (includeIntensity)
-        {
-            writeScalarComponent(source.intensity, width, height, writer->intensityData(), options);
-        }
-        if (includeConfidence)
-        {
-            writeScalarComponent(source.confidence, width, height, writer->confidenceData(), options);
-        }
-
-        frame = writer->takeFrame();
-        frame.lengthUnit = GraphicsLengthUnit::Millimeter;
-        frame.zScale = options.rotatePointCloudAroundX180 ? -1.0 : 1.0;
-        frame.xyCoordinateMode = RangeFrameXYCoordinateMode::ExplicitXY;
-        frame.rangeField = {
-            "basler.blaze.z-coordinate",
-            "Z coordinate",
-            "mm",
-            MeasurementValueDomain::Calibrated,
-            MeasurementSampleKind::GridSample,
-            32U};
-        frame.intensityField = {
-            "basler.blaze.intensity",
-            "Intensity",
-            "",
-            MeasurementValueDomain::Native,
-            MeasurementSampleKind::GridSample,
-            0U};
-        frame.confidenceField = {
-            "basler.blaze.confidence",
-            "Confidence",
-            "",
-            MeasurementValueDomain::Native,
-            MeasurementSampleKind::GridSample,
-            0U};
-        frame.sensorType = "Basler blaze";
-        if (includeIntensity)
-        {
-            frame.intensityBits = scalarBits(source.intensity.pixelType);
-            frame.intensityField.bitsPerSample = frame.intensityBits;
-        }
-        if (includeConfidence)
-        {
-            frame.confidenceBits = scalarBits(source.confidence.pixelType);
-            frame.confidenceField.bitsPerSample = frame.confidenceBits;
-        }
     }
-    else if (wantsPointCloud)
+
+    if (includeIntensity)
     {
-        cloud = buildPointCloudOnly(source.coordinates, source.coordinateStride, width, height,
-            pointColorSource, options);
+        writeScalarComponent(source.intensity, width, height, writer.intensityData(), options);
+    }
+    if (includeConfidence)
+    {
+        writeScalarComponent(source.confidence, width, height, writer.confidenceData(), options);
+    }
+
+    RangeFrame frame = writer.takeFrame();
+    frame.lengthUnit = GraphicsLengthUnit::Millimeter;
+    frame.zScale = options.rotatePointCloudAroundX180 ? -1.0 : 1.0;
+    frame.xyCoordinateMode = RangeFrameXYCoordinateMode::ExplicitXY;
+    frame.rangeField = {
+        "basler.blaze.z-coordinate",
+        "Z coordinate",
+        "mm",
+        MeasurementValueDomain::Calibrated,
+        MeasurementSampleKind::GridSample,
+        32U};
+    frame.intensityField = {
+        "basler.blaze.intensity",
+        "Intensity",
+        "",
+        MeasurementValueDomain::Native,
+        MeasurementSampleKind::GridSample,
+        0U};
+    frame.confidenceField = {
+        "basler.blaze.confidence",
+        "Confidence",
+        "",
+        MeasurementValueDomain::Native,
+        MeasurementSampleKind::GridSample,
+        0U};
+    frame.sensorType = "Basler blaze";
+    if (includeIntensity)
+    {
+        frame.intensityBits = scalarBits(source.intensity.pixelType);
+        frame.intensityField.bitsPerSample = frame.intensityBits;
+    }
+    if (includeConfidence)
+    {
+        frame.confidenceBits = scalarBits(source.confidence.pixelType);
+        frame.confidenceField.bitsPerSample = frame.confidenceBits;
     }
 
     GraphicsFrame scene;
@@ -565,11 +415,6 @@ std::optional<GraphicsFrame> buildBlazeFrame(
     {
         scene.addRange("range", std::move(frame), "Range", "primary");
         scene.ranges.back().initialView = blazeInitialView(1.0);
-    }
-    if (cloud.isValid())
-    {
-        scene.addPointCloud("point-cloud", std::move(cloud), "Point Cloud", "primary",
-                            blazeInitialView(1.15));
     }
 
     if (!scene.isValid())
