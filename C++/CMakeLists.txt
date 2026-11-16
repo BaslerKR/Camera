@@ -21,7 +21,7 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
 endif()
 if(PROJECT_NAME STREQUAL "Camera" AND PROJECT_IS_TOP_LEVEL AND
    (CAMERA_BUILD_PLAYGROUND_ADAPTER OR CAMERA_BUILD_PLAYGROUND_PLUGIN))
-    find_package(PlaygroundPluginSDK 0.2 CONFIG REQUIRED)
+    find_package(PlaygroundPluginSDK 0.3 CONFIG REQUIRED)
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 endif()
 
@@ -287,10 +287,10 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
             "CAMERA_BUILD_QT_WIDGET."
         )
     endif()
-    if(NOT TARGET Playground::DevicePlugin)
+    if(NOT TARGET Playground::DeviceRuntimeContract)
         message(FATAL_ERROR
             "[Camera] CAMERA_BUILD_PLAYGROUND_PLUGIN=ON requires "
-            "Playground::DevicePlugin."
+            "Playground::DeviceRuntimeContract."
         )
     endif()
     if(NOT TARGET Qt6::Widgets)
@@ -306,6 +306,7 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
         Utility/PlaygroundAdapter/Source/CameraSourceController.cpp
         Utility/PlaygroundAdapter/Source/CameraParameterControl.cpp
     )
+    playground_sdk_add_runtime_contract(CameraPlugin)
     set_target_properties(CameraPlugin PROPERTIES
         PREFIX ""
         OUTPUT_NAME CameraPlugin
@@ -318,9 +319,10 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
         "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Source"
         "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Plugin"
+        "${PlaygroundPluginSDK_WIDGET_INCLUDE_DIR}"
     )
     target_link_libraries(CameraPlugin PRIVATE
-        Playground::DevicePlugin
+        Playground::DeviceRuntimeContract
         Camera::QtWidget
         Camera::PlaygroundAdapter
         Qt6::Widgets
@@ -336,6 +338,7 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
             Utility/PlaygroundAdapter/Source/CameraSourceController.cpp
             Utility/PlaygroundAdapter/Source/CameraParameterControl.cpp
         )
+        playground_sdk_add_runtime_contract(camera_parameter_control_test)
         set_target_properties(camera_parameter_control_test PROPERTIES AUTOMOC ON)
         target_compile_features(camera_parameter_control_test PRIVATE cxx_std_17)
         target_include_directories(camera_parameter_control_test PRIVATE
@@ -343,7 +346,7 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
             "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Source"
         )
         target_link_libraries(camera_parameter_control_test PRIVATE
-            Playground::DevicePlugin
+            Playground::DeviceRuntimeContract
             Camera::QtWidget
             Camera::PlaygroundAdapter
             Qt6::Widgets

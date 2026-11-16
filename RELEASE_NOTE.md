@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Build against the widget-free device runtime SDK: the contract target is `Playground::DeviceRuntimeContract`, headers live under `DeviceRuntime/Contract`, and the interface is `IDeviceRuntime`. The temporary widget library resolves Qt Widgets and Resources itself until U2 removes it.
+
 - Claim one network or USB camera per session through Playground's host hardware-resource claims. The key is the camera serial, so a second session of this package is refused with the owning session named instead of reaching the transport. The claim is released on disconnect and session close, and a camera without a serial keeps the SDK's native arbitration.
 - Select the acquisition mode from the requested action. Single (`device.single` and the widget's Grab One) writes `AcquisitionMode=SingleFrame` before it acquires one native frame; Live (`source.start`, `device.live-start` and the widget's Live) writes `AcquisitionMode=Continuous`. Only `AcquisitionMode` is written, so trigger and other user settings stay. A changed value is logged at INFO and recorded in `diagnostics.Camera`; Single is declared unavailable with the node-map reason when `AcquisitionMode` is missing, unavailable, unwritable or has no `SingleFrame`, and an unwritable mode refuses the action instead of stopping a continuous stream.
 - `Camera::startAcquisition()` replaces the public raw `grab()` entry point used by the widget and controller. `acquisitionCapabilities()` reports Single availability from the observed remote node map without an SDK wait, and Live stop re-observes it before offering Single again.
@@ -92,8 +94,8 @@
 
 - Stage `pylon.framework` in the Playground plugin `runtime` payload on macOS instead of the host `Contents/Frameworks` extra list.
 
-- Link `Playground::DevicePlugin` for the `IDevicePlugin` MODULE.
-- Own package identity in `Utility/PlaygroundAdapter/Package/Package.cmake`; the host emits `plugin.json` from `DevicePluginPackage.h`.
+- Link `Playground::DeviceRuntimeContract` for the `IDeviceRuntime` MODULE.
+- Own package identity in `Utility/PlaygroundAdapter/Package/Package.cmake`; the host emits `plugin.json` from `DeviceRuntime.h`.
 - Keep the session source controller in `Utility/PlaygroundAdapter/Source` as `CameraSourceController`.
 - Declare the Playground plugin runtime payload from this module; the host copies it into the package.
 - Move the GraphicsFrame stream/adapter into `Utility/PlaygroundAdapter` as `Camera::PlaygroundAdapter`.
