@@ -301,12 +301,12 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
     find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets Concurrent)
 
     add_library(CameraPlugin MODULE
-        "${PlaygroundPluginSDK_PREFIX}/include/Playground/DeviceRuntime/Contract/AbstractSourceController.h"
         Utility/PlaygroundAdapter/Plugin/CameraPlugin.cpp
         Utility/PlaygroundAdapter/Source/CameraSourceController.h
         Utility/PlaygroundAdapter/Source/CameraSourceController.cpp
         Utility/PlaygroundAdapter/Source/CameraParameterControl.cpp
     )
+    playground_sdk_add_runtime_contract(CameraPlugin)
     set_target_properties(CameraPlugin PROPERTIES
         PREFIX ""
         OUTPUT_NAME CameraPlugin
@@ -334,11 +334,11 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
         # The controller sources are compiled into the plugin MODULE, so the test compiles them too.
         find_package(Qt6 REQUIRED COMPONENTS Test)
         add_executable(camera_parameter_control_test
-            "${PlaygroundPluginSDK_PREFIX}/include/Playground/DeviceRuntime/Contract/AbstractSourceController.h"
             Utility/PlaygroundAdapter/Tests/ParameterControlTest.cpp
             Utility/PlaygroundAdapter/Source/CameraSourceController.cpp
             Utility/PlaygroundAdapter/Source/CameraParameterControl.cpp
         )
+        playground_sdk_add_runtime_contract(camera_parameter_control_test)
         set_target_properties(camera_parameter_control_test PROPERTIES AUTOMOC ON)
         target_compile_features(camera_parameter_control_test PRIVATE cxx_std_17)
         target_include_directories(camera_parameter_control_test PRIVATE
