@@ -2,14 +2,17 @@
 #include "AbstractSourceController.h"
 #include "Camera.h"
 #include "DeviceConnectionControl.h"
+#include "DevicePlugin.h"
 #include "DeviceParameterControl.h"
 #include "FrameStorage.h"
 #include <map>
+#include <QString>
 #include <QSet>
 #include <QThread>
 #include <QLoggingCategory>
 #include <atomic>
 #include <memory>
+#include <mutex>
 
 class PylonGraphicsFrameStream;
 
@@ -23,7 +26,9 @@ public:
     void setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider) override;
     using Completion = IDeviceParameterControl::Completion;
     using TargetsCompletion = IDeviceConnectionControl::TargetsCompletion;
-    explicit CameraSourceController(Camera* camera, QObject* parent = nullptr);
+    CameraSourceController(Camera* camera, IDevicePluginResourceClaims* claims = nullptr,
+        std::shared_ptr<IDevicePluginResourceClaim>* claim = nullptr,
+        QObject* parent = nullptr);
     ~CameraSourceController() override;
 
     /** @brief Copies producer counters used by the device statusbar. */
@@ -91,6 +96,8 @@ private:
     QSet<QThread*> _parameterWorkers;
     bool _parameterClosing = false;
     void registerCallbacks();
+    /** @brief Releases the held device claim, if any. */
+    void releaseClaim();
     void deregisterCallbacks();
     /** @brief Assigns observed revisions while holding the owning camera/node-map locks. */
     DeviceParameterDescriptor observeParameter(GenApi::INode* node, std::uint64_t generation);
@@ -103,6 +110,10 @@ private:
     std::map<std::string, DeviceParameterDescriptor> _parameterObservations;
 
     Camera* _camera;
+    IDevicePluginResourceClaims* _claims = nullptr;
+    std::shared_ptr<IDevicePluginResourceClaim>* _claim = nullptr;
+    QString _claimKey;
+    mutable std::mutex _connectionWorkMutex;
     FrameConsumer _frameConsumer;
     std::atomic<bool> _isGrabbing{false};
     std::atomic<uint64_t> _frameSeq{0};
