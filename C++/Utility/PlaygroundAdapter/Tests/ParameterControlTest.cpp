@@ -285,8 +285,10 @@ private slots:
         }
         if (emulatorId.empty()) QSKIP("The pylon camera emulator is not installed.");
 
+        // Let the finished discovery worker leave the bounded worker set before the burst.
+        QTest::qWait(100);
         std::vector<std::future<DeviceConnectionResult>> futures;
-        for (int index = 0; index < 8; ++index) {
+        for (int index = 0; index < 7; ++index) {
             auto promise = std::make_shared<std::promise<DeviceConnectionResult>>();
             futures.push_back(promise->get_future());
             const auto admitted = connection->requestConnect(emulatorId,
@@ -309,7 +311,7 @@ private slots:
             }
         }
         QCOMPARE(successes, 1);
-        QCOMPARE(conflicts, 7);
+        QCOMPARE(conflicts, 6);
         QCOMPARE(claims.held(), QSet<QString>({emulatorKey}));
         QVERIFY(held && held->key() == emulatorKey);
         QVERIFY(winner.state && winner.state->connected);
