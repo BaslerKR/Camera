@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Claim one network or USB camera per session through Playground's host hardware-resource claims. The key is the camera serial, so a second session of this package is refused with the owning session named instead of reaching the transport. The claim is released on disconnect and session close, and a camera without a serial keeps the SDK's native arbitration.
+
 - Deliver Basler blaze 3D range data through the GraphicsEngine range writer into Playground shared frame storage. The range channels are written once into provided storage; an empty result drops the range. A blaze frame no longer carries a second explicit point cloud of the same points: GraphicsEngine derives it from the range, and the range RGB channel carries the grayscale intensity colours the explicit cloud used.
 
 ## v1.4.0 (2026-11-14)

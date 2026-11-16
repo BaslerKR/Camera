@@ -31,7 +31,7 @@ struct CameraRuntimeDiagnostics {
     std::uint64_t failed = 0;
 };
 /** @brief Copies a transport-owned target identity independently of feature widgets. */
-struct CameraDeviceDescriptor { std::string id; std::string displayName; };
+struct CameraDeviceDescriptor { std::string id; std::string displayName; std::string serial; };
 /** @brief Copies current logical connection identity without querying SDK features. */
 struct CameraConnectionState { bool connected = false; std::uint64_t generation = 0; std::string deviceId; std::string displayName; };
 /** @brief Distinguishes refused lifecycle admission from actual SDK failure. */
@@ -75,6 +75,8 @@ public:
     std::string getConnectedCameraName() const;
     /** @brief Copies cached or explicitly refreshed targets through the existing system authority. */
     std::vector<CameraDeviceDescriptor> deviceCatalog(bool refresh) const;
+    /** @brief Copies the device serial for one exact target, or an empty string when absent. */
+    std::string deviceSerialNumber(const std::string& deviceId) const;
     /** @brief Copies logical connection state and its reconnect generation. */
     CameraConnectionState connectionState() const;
     /** @brief Admits exact target connect/disconnect without waiting or silently switching a live connection. */

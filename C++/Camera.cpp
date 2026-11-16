@@ -381,6 +381,13 @@ bool Camera::closeLocked(){
 
 std::vector<CameraDeviceDescriptor> Camera::deviceCatalog(bool refresh) const { return _system->deviceCatalog(refresh); }
 
+std::string Camera::deviceSerialNumber(const std::string& deviceId) const {
+    for (const auto& target : _system->deviceCatalog(false)) {
+        if (target.id == deviceId) return target.serial;
+    }
+    return {};
+}
+
 CameraConnectionState Camera::connectionState() const {
     std::lock_guard<std::mutex> lock(_connectionStateMutex);
     const bool connected = _deviceAvailable.load(std::memory_order_acquire);

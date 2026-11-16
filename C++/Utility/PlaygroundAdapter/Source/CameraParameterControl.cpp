@@ -403,7 +403,23 @@ DeviceConnectionResult CameraSourceController::requestConnect(std::string target
         auto state = _camera->connectionState();
         if (state.connected)
             return {DeviceConnectionError::Conflict, "Disconnect the current target explicitly before connecting another."};
+        // A network or USB camera is the exclusive resource per session. Claim its serial
+        // before the SDK open so a second session of this package is refused with the owner
+        // named instead of reaching the transport.
+        if (_claims && !_claim) {
+            const auto key = playgroundCameraResourceKey(
+                QString::fromStdString(_camera->deviceSerialNumber(targetId)));
+            if (!key.isEmpty()) {
+                QString claimError;
+                _claim = _claims->claimResource(key, &claimError);
+                if (!_claim) {
+                    return {DeviceConnectionError::Conflict, claimError.toStdString(),
+                        DeviceConnectionEffect::None, std::nullopt};
+                }
+            }
+        }
         const auto outcome = _camera->controlConnection(true, targetId, state.generation, &state);
+        if (outcome != CameraConnectionOutcome::Success) _claim.reset();
         return connectionOutcome(outcome, state);
     }, std::move(completion));
 }
@@ -414,6 +430,7 @@ DeviceConnectionResult CameraSourceController::requestDisconnect(std::string con
         if (!state.connected) return {DeviceConnectionError::Disconnected, "The camera is disconnected."};
         if (connectionIdFor(state) != connectionId) return {DeviceConnectionError::Conflict, "The connection changed; observe it again."};
         const auto outcome = _camera->controlConnection(false, {}, state.generation, &state);
+        if (outcome == CameraConnectionOutcome::Success) _claim.reset();
         return connectionOutcome(outcome, state);
     }, std::move(completion));
 }

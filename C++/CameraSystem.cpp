@@ -93,7 +93,10 @@ std::vector<CameraDeviceDescriptor> CameraSystem::deviceCatalog(bool refresh) {
     std::lock_guard<std::mutex> lock(_mutex);
     if (refresh) updateCameraListLocked();
     std::vector<CameraDeviceDescriptor> result;
-    for (const auto& device : _devices) result.push_back({device.GetFullName().c_str(), device.GetFriendlyName().c_str()});
+    for (const auto& device : _devices) {
+        result.push_back({device.GetFullName().c_str(), device.GetFriendlyName().c_str(),
+            device.GetSerialNumber().c_str()});
+    }
     return result;
 }
 

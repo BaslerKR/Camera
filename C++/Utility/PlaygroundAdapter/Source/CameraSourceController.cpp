@@ -1,12 +1,15 @@
 #include "CameraSourceController.h"
+#include "DevicePlugin/HardwareResourceKey.h"
 #include "engine/GraphicsFrame.h"
 #include "SessionFrame.h"
 #include "Utility/PlaygroundAdapter/PylonGraphicsFrameStream.h"
+#include <QString>
 #include <QUuid>
 
 
-CameraSourceController::CameraSourceController(Camera* camera, QObject* parent)
-    : AbstractSourceController(parent), _camera(camera) {
+CameraSourceController::CameraSourceController(Camera* camera, IDevicePluginResourceClaims* claims,
+    QObject* parent)
+    : AbstractSourceController(parent), _camera(camera), _claims(claims) {
     _parameterInstance = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     registerCallbacks();
 }
@@ -18,6 +21,7 @@ void CameraSourceController::setFrameStorageProvider(std::shared_ptr<IFrameStora
 }
 
 CameraSourceController::~CameraSourceController() {
+    _claim.reset();
     _parameterClosing = true;
     const auto workers = _parameterWorkers;
     for (auto* worker : workers) {
