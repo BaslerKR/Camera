@@ -26,6 +26,11 @@ std::string fpsText(const std::uint64_t frames, const std::int64_t elapsedMs)
     return out.str();
 }
 
+const char* acquisitionActionName(const CameraAcquisitionAction action)
+{
+    return action == CameraAcquisitionAction::Single ? "single" : "live";
+}
+
 template<typename Callback>
 using CallbackRegistry = std::unordered_map<size_t, Callback>;
 
@@ -305,6 +310,7 @@ bool Camera::openLocked(const string& cameraName, bool exactIdentity){
             requestStop();
             _deviceAvailable.store(false, std::memory_order_release);
             _streamKind.store(StreamKind::Image2D, std::memory_order_release);
+            resetAcquisitionCapabilities("Camera is disconnected.");
             {
                 std::lock_guard<std::mutex> lock(_scene3DProfileMutex);
                 _scene3DProfile = {};
@@ -333,6 +339,13 @@ bool Camera::openLocked(const string& cameraName, bool exactIdentity){
             markOpened(_currentCamera);
         }
         configureStreamForConnectedCamera();
+        try{
+            setAcquisitionCapabilities(observeAcquisitionCapabilities(_currentCamera.GetNodeMap()));
+        }catch(const GenericException &e){
+            resetAcquisitionCapabilities(std::string("AcquisitionMode could not be observed: ") + e.GetDescription());
+        }catch(const std::exception &e){
+            resetAcquisitionCapabilities(std::string("AcquisitionMode could not be observed: ") + e.what());
+        }
         registerNodeEventHandlers();
         return true;
     }catch(const GenericException &e){
@@ -361,6 +374,7 @@ bool Camera::closeLocked(){
         stop();
         _deviceAvailable.store(false, std::memory_order_release);
         _streamKind.store(StreamKind::Image2D, std::memory_order_release);
+        resetAcquisitionCapabilities("Camera is disconnected.");
         {
             std::lock_guard<std::mutex> lock(_scene3DProfileMutex);
             _scene3DProfile = {};
@@ -547,10 +561,10 @@ void Camera::configureStereoMiniStream(GenApi::INodeMap& nodeMap)
     _scene3DProfile = std::move(profile);
 }
 
-void Camera::grab(const size_t frames){
+bool Camera::grab(const size_t frames, GrabFinished finished){
     try{
-        if(!isOpened()) return;
-        if(_isRunning.load(std::memory_order_acquire)) return;
+        if(!isOpened()) return false;
+        if(_isRunning.load(std::memory_order_acquire)) return false;
         if(_thread.joinable()){
             const auto joinStarted = std::chrono::steady_clock::now();
             _thread.join();
@@ -584,7 +598,7 @@ void Camera::grab(const size_t frames){
             + ", strategy=" + (triggerMode ? "OneByOne" : "LatestImageOnly")
             + ", receiveLoop=worker-thread.");
 
-        _thread = std::thread([this]{
+        _thread = std::thread([this, finished = std::move(finished)]{
             const auto workerStarted = std::chrono::steady_clock::now();
             auto nextProgressLog = workerStarted + std::chrono::seconds(10);
             std::chrono::milliseconds maximumCallbackTime{0};
@@ -703,7 +717,15 @@ void Camera::grab(const size_t frames){
                 + ", elapsedMs=" + std::to_string(elapsedMs)
                 + ", maxCallbackMs=" + std::to_string(maximumCallbackTime.count())
                 + ", slowCallbacks=" + std::to_string(slowCallbackCount) + ".");
+            if (finished) {
+                try {
+                    finished(delivered);
+                } catch (...) {
+                    CameraSystem::syslog("[WARN] Grab completion callback failed.", true);
+                }
+            }
         });
+        return true;
     }catch(const GenericException &e){
         _isRunning.store(false, std::memory_order_release);
         try{
@@ -719,6 +741,167 @@ void Camera::grab(const size_t frames){
         }
         CameraSystem::syslog(std::string("Camera grab start failed: ") + e.what(), true);
     }
+    return false;
+}
+
+CameraAcquisitionStart Camera::startAcquisition(const CameraAcquisitionAction action)
+{
+    return startAcquisition(action, {});
+}
+
+CameraAcquisitionStart Camera::startAcquisition(const CameraAcquisitionAction action, GrabFinished finished)
+{
+    CameraAcquisitionStart result;
+    if (!isOpened()) {
+        result.reason = "Camera is disconnected.";
+        return result;
+    }
+    if (_isRunning.load(std::memory_order_acquire)) {
+        result.reason = "Camera acquisition is already running.";
+        return result;
+    }
+
+    const std::string desired = action == CameraAcquisitionAction::Single ? "SingleFrame" : "Continuous";
+    std::string failure;
+    if (!writeAcquisitionMode(desired, &result.previousMode, &result.currentMode, &failure)) {
+        result.reason = failure.empty() ? "AcquisitionMode could not be written." : std::move(failure);
+        return result;
+    }
+
+    result.modeChanged = result.previousMode != result.currentMode;
+    if (result.modeChanged) {
+        CameraSystem::syslog("[Info " + std::to_string(_allottedNumber)
+            + "] AcquisitionMode changed for " + acquisitionActionName(action) + ": "
+            + result.previousMode + " -> " + result.currentMode + ".");
+    }
+
+    const size_t frames = action == CameraAcquisitionAction::Single ? 1U : 0U;
+    if (!grab(frames, std::move(finished))) {
+        result.reason = "Camera acquisition did not start.";
+        return result;
+    }
+    result.started = true;
+    return result;
+}
+
+CameraAcquisitionCapabilities Camera::acquisitionCapabilities() const
+{
+    std::lock_guard<std::mutex> lock(_acquisitionCapabilitiesMutex);
+    return _acquisitionCapabilities;
+}
+
+CameraAcquisitionCapabilities Camera::observeAcquisitionCapabilities(GenApi::INodeMap& nodeMap) const
+{
+    CameraAcquisitionCapabilities capabilities;
+    auto* node = nodeMap.GetNode("AcquisitionMode");
+    if (!node) {
+        capabilities.singleReason = "The device has no AcquisitionMode feature.";
+        return capabilities;
+    }
+    if (!GenApi::IsAvailable(node)) {
+        capabilities.singleReason = "AcquisitionMode is not available on this device.";
+        return capabilities;
+    }
+    if (!GenApi::IsWritable(node)) {
+        capabilities.singleReason = "AcquisitionMode is not writable in the device's current state.";
+        return capabilities;
+    }
+    try {
+        auto* entry = GenApi::CEnumerationPtr(node)->GetEntryByName("SingleFrame");
+        if (entry && GenApi::IsAvailable(entry)) capabilities.singleAvailable = true;
+        else capabilities.singleReason = "AcquisitionMode does not offer SingleFrame.";
+    } catch (const GenericException& error) {
+        capabilities.singleReason = std::string("AcquisitionMode entries could not be read: ")
+            + error.GetDescription();
+    } catch (const std::exception& error) {
+        capabilities.singleReason = std::string("AcquisitionMode entries could not be read: ")
+            + error.what();
+    }
+    return capabilities;
+}
+
+void Camera::setAcquisitionCapabilities(CameraAcquisitionCapabilities capabilities)
+{
+    std::lock_guard<std::mutex> lock(_acquisitionCapabilitiesMutex);
+    _acquisitionCapabilities = std::move(capabilities);
+}
+
+void Camera::refreshAcquisitionCapabilities()
+{
+    bool busy = false;
+    CameraAcquisitionCapabilities capabilities;
+    try {
+        if (!accessFeatures([&](GenApi::INodeMap& nodeMap, std::uint64_t) {
+            capabilities = observeAcquisitionCapabilities(nodeMap);
+        }, &busy)) return;
+    } catch (const GenericException&) {
+        return;
+    } catch (const std::exception&) {
+        return;
+    }
+    setAcquisitionCapabilities(std::move(capabilities));
+}
+
+void Camera::resetAcquisitionCapabilities(const std::string& reason)
+{
+    setAcquisitionCapabilities({false, reason});
+}
+
+bool Camera::writeAcquisitionMode(const std::string& desired, std::string* previous,
+    std::string* current, std::string* reason)
+{
+    bool busy = false;
+    bool observed = false;
+    std::string failure;
+    CameraAcquisitionCapabilities capabilities;
+    try {
+        const bool admitted = accessFeatures([&](GenApi::INodeMap& nodeMap, std::uint64_t) {
+            auto* node = nodeMap.GetNode("AcquisitionMode");
+            if (!node) {
+                failure = "The device has no AcquisitionMode feature.";
+                return;
+            }
+            if (!GenApi::IsAvailable(node)) {
+                failure = "AcquisitionMode is not available on this device.";
+                return;
+            }
+            if (!GenApi::IsWritable(node)) {
+                failure = "AcquisitionMode is not writable in the device's current state.";
+                return;
+            }
+            GenApi::CEnumerationPtr mode(node);
+            previous->assign(mode->ToString().c_str());
+            if (*previous != desired) mode->FromString(GenICam::gcstring(desired.c_str()));
+            current->assign(mode->ToString().c_str());
+            if (*current != desired) {
+                failure = "AcquisitionMode readback is " + *current + " after requesting " + desired + ".";
+                return;
+            }
+            capabilities = observeAcquisitionCapabilities(nodeMap);
+            observed = true;
+        }, &busy);
+        if (!admitted) {
+            if (reason) *reason = busy
+                ? "Camera feature work is busy; retry after it finishes."
+                : "Camera is disconnected.";
+            return false;
+        }
+    } catch (const GenericException& error) {
+        if (reason) *reason = error.GetDescription();
+        return false;
+    } catch (const std::exception& error) {
+        if (reason) *reason = error.what();
+        return false;
+    } catch (...) {
+        if (reason) *reason = "AcquisitionMode could not be written.";
+        return false;
+    }
+    if (!observed) {
+        if (reason) *reason = failure.empty() ? "AcquisitionMode could not be written." : std::move(failure);
+        return false;
+    }
+    setAcquisitionCapabilities(std::move(capabilities));
+    return true;
 }
 
 void Camera::stop(){
@@ -733,6 +916,9 @@ void Camera::stop(){
             CameraSystem::syslog("[DEBUG] Camera stop joined grab worker in "
                 + std::to_string(joinMs) + " ms.");
         }
+        // A parameter write during grabbing can observe a locked AcquisitionMode; re-observe
+        // after the SDK has unlocked it so Single is not left unavailable.
+        refreshAcquisitionCapabilities();
     }catch(const GenericException &e){
         CameraSystem::syslog(e.GetDescription(),true);
     }catch(const std::exception &e){
@@ -802,6 +988,7 @@ void Camera::clearNodeUpdatedCallbacks()
 
 void Camera::notifyFeaturesChanged()
 {
+    refreshAcquisitionCapabilities();
     dispatchCallbacks(_nodeCallbackMutex, _nodeCallbacks, std::string("Root"));
 }
 
@@ -819,6 +1006,7 @@ void Camera::OnDetached(CInstantCamera &camera){
 void Camera::OnDestroyed(CInstantCamera &camera){
     requestStop();
     _deviceAvailable.store(false, std::memory_order_release);
+    resetAcquisitionCapabilities("Camera is disconnected.");
     auto from = "[Info " + to_string(_allottedNumber)  +"] ";
     CameraSystem::syslog(from + "Device destroyed.");
     dispatchCallbacks(_statusMutex, _statusObservers, GrabbingStatus, false);
@@ -831,6 +1019,7 @@ void Camera::OnOpened(CInstantCamera &camera){
 
 void Camera::OnClosed(CInstantCamera &camera){
     _deviceAvailable.store(false, std::memory_order_release);
+    resetAcquisitionCapabilities("Camera is disconnected.");
     const auto cameraName = safeCameraName(camera, getConnectedCameraName());
     {
         std::lock_guard<std::mutex> lock(_connectionStateMutex);
@@ -844,6 +1033,7 @@ void Camera::OnClosed(CInstantCamera &camera){
 void Camera::OnCameraDeviceRemoved(CInstantCamera &camera){
     requestStop();
     _deviceAvailable.store(false, std::memory_order_release);
+    resetAcquisitionCapabilities("Camera is disconnected.");
     const auto cameraName = safeCameraName(camera, getConnectedCameraName());
     {
         std::lock_guard<std::mutex> lock(_connectionStateMutex);

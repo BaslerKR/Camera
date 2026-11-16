@@ -1,7 +1,10 @@
 #include "CameraSourceController.h"
 #include <QThread>
 #include <algorithm>
+#include <chrono>
+#include <condition_variable>
 #include <limits>
+#include <memory>
 #include <set>
 #include <stdexcept>
 
@@ -323,8 +326,33 @@ DeviceConnectionCapabilities CameraSourceController::connectionCapabilities() co
         return {closed, closed, closed, closed, closed, closed};
     }
     const DeviceConnectionAvailability yes{true, {}};
-    const DeviceConnectionAvailability acquisition{false, "Camera acquisition uses source.start and source.stop."};
-    return {yes, yes, yes, yes, acquisition, acquisition};
+    const auto acquisition = _camera->acquisitionCapabilities();
+    const DeviceConnectionAvailability single{acquisition.singleAvailable,
+        acquisition.singleReason.empty() ? "AcquisitionMode does not offer SingleFrame."
+                                         : acquisition.singleReason};
+    return {yes, yes, yes, yes, single, yes};
+}
+
+void CameraSourceController::reportAcquisitionStart(const CameraAcquisitionStart& start,
+    const char* action)
+{
+    if (!start.started) {
+        qCWarning(cameraSourceDiagnosticLog).noquote() << QStringLiteral(
+            "[Camera] acquisition refused: action=%1 reason=%2")
+            .arg(QString::fromLatin1(action), QString::fromStdString(start.reason));
+        return;
+    }
+    if (!start.modeChanged) return;
+    qCInfo(cameraSourceDiagnosticLog).noquote() << QStringLiteral(
+        "[Camera] AcquisitionMode changed: action=%1 previous=%2 current=%3")
+        .arg(QString::fromLatin1(action), QString::fromStdString(start.previousMode),
+             QString::fromStdString(start.currentMode));
+    qCDebug(cameraSourceDiagnosticLog).noquote() << "@diagnostic " + QString::fromUtf8(QJsonDocument(QJsonObject{
+        {"event", "acquisition_mode"}, {"fields", QJsonObject{
+            {"action", QString::fromLatin1(action)},
+            {"previous", QString::fromStdString(start.previousMode)},
+            {"current", QString::fromStdString(start.currentMode)},
+            {"changed", true}}}}).toJson(QJsonDocument::Compact));
 }
 
 DeviceConnectionResult CameraSourceController::scheduleConnectionWork(std::function<DeviceConnectionResult()> work,
@@ -415,5 +443,79 @@ DeviceConnectionResult CameraSourceController::requestDisconnect(std::string con
         if (connectionIdFor(state) != connectionId) return {DeviceConnectionError::Conflict, "The connection changed; observe it again."};
         const auto outcome = _camera->controlConnection(false, {}, state.generation, &state);
         return connectionOutcome(outcome, state);
+    }, std::move(completion));
+}
+
+namespace {
+/** @brief Waits for the one-shot grab worker without holding a camera or controller lock. */
+struct SingleGrabWait {
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool finished = false;
+    std::size_t delivered = 0;
+};
+}
+
+DeviceConnectionResult CameraSourceController::requestSingle(std::string connectionId, IDeviceConnectionControl::Completion completion) {
+    return scheduleConnectionWork([this, connectionId = std::move(connectionId)]() -> DeviceConnectionResult {
+        auto state = _camera->connectionState();
+        if (!state.connected) return {DeviceConnectionError::Disconnected, "The camera is disconnected."};
+        if (connectionIdFor(state) != connectionId) return {DeviceConnectionError::Conflict, "The connection changed; observe it again."};
+        if (_isGrabbing.load()) return {DeviceConnectionError::Busy, "Stop Live explicitly before single acquisition."};
+        auto wait = std::make_shared<SingleGrabWait>();
+        const auto started = _camera->startAcquisition(CameraAcquisitionAction::Single,
+            [wait](const std::size_t delivered) {
+                std::lock_guard<std::mutex> lock(wait->mutex);
+                wait->delivered = delivered;
+                wait->finished = true;
+                wait->condition.notify_all();
+            });
+        reportAcquisitionStart(started, "single");
+        if (!started.started)
+            return {DeviceConnectionError::Unavailable, started.reason,
+                started.modeChanged ? DeviceConnectionEffect::Applied : DeviceConnectionEffect::None,
+                copiedConnectionState(_camera->connectionState())};
+        std::unique_lock<std::mutex> lock(wait->mutex);
+        if (!wait->condition.wait_for(lock, std::chrono::seconds(30), [&] { return wait->finished; })) {
+            lock.unlock();
+            _camera->stop();
+            return {DeviceConnectionError::Timeout,
+                "Single acquisition did not finish within 30 s; accepted effects may have occurred.",
+                DeviceConnectionEffect::Applied, copiedConnectionState(_camera->connectionState())};
+        }
+        if (wait->delivered == 0) {
+            lock.unlock();
+            _camera->stop();
+            return {DeviceConnectionError::BackendFailure, "Single acquisition delivered no frame.",
+                DeviceConnectionEffect::Applied, copiedConnectionState(_camera->connectionState())};
+        }
+        return {{}, {}, DeviceConnectionEffect::Applied, copiedConnectionState(_camera->connectionState())};
+    }, std::move(completion));
+}
+
+DeviceConnectionResult CameraSourceController::requestLiveStart(std::string connectionId, IDeviceConnectionControl::Completion completion) {
+    return scheduleConnectionWork([this, connectionId = std::move(connectionId)]() -> DeviceConnectionResult {
+        auto state = _camera->connectionState();
+        if (!state.connected) return {DeviceConnectionError::Disconnected, "The camera is disconnected."};
+        if (connectionIdFor(state) != connectionId) return {DeviceConnectionError::Conflict, "The connection changed; observe it again."};
+        if (_isGrabbing.load()) return {DeviceConnectionError::Conflict, "Live acquisition is already running."};
+        const auto started = _camera->startAcquisition(CameraAcquisitionAction::Live);
+        reportAcquisitionStart(started, "live");
+        if (!started.started)
+            return {DeviceConnectionError::Unavailable, started.reason,
+                started.modeChanged ? DeviceConnectionEffect::Applied : DeviceConnectionEffect::None,
+                copiedConnectionState(_camera->connectionState())};
+        return {{}, {}, DeviceConnectionEffect::Applied, copiedConnectionState(_camera->connectionState())};
+    }, std::move(completion));
+}
+
+DeviceConnectionResult CameraSourceController::requestLiveStop(std::string connectionId, IDeviceConnectionControl::Completion completion) {
+    return scheduleConnectionWork([this, connectionId = std::move(connectionId)]() -> DeviceConnectionResult {
+        auto state = _camera->connectionState();
+        if (!state.connected) return {DeviceConnectionError::Disconnected, "The camera is disconnected."};
+        if (connectionIdFor(state) != connectionId) return {DeviceConnectionError::Conflict, "The connection changed; observe it again."};
+        if (!_isGrabbing.load()) return {DeviceConnectionError::Conflict, "Live acquisition is not running."};
+        _camera->stop();
+        return {{}, {}, DeviceConnectionEffect::Applied, copiedConnectionState(_camera->connectionState())};
     }, std::move(completion));
 }
