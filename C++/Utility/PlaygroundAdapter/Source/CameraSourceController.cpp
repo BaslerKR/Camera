@@ -1,7 +1,7 @@
 #include "CameraSourceController.h"
-#include "DevicePlugin/HardwareResourceKey.h"
+#include "DeviceRuntime/Contract/HardwareResourceKey.h"
 #include "engine/GraphicsFrame.h"
-#include "SessionFrame.h"
+#include "DeviceRuntime/Contract/SessionFrame.h"
 #include "Utility/PlaygroundAdapter/PylonGraphicsFrameStream.h"
 #include <QDebug>
 #include <QJsonDocument>

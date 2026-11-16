@@ -1,10 +1,10 @@
 #pragma once
-#include "AbstractSourceController.h"
+#include "DeviceRuntime/Contract/AbstractSourceController.h"
 #include "Camera.h"
-#include "DeviceConnectionControl.h"
-#include "DevicePlugin.h"
-#include "DeviceParameterControl.h"
-#include "FrameStorage.h"
+#include "DeviceRuntime/Contract/DeviceConnectionControl.h"
+#include "DeviceRuntime/Contract/DeviceRuntime.h"
+#include "DeviceRuntime/Contract/DeviceParameterControl.h"
+#include "DeviceRuntime/Contract/FrameStorage.h"
 #include <condition_variable>
 #include <deque>
 #include <map>

@@ -41,7 +41,7 @@ The core links the SDK through the module-owned `Camera::Pylon` interface target
 
 The optional Playground adapter is disabled by default. Enable `CAMERA_BUILD_PLAYGROUND_ADAPTER` only when the neutral GraphicsEngine contract target is available. Consumers that want owned frames include `Utility/PlaygroundAdapter/PylonGraphicsFrameStream.h` and link `Camera::PlaygroundAdapter`; pylon payload conversion stays in `PylonGraphicsFrameAdapter`.
 
-The optional Playground device plugin is a separate MODULE. Enable `CAMERA_BUILD_PLAYGROUND_PLUGIN` only when `Playground::DevicePlugin`, the adapter, and `Camera::QtWidget` are available. It does not belong in the adapter static library. Package identity lives in `Utility/PlaygroundAdapter/Package/Package.cmake` as quoted `set(PLAYGROUND_PLUGIN_* ...)` assignments; the MODULE must set `PLAYGROUND_PLUGIN_PACKAGE` and include `DevicePlugin.h`. The host emits `plugin.json` from that identity plus `DevicePluginPackage.h`.
+The optional Playground device plugin is a separate MODULE. Enable `CAMERA_BUILD_PLAYGROUND_PLUGIN` only when `Playground::DeviceRuntimeContract`, the adapter, and `Camera::QtWidget` are available. It does not belong in the adapter static library. Package identity lives in `Utility/PlaygroundAdapter/Package/Package.cmake` as quoted `set(PLAYGROUND_PLUGIN_* ...)` assignments; the MODULE must set `PLAYGROUND_PLUGIN_PACKAGE` and include `DeviceRuntime/Contract/DeviceRuntime.h`. The host emits `plugin.json` from that identity plus `DeviceRuntime.h`.
 
 ## SDK discovery validation
 

@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Build against the widget-free device runtime SDK: the contract target is `Playground::DeviceRuntimeContract`, headers live under `DeviceRuntime/Contract`, and the interface is `IDeviceRuntime`. The temporary widget library resolves Qt Widgets and Resources itself until U2 removes it.
+
 - Publish the GenApi feature tree through parameter descriptors: category path, GenICam visibility mapped to the API presentation level, representation hint, selector relationships in both directions and the transport-layer shared-scope marker. A bounded change subscription delivers one full snapshot and revision-stamped deltas from the Camera's node and acquisition-status callbacks, resynchronizes with a snapshot when its queue overflows, and re-observes writability when acquisition starts or stops; the GUI does not poll.
 
 - Claim one network or USB camera per session through Playground's host hardware-resource claims. The key is the camera serial, so a second session of this package is refused with the owning session named instead of reaching the transport. The claim is released on disconnect and session close, and a camera without a serial keeps the SDK's native arbitration.
@@ -94,8 +96,8 @@
 
 - Stage `pylon.framework` in the Playground plugin `runtime` payload on macOS instead of the host `Contents/Frameworks` extra list.
 
-- Link `Playground::DevicePlugin` for the `IDevicePlugin` MODULE.
-- Own package identity in `Utility/PlaygroundAdapter/Package/Package.cmake`; the host emits `plugin.json` from `DevicePluginPackage.h`.
+- Link `Playground::DeviceRuntimeContract` for the `IDeviceRuntime` MODULE.
+- Own package identity in `Utility/PlaygroundAdapter/Package/Package.cmake`; the host emits `plugin.json` from `DeviceRuntime.h`.
 - Keep the session source controller in `Utility/PlaygroundAdapter/Source` as `CameraSourceController`.
 - Declare the Playground plugin runtime payload from this module; the host copies it into the package.
 - Move the GraphicsFrame stream/adapter into `Utility/PlaygroundAdapter` as `Camera::PlaygroundAdapter`.

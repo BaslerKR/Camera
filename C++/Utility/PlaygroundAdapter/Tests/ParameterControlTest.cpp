@@ -1,7 +1,7 @@
 #include "CameraSourceController.h"
-#include "ToolProvider.h"
+#include "Tools/ToolProvider.h"
 #include "CameraSystem.h"
-#include "DevicePlugin/HardwareResourceKey.h"
+#include "DeviceRuntime/Contract/HardwareResourceKey.h"
 #include <QSet>
 #include <QtTest>
 #include <QElapsedTimer>

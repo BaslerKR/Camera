@@ -141,8 +141,8 @@ private:
 
 class CameraPlugin final : public DevicePluginTemplate, public IDevicePluginResourceClaimsReceiver {
     Q_OBJECT
-    Q_PLUGIN_METADATA(IID PlaygroundDevicePlugin_iid)
-    Q_INTERFACES(IDevicePlugin IDevicePluginResourceClaimsReceiver)
+    Q_PLUGIN_METADATA(IID PlaygroundDeviceRuntime_iid)
+    Q_INTERFACES(IDeviceRuntime IDevicePluginResourceClaimsReceiver)
 
 public:
     DevicePluginDescriptor descriptor() const override
