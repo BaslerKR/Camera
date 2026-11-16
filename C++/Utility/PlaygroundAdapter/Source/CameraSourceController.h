@@ -12,6 +12,7 @@
 #include <QLoggingCategory>
 #include <atomic>
 #include <memory>
+#include <mutex>
 
 class PylonGraphicsFrameStream;
 
@@ -112,6 +113,7 @@ private:
     IDevicePluginResourceClaims* _claims = nullptr;
     std::shared_ptr<IDevicePluginResourceClaim>* _claim = nullptr;
     QString _claimKey;
+    mutable std::mutex _connectionWorkMutex;
     FrameConsumer _frameConsumer;
     std::atomic<bool> _isGrabbing{false};
     std::atomic<uint64_t> _frameSeq{0};

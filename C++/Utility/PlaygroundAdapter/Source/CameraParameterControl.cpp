@@ -428,6 +428,9 @@ DeviceConnectionResult CameraSourceController::connectionOutcome(CameraConnectio
 
 DeviceConnectionResult CameraSourceController::requestConnect(std::string targetId, IDeviceConnectionControl::Completion completion) {
     return scheduleConnectionWork([this, targetId = std::move(targetId)]() -> DeviceConnectionResult {
+        // claims and the native connection move under one lock, so concurrent connect
+        // requests in one session cannot release a claim another request already took.
+        std::lock_guard<std::mutex> connectionLock(_connectionWorkMutex);
         auto state = _camera->connectionState();
         if (state.connected)
             return {DeviceConnectionError::Conflict, "Disconnect the current target explicitly before connecting another."};
@@ -456,6 +459,9 @@ DeviceConnectionResult CameraSourceController::requestConnect(std::string target
 
 DeviceConnectionResult CameraSourceController::requestDisconnect(std::string connectionId, IDeviceConnectionControl::Completion completion) {
     return scheduleConnectionWork([this, connectionId = std::move(connectionId)]() -> DeviceConnectionResult {
+        // claims and the native connection move under one lock, so concurrent connect
+        // requests in one session cannot release a claim another request already took.
+        std::lock_guard<std::mutex> connectionLock(_connectionWorkMutex);
         auto state = _camera->connectionState();
         if (!state.connected) {
             // A device removal can invalidate the connection without a disconnect request.

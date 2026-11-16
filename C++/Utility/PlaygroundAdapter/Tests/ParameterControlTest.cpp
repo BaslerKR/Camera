@@ -252,6 +252,84 @@ private slots:
         system.removeCamera(camera);
     }
 
+    void concurrentConnectRequestsKeepOneClaim() {
+        qputenv("PYLON_CAMEMU", "1");
+        auto& system = *_system;
+        auto* camera = system.addCamera(); QVERIFY(camera);
+        TestClaims claims;
+        std::shared_ptr<IDevicePluginResourceClaim> held;
+        auto controller = std::make_unique<CameraSourceController>(camera, &claims, &held);
+        auto* connection = qobject_cast<IDeviceConnectionControl*>(controller.get()); QVERIFY(connection);
+        const auto wait = [](auto& future) {
+            const bool ready = future.wait_for(std::chrono::seconds(30)) == std::future_status::ready;
+            QCoreApplication::processEvents();
+            return ready;
+        };
+        auto discovered = std::make_shared<std::promise<DeviceConnectionTargets>>();
+        auto targets = discovered->get_future();
+        QCOMPARE(connection->requestDiscover([discovered](DeviceConnectionTargets value) {
+            discovered->set_value(std::move(value));
+        }).error, DeviceConnectionError::None);
+        QVERIFY(wait(targets));
+        const auto catalog = targets.get();
+        QCOMPARE(catalog.result.error, DeviceConnectionError::None);
+        std::string emulatorId;
+        QString emulatorKey;
+        for (const auto& target : catalog.targets) {
+            const auto info = system.getCameraInfo(target.displayName);
+            if (std::string(info.GetDeviceClass().c_str()) != "BaslerCamEmu") continue;
+            emulatorId = target.targetId;
+            emulatorKey = playgroundCameraResourceKey(
+                QString::fromStdString(info.GetSerialNumber().c_str()));
+            break;
+        }
+        if (emulatorId.empty()) QSKIP("The pylon camera emulator is not installed.");
+
+        std::vector<std::future<DeviceConnectionResult>> futures;
+        for (int index = 0; index < 8; ++index) {
+            auto promise = std::make_shared<std::promise<DeviceConnectionResult>>();
+            futures.push_back(promise->get_future());
+            const auto admitted = connection->requestConnect(emulatorId,
+                [promise](DeviceConnectionResult result) {
+                    promise->set_value(std::move(result));
+                });
+            QCOMPARE(admitted.error, DeviceConnectionError::None);
+        }
+        int successes = 0;
+        int conflicts = 0;
+        DeviceConnectionResult winner;
+        for (auto& future : futures) {
+            QVERIFY(wait(future));
+            auto result = future.get();
+            if (result.error == DeviceConnectionError::None) {
+                ++successes;
+                winner = std::move(result);
+            } else if (result.error == DeviceConnectionError::Conflict) {
+                ++conflicts;
+            }
+        }
+        QCOMPARE(successes, 1);
+        QCOMPARE(conflicts, 7);
+        QCOMPARE(claims.held(), QSet<QString>({emulatorKey}));
+        QVERIFY(held && held->key() == emulatorKey);
+        QVERIFY(winner.state && winner.state->connected);
+
+        // The winning request still owns the claim after the losing requests returned.
+        auto disconnected = std::make_shared<std::promise<DeviceConnectionResult>>();
+        auto disconnectFuture = disconnected->get_future();
+        QCOMPARE(connection->requestDisconnect(winner.state->connectionId,
+            [disconnected](DeviceConnectionResult result) {
+                disconnected->set_value(std::move(result));
+            }).error, DeviceConnectionError::None);
+        QVERIFY(wait(disconnectFuture));
+        QCOMPARE(disconnectFuture.get().error, DeviceConnectionError::None);
+        QVERIFY(claims.held().isEmpty());
+        QVERIFY(!held);
+
+        controller.reset();
+        system.removeCamera(camera);
+    }
+
     void emulatedSdkParametersAndConnectionLifetime() {
         // Only an explicitly selected pylon emulator is opened, even if real devices exist.
         qputenv("PYLON_CAMEMU", "1");
