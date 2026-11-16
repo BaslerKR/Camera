@@ -117,9 +117,10 @@ int main()
     profile.family = PylonScene3DProfile::DeviceFamily::StereoAce;
     assert(!adapter.convertGraphicsFrame(emptyContainer, {}, profile).has_value());
 
-    // Blaze conversion through the neutral source seam: XYZ arrays, validity
-    // mask, auxiliary channels and the explicit point cloud keep the previous
-    // values, and a provided storage function receives the range block.
+    // Blaze conversion through the neutral source seam: the range keeps the
+    // previous XYZ values, validity mask, auxiliary channels and cloud colours,
+    // a provided storage function receives the range block, and no explicit
+    // point cloud is produced for the same points.
     {
         const float coordinates[] = {
             1.0F, 2.0F, 3.0F,
@@ -157,7 +158,7 @@ int main()
         const auto scene = blaze.convertSource(source, {});
         assert(scene.has_value());
         assert(storageCalls == 1U && storageBlock != nullptr);
-        assert(scene->ranges.size() == 1U && scene->pointClouds.size() == 1U);
+        assert(scene->ranges.size() == 1U && scene->pointClouds.empty());
 
         const RangeFrame& range = scene->ranges.front().payload;
         assert(range.width == 2 && range.height == 2);
@@ -175,13 +176,34 @@ int main()
         assert(range.confidenceBits == 16U);
         assert(range.xyCoordinateMode == RangeFrameXYCoordinateMode::ExplicitXY);
         assert(range.zScale == 1.0);
+        assert(range.canDerivePointCloud());
+        // The range RGB channel keeps the explicit cloud's grayscale colours
+        // and its row-major sample order.
+        assert(range.rgb.size() == 12U);
+        assert(range.rgb[0] == 0U && range.rgb[1] == 0U && range.rgb[2] == 0U);
+        assert(range.rgb[3] == 0U && range.rgb[4] == 0U && range.rgb[5] == 0U);
+        assert(range.rgb[6] == 1U && range.rgb[7] == 1U && range.rgb[8] == 1U);
+        assert(range.rgb[9] == 1U && range.rgb[10] == 1U && range.rgb[11] == 1U);
 
-        const PointCloudData& cloud = scene->pointClouds.front().payload;
-        assert(cloud.xyz.size() == 9U);
-        assert(cloud.xyz[0] == 1.0F && cloud.xyz[1] == 2.0F && cloud.xyz[2] == 3.0F);
-        assert(cloud.xyz[6] == 7.0F && cloud.xyz[8] == 9.0F);
-        assert(cloud.rgb.size() == 9U);
-        assert(cloud.rgb[0] == std::uint8_t(100U >> 8U));
+        // A PointCloud-only request still emits the range that carries the
+        // derived cloud, without unrelated auxiliary channels.
+        GraphicsFrameRequest cloudOnlyRequest;
+        cloudOnlyRequest.components = GraphicsFrameComponent::PointCloud;
+        const auto cloudOnly = blaze.convertSource(source, cloudOnlyRequest);
+        assert(cloudOnly.has_value() && cloudOnly->pointClouds.empty());
+        assert(cloudOnly->ranges.size() == 1U);
+        const RangeFrame& cloudOnlyRange = cloudOnly->ranges.front().payload;
+        assert(cloudOnlyRange.canDerivePointCloud());
+        assert(cloudOnlyRange.intensity.empty() && cloudOnlyRange.confidence.empty());
+        assert(cloudOnlyRange.rgb.size() == 12U);
+
+        // A Range-only request keeps no cloud colours.
+        GraphicsFrameRequest rangeOnlyRequest;
+        rangeOnlyRequest.components = GraphicsFrameComponent::Range;
+        const auto rangeOnly = blaze.convertSource(source, rangeOnlyRequest);
+        assert(rangeOnly.has_value() && rangeOnly->pointClouds.empty());
+        assert(rangeOnly->ranges.size() == 1U);
+        assert(rangeOnly->ranges.front().payload.rgb.empty());
 
         blaze.setFrameStorage([](const std::size_t) { return std::shared_ptr<std::uint8_t>(); });
         assert(!blaze.convertSource(source, {}).has_value());
