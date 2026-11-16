@@ -525,7 +525,8 @@ bool CameraSourceController::observeParameterInventory(std::vector<DeviceParamet
     for (;;) {
         bool busy = false;
         {
-            // API feature work waits only for another observation, never for connect/disconnect.
+            // The barrier keeps API feature work and connection changes from turning a
+            // concurrent observation into a Busy refusal.
             std::lock_guard<std::mutex> observation(_featureObservationMutex);
             try {
                 if (_camera->accessFeatures([&](GenApi::INodeMap& map, std::uint64_t generation) {
@@ -1083,7 +1084,8 @@ DeviceConnectionResult CameraSourceController::requestConnect(std::string target
         }
         CameraConnectionOutcome outcome;
         {
-            // Wait only for an in-progress change observation, never for another lifecycle call.
+            // Hold the observation barrier across the connection change so an in-progress
+            // observation cannot refuse it; a second lifecycle call still gets its own Busy.
             std::lock_guard<std::mutex> observation(_featureObservationMutex);
             outcome = _camera->controlConnection(true, targetId, state.generation, &state);
         }

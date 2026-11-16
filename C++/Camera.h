@@ -205,6 +205,8 @@ private:
     bool openLocked(const std::string& cameraName, bool exactIdentity = false);
     /** @brief Shares SDK teardown and reports failure behind the existing lifecycle lock. */
     bool closeLocked();
+    /** @brief Stops acquisition without re-observing features; the caller holds the lifecycle lock. */
+    void stopLocked();
     int _allottedNumber = 0;
 
     std::thread _thread;

@@ -371,7 +371,7 @@ void Camera::close(){
 
 bool Camera::closeLocked(){
     try{
-        stop();
+        stopLocked();
         _deviceAvailable.store(false, std::memory_order_release);
         _streamKind.store(StreamKind::Image2D, std::memory_order_release);
         resetAcquisitionCapabilities("Camera is disconnected.");
@@ -911,7 +911,7 @@ bool Camera::writeAcquisitionMode(const std::string& desired, std::string* previ
     return true;
 }
 
-void Camera::stop(){
+void Camera::stopLocked(){
     try{
         requestStop();
 
@@ -923,14 +923,18 @@ void Camera::stop(){
             CameraSystem::syslog("[DEBUG] Camera stop joined grab worker in "
                 + std::to_string(joinMs) + " ms.");
         }
-        // A parameter write during grabbing can observe a locked AcquisitionMode; re-observe
-        // after the SDK has unlocked it so Single is not left unavailable.
-        refreshAcquisitionCapabilities();
     }catch(const GenericException &e){
         CameraSystem::syslog(e.GetDescription(),true);
     }catch(const std::exception &e){
         CameraSystem::syslog(std::string("Camera stop failed: ") + e.what(), true);
     }
+}
+
+void Camera::stop(){
+    // The lifecycle lock is not held here, so the capability refresh can wait for a short
+    // feature observation after the SDK unlocked AcquisitionMode.
+    stopLocked();
+    refreshAcquisitionCapabilities();
 }
 
 void Camera::requestStop()
