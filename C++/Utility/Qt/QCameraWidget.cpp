@@ -104,14 +104,22 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
         }
     });
     connect(_toolGrabOne, &QToolButton::clicked, this, [=]{
-        // Request to start a single grabbing
-        _camera->grab(1);
-        logMessage(tr("Single grab triggered."), false);
+        // Single writes AcquisitionMode=SingleFrame, then targets one frame.
+        const auto started = _camera->startAcquisition(CameraAcquisitionAction::Single);
+        reportAcquisitionStart(started, "single");
+        if (started.started) logMessage(tr("Single grab triggered."), false);
     });
     connect(_toolGrabLive, &QToolButton::toggled, this, [=](bool toggled){
-        // Request to start a continuous grabbing
+        // Live writes AcquisitionMode=Continuous before continuous acquisition starts.
         if(toggled) {
-            _camera->grab();
+            const auto started = _camera->startAcquisition(CameraAcquisitionAction::Live);
+            reportAcquisitionStart(started, "live");
+            if (!started.started) {
+                QSignalBlocker blocker(_toolGrabLive);
+                _toolGrabLive->setChecked(false);
+                updateLiveAction();
+                return;
+            }
             logMessage(tr("Live grabbing started."), false);
         } else {
             _camera->requestStop();
@@ -134,6 +142,23 @@ QCameraWidget::QCameraWidget(QWidget *parent, Camera *camera) : QWidget(parent),
 QCameraWidget::~QCameraWidget()
 {
     prepareForShutdown();
+}
+
+void QCameraWidget::reportAcquisitionStart(const CameraAcquisitionStart& started, const char* action)
+{
+    if (!started.started) {
+        logMessage(tr("Acquisition refused: %1").arg(QString::fromStdString(started.reason)), true);
+        return;
+    }
+    if (!started.modeChanged) return;
+    const QString previous = QString::fromStdString(started.previousMode);
+    const QString current = QString::fromStdString(started.currentMode);
+    logMessage(tr("AcquisitionMode %1 -> %2.").arg(previous, current), false);
+    qCDebug(cameraDiagnosticLog).noquote() << "@diagnostic " + QString::fromUtf8(QJsonDocument(QJsonObject{
+        {"event", "acquisition_mode"}, {"fields", QJsonObject{
+            {"action", QString::fromLatin1(action)},
+            {"previous", previous}, {"current", current}, {"changed", true}}}})
+        .toJson(QJsonDocument::Compact));
 }
 
 void QCameraWidget::setDiscoveredCameraNames(const QStringList& cameraNames)
@@ -163,7 +188,12 @@ void QCameraWidget::updateAcquisitionControls()
     const bool idle = _camera && !_shuttingDown && !_connectionOperationActive
         && !_refreshOperationActive && !_grabbing.load(std::memory_order_acquire);
     _toolConnect->setEnabled(idle);
-    _toolGrabOne->setEnabled(idle && _camera->isOpened());
+    const auto capabilities = _camera ? _camera->acquisitionCapabilities()
+                                      : CameraAcquisitionCapabilities{};
+    _toolGrabOne->setEnabled(idle && _camera->isOpened() && capabilities.singleAvailable);
+    _toolGrabOne->setToolTip(capabilities.singleAvailable
+        ? tr("Acquire one frame (AcquisitionMode=SingleFrame)")
+        : QString::fromStdString(capabilities.singleReason));
 }
 
 void QCameraWidget::prepareForShutdown()
@@ -1085,6 +1115,10 @@ void QCameraWidget::logMessage(const QString& message, bool error)
 void QCameraWidget::updateGrabState(bool grabbing)
 {
     const bool wasGrabbing = _grabbing.exchange(grabbing, std::memory_order_acq_rel);
+    // A parameter refresh during Live can cache a locked (unwritable) AcquisitionMode; the
+    // pylon callback runs after the SDK releases acquisition, so re-observe before enabling
+    // Grab One again.
+    if (!grabbing && _camera && !_shuttingDown) _camera->refreshAcquisitionCapabilities();
     updateAcquisitionControls();
     if (grabbing && !wasGrabbing) {
         _lastDelivered = 0;

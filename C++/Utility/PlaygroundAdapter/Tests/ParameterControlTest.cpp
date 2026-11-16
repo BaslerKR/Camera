@@ -4,6 +4,8 @@
 #include "DevicePlugin/HardwareResourceKey.h"
 #include <QSet>
 #include <QtTest>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <algorithm>
 #include <future>
 #include <chrono>
@@ -69,12 +71,22 @@ private slots:
         const auto capabilities = connection->connectionCapabilities();
         QVERIFY(capabilities.targets.available && capabilities.discover.available && capabilities.connect.available);
         QVERIFY(!capabilities.single.available && !capabilities.single.reason.empty());
-        QVERIFY(!capabilities.live.available && !capabilities.live.reason.empty());
+        QVERIFY(capabilities.live.available && capabilities.live.reason.empty());
         std::atomic<int> completions{0}, disconnectedStates{0};
-        const auto unused = [&](DeviceConnectionResult) { ++completions; };
         QCOMPARE(connection->requestConnectionState({}).error, DeviceConnectionError::InvalidArgument);
-        QCOMPARE(connection->requestSingle("x", unused).error, DeviceConnectionError::Unsupported);
-        QCOMPARE(connection->requestLiveStart("x", unused).error, DeviceConnectionError::Unsupported);
+        const auto refusedWithoutConnection = [&](auto admit) -> DeviceConnectionResult {
+            auto promise = std::make_shared<std::promise<DeviceConnectionResult>>();
+            auto future = promise->get_future();
+            const auto admission = admit([promise](DeviceConnectionResult result) { promise->set_value(std::move(result)); });
+            if (admission.error != DeviceConnectionError::None) return admission;
+            if (future.wait_for(std::chrono::seconds(2)) != std::future_status::ready)
+                return DeviceConnectionResult{DeviceConnectionError::Timeout, "Lifecycle admission did not finish."};
+            return future.get();
+        };
+        QCOMPARE(refusedWithoutConnection([&](auto done) { return connection->requestSingle("x", done); }).error,
+            DeviceConnectionError::Disconnected);
+        QCOMPARE(refusedWithoutConnection([&](auto done) { return connection->requestLiveStart("x", done); }).error,
+            DeviceConnectionError::Disconnected);
         QCOMPARE(completions.load(), 0); QVERIFY(!camera->connectionState().connected);
         std::promise<void> entered; auto completed = entered.get_future();
         QCOMPARE(connection->requestConnectionState([&](DeviceConnectionResult result) {
@@ -331,6 +343,123 @@ private slots:
         QCOMPARE(controller.writeParameter(stale, requested, {}).error, DeviceParameterError::Conflict);
         camera->deregisterNodeUpdatedCallback(callback);
         camera->close();
+    }
+    void emulatedSingleAndLiveFollowAcquisitionMode() {
+        qputenv("PYLON_CAMEMU", "1");
+        auto& system = *_system;
+        std::string emulator;
+        for (const auto& name : system.getCameraList()) {
+            if (std::string(system.getCameraInfo(name).GetDeviceClass().c_str()) == "BaslerCamEmu") {
+                emulator = name; break;
+            }
+        }
+        if (emulator.empty()) QSKIP("The pylon camera emulator is not installed.");
+        auto* camera = system.addCamera(); QVERIFY(camera);
+        {
+        CameraSourceController controller(camera);
+        auto* connection = qobject_cast<IDeviceConnectionControl*>(&controller); QVERIFY(connection);
+        const auto run = [](auto& future) {
+            const bool ready = future.wait_for(std::chrono::seconds(30)) == std::future_status::ready;
+            QCoreApplication::processEvents();
+            return ready;
+        };
+        const auto invoke = [&](auto admit) {
+            auto promise = std::make_shared<std::promise<DeviceConnectionResult>>();
+            auto future = promise->get_future();
+            const auto admitted = admit([promise](DeviceConnectionResult result) { promise->set_value(std::move(result)); });
+            if (admitted.error != DeviceConnectionError::None) return admitted;
+            if (!run(future)) return DeviceConnectionResult{DeviceConnectionError::BackendFailure,
+                "Emulator completion timed out."};
+            return future.get();
+        };
+        auto discovered = std::make_shared<std::promise<DeviceConnectionTargets>>();
+        auto targets = discovered->get_future();
+        QCOMPARE(connection->requestDiscover([discovered](DeviceConnectionTargets value) {
+            discovered->set_value(std::move(value));
+        }).error, DeviceConnectionError::None);
+        QVERIFY(run(targets));
+        const auto catalog = targets.get();
+        QCOMPARE(catalog.result.error, DeviceConnectionError::None);
+        std::string emulatorId;
+        for (const auto& target : catalog.targets)
+            if (std::string(system.getCameraInfo(target.displayName).GetDeviceClass().c_str()) == "BaslerCamEmu") {
+                emulatorId = target.targetId; break;
+            }
+        QVERIFY(!emulatorId.empty());
+        const auto connected = invoke([&](auto done) { return connection->requestConnect(emulatorId, done); });
+        QVERIFY2(connected.error == DeviceConnectionError::None, connected.message.c_str());
+        QVERIFY(connected.state && connected.state->connected);
+        const auto connectionId = connected.state->connectionId;
+        const auto capabilities = connection->connectionCapabilities();
+        QVERIFY2(capabilities.single.available, capabilities.single.reason.c_str());
+
+        std::atomic<int> frames{0};
+        controller.setFrameConsumer([&frames](SessionFrame&&, unsigned) { frames.fetch_add(1); });
+        const auto waitFrames = [&](const int minimum) {
+            QElapsedTimer timer; timer.start();
+            while (frames.load() < minimum && timer.elapsed() < 30000)
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            return frames.load() >= minimum;
+        };
+        const auto readMode = [&](std::string* value, std::string* error) {
+            std::vector<DeviceParameterDescriptor> inventory;
+            const auto listed = controller.parameters(&inventory);
+            if (listed.error != DeviceParameterError::None) {
+                *error = listed.message;
+                return false;
+            }
+            const auto found = std::find_if(inventory.begin(), inventory.end(), [](const auto& feature) {
+                return feature.target.name == "AcquisitionMode";
+            });
+            if (found == inventory.end() || !found->value) {
+                *error = "AcquisitionMode was not observed.";
+                return false;
+            }
+            *value = std::get<std::string>(*found->value);
+            return true;
+        };
+
+        auto single = invoke([&](auto done) { return connection->requestSingle(connectionId, done); });
+        QVERIFY2(single.error == DeviceConnectionError::None, single.message.c_str());
+        QCOMPARE(frames.load(), 1);
+        std::string mode, modeError;
+        QVERIFY2(readMode(&mode, &modeError), modeError.c_str());
+        QCOMPARE(mode, std::string("SingleFrame"));
+
+        frames.store(0);
+        auto live = invoke([&](auto done) { return connection->requestLiveStart(connectionId, done); });
+        QVERIFY2(live.error == DeviceConnectionError::None, live.message.c_str());
+        // A parameter write while Live can observe AcquisitionMode as locked; stop must
+        // re-observe it before Single availability is offered again.
+        camera->notifyFeaturesChanged();
+        QVERIFY(waitFrames(2));
+        auto stopped = invoke([&](auto done) { return connection->requestLiveStop(connectionId, done); });
+        QVERIFY2(stopped.error == DeviceConnectionError::None, stopped.message.c_str());
+        const auto afterStop = connection->connectionCapabilities();
+        QVERIFY2(afterStop.single.available, afterStop.single.reason.c_str());
+        QVERIFY2(readMode(&mode, &modeError), modeError.c_str());
+        QCOMPARE(mode, std::string("Continuous"));
+
+        frames.store(0);
+        single = invoke([&](auto done) { return connection->requestSingle(connectionId, done); });
+        QVERIFY2(single.error == DeviceConnectionError::None, single.message.c_str());
+        QCOMPARE(frames.load(), 1);
+        QVERIFY2(readMode(&mode, &modeError), modeError.c_str());
+        QCOMPARE(mode, std::string("SingleFrame"));
+
+        // While Live runs, Single refuses explicitly instead of emulating it by stopping the stream.
+        QCOMPARE(invoke([&](auto done) { return connection->requestLiveStart(connectionId, done); }).error,
+            DeviceConnectionError::None);
+        const auto refused = invoke([&](auto done) { return connection->requestSingle(connectionId, done); });
+        QCOMPARE(refused.error, DeviceConnectionError::Busy);
+        QVERIFY(!refused.message.empty());
+        QCOMPARE(invoke([&](auto done) { return connection->requestLiveStop(connectionId, done); }).error,
+            DeviceConnectionError::None);
+        controller.setFrameConsumer({});
+        QCOMPARE(invoke([&](auto done) { return connection->requestDisconnect(connectionId, done); }).error,
+            DeviceConnectionError::None);
+        }
+        system.removeCamera(camera);
     }
 };
 

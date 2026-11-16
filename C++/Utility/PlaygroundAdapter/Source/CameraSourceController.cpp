@@ -3,9 +3,17 @@
 #include "engine/GraphicsFrame.h"
 #include "SessionFrame.h"
 #include "Utility/PlaygroundAdapter/PylonGraphicsFrameStream.h"
+#include <QDebug>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QLoggingCategory>
 #include <QString>
 #include <QUuid>
+#include <condition_variable>
 
+
+// Host Debug enables diagnostics.* output; the INFO mode line remains in the normal log.
+Q_LOGGING_CATEGORY(cameraSourceDiagnosticLog, "diagnostics.Camera", QtInfoMsg)
 
 CameraSourceController::CameraSourceController(Camera* camera, IDevicePluginResourceClaims* claims,
     std::shared_ptr<IDevicePluginResourceClaim>* claim, QObject* parent)
@@ -39,10 +47,11 @@ CameraSourceController::~CameraSourceController() {
 }
 
 void CameraSourceController::start() {
-    if (_camera) {
-        _isGrabbing = true;
-        _camera->grab();
-    }
+    if (!_camera) return;
+    const auto started = _camera->startAcquisition(CameraAcquisitionAction::Live);
+    reportAcquisitionStart(started, "live");
+    if (!started.started) throw std::runtime_error(started.reason);
+    _isGrabbing = true;
 }
 
 void CameraSourceController::stop() {

@@ -9,10 +9,13 @@
 #include <QString>
 #include <QSet>
 #include <QThread>
+#include <QLoggingCategory>
 #include <atomic>
 #include <memory>
 
 class PylonGraphicsFrameStream;
+
+Q_DECLARE_LOGGING_CATEGORY(cameraSourceDiagnosticLog)
 
 class CameraSourceController : public AbstractSourceController, public IDeviceParameterControl, public IDeviceConnectionControl,
                                public IFrameStorageClient {
@@ -54,7 +57,7 @@ public:
     /** @brief Admits bounded worker command execution. */
     DeviceParameterResult requestExecuteParameter(DeviceParameterTarget target,
         std::optional<std::uint64_t> expectedRevision, Completion completion) override;
-    /** @brief Declares Single/Live unavailable: acquisition uses the common source controls. */
+    /** @brief Declares Single from the observed AcquisitionMode and Live as continuous. */
     DeviceConnectionCapabilities connectionCapabilities() const override;
     /** @brief Copies the cached system catalog on a bounded worker. */
     DeviceConnectionResult requestConnectionTargets(TargetsCompletion completion) override;
@@ -66,6 +69,12 @@ public:
     DeviceConnectionResult requestConnect(std::string targetId, IDeviceConnectionControl::Completion completion) override;
     /** @brief Uses the existing stopped/drained teardown for the exact current connection. */
     DeviceConnectionResult requestDisconnect(std::string connectionId, IDeviceConnectionControl::Completion completion) override;
+    /** @brief Writes SingleFrame and completes after its one frame is delivered. */
+    DeviceConnectionResult requestSingle(std::string connectionId, IDeviceConnectionControl::Completion completion) override;
+    /** @brief Writes Continuous and starts continuous acquisition. */
+    DeviceConnectionResult requestLiveStart(std::string connectionId, IDeviceConnectionControl::Completion completion) override;
+    /** @brief Stops the exact connection's continuous acquisition without changing AcquisitionMode. */
+    DeviceConnectionResult requestLiveStop(std::string connectionId, IDeviceConnectionControl::Completion completion) override;
 signals:
     /** @brief Publishes copied discovered labels for queued GUI selector refresh. */
     void deviceCatalogChanged(QStringList names);
@@ -78,6 +87,8 @@ private:
         IDeviceConnectionControl::Completion completion);
     DeviceConnectionResult catalogWork(bool refresh, TargetsCompletion completion);
     DeviceConnectionResult connectionOutcome(CameraConnectionOutcome outcome, const CameraConnectionState& state) const;
+    /** @brief Records an applied mode change in the log and structured diagnostics. */
+    void reportAcquisitionStart(const CameraAcquisitionStart& start, const char* action);
     /** @brief Matches the parameter target connection id, so one id addresses both capabilities. */
     std::string connectionIdFor(const CameraConnectionState& state) const;
     DeviceConnectionState copiedConnectionState(const CameraConnectionState& state) const;

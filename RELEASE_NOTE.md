@@ -1,6 +1,8 @@
 ## Unreleased
 
 - Claim one network or USB camera per session through Playground's host hardware-resource claims. The key is the camera serial, so a second session of this package is refused with the owning session named instead of reaching the transport. The claim is released on disconnect and session close, and a camera without a serial keeps the SDK's native arbitration.
+- Select the acquisition mode from the requested action. Single (`device.single` and the widget's Grab One) writes `AcquisitionMode=SingleFrame` before it acquires one native frame; Live (`source.start`, `device.live-start` and the widget's Live) writes `AcquisitionMode=Continuous`. Only `AcquisitionMode` is written, so trigger and other user settings stay. A changed value is logged at INFO and recorded in `diagnostics.Camera`; Single is declared unavailable with the node-map reason when `AcquisitionMode` is missing, unavailable, unwritable or has no `SingleFrame`, and an unwritable mode refuses the action instead of stopping a continuous stream.
+- `Camera::startAcquisition()` replaces the public raw `grab()` entry point used by the widget and controller. `acquisitionCapabilities()` reports Single availability from the observed remote node map without an SDK wait, and Live stop re-observes it before offering Single again.
 
 - Deliver Basler blaze 3D range data through the GraphicsEngine range writer into Playground shared frame storage. The range channels are written once into provided storage; an empty result drops the range. A blaze frame no longer carries a second explicit point cloud of the same points: GraphicsEngine derives it from the range, and the range RGB channel carries the grayscale intensity colours the explicit cloud used.
 
