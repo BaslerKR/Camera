@@ -1,5 +1,8 @@
 ## Unreleased
 
+- Select the acquisition mode from the requested action. Single (`device.single` and the widget's Grab One) writes `AcquisitionMode=SingleFrame` before it acquires one native frame; Live (`source.start`, `device.live-start` and the widget's Live) writes `AcquisitionMode=Continuous`. Only `AcquisitionMode` is written, so trigger and other user settings stay. A changed value is logged at INFO and recorded in `diagnostics.Camera`; Single is declared unavailable with the node-map reason when `AcquisitionMode` is missing, unavailable, unwritable or has no `SingleFrame`, and an unwritable mode refuses the action instead of stopping a continuous stream.
+- `Camera::startAcquisition()` replaces the public raw `grab()` entry point used by the widget and controller. `acquisitionCapabilities()` reports Single availability from the observed remote node map without an SDK wait.
+
 - Deliver Basler blaze 3D range data through the GraphicsEngine range writer into Playground shared frame storage. The range channels are written once into provided storage; an empty result drops the range. The explicit point cloud is unchanged.
 
 ## v1.4.0 (2026-11-14)

@@ -64,6 +64,8 @@ The ten synthetic SDK-layout cases cover Linux default/custom prefixes, explicit
 
 `Camera::accessFeatures()` executes short feature work under the owning recursive camera and node-map locks, reporting a connection generation to the callback. It returns false while disconnected. Callbacks must not retain node pointers, change camera lifecycle or acquire unrelated locks. The optional device adapter exposes copied remote-node descriptors and typed parameter commands through `IDeviceParameterControl/1.0` on `CameraSourceController`; integer values stay signed 64-bit. Requests carry a controller-instance/connection-generation identity and the complete selecting-feature context. Observed revisions describe queried state, not every intermediate hardware event. Writes revalidate current access and constraints, retain SDK rounding in readback, and distinguish no effect, accepted effect and uncertain SDK completion. There is no implicit selector change, acquisition restart or multi-feature transaction. Root invalidation uses the existing coalesced UI path after SDK locks are released; live refresh remains deferred until stop.
 
+`Camera::startAcquisition()` is the single acquisition entry point used by the widget and the controller. Single writes `AcquisitionMode=SingleFrame` and targets one frame; Live writes `AcquisitionMode=Continuous` and continues until stopped. A missing, unavailable or unwritable mode, or an `AcquisitionMode` without `SingleFrame`, refuses the action with that reason. `acquisitionCapabilities()` caches the observed Single availability without an SDK wait, so `device.single` and the Grab One button follow the node map.
+
 ```cpp
 #include "CameraSystem.h"
 
@@ -78,7 +80,7 @@ const auto callbackId = camera->registerGrabCallback(
     });
 
 if (camera->open()) {
-    camera->grab();
+    camera->startAcquisition(CameraAcquisitionAction::Live);
 }
 ```
 
@@ -95,7 +97,7 @@ The feature authority also serializes connection setup and teardown. Supplying t
 Build the core against the installed SDK on every supported platform. Stereo decoding, trigger behavior, device configuration, and runtime producers require matching physical-hardware validation; a successful library build does not establish those contracts.
 # Declared device lifecycle capability
 
-The source-controller adapter implements the SDK `IDeviceConnectionControl` capability; Playground declares the canonical `device.targets`, `device.discover`, `device.connection`, `device.connect` and `device.disconnect` tools from it, and Single/Live are declared unavailable because acquisition uses the common source controls. Discovery returns copied full transport identities and labels. Connect selects one exact `targetId` and refuses implicit replacement. The opaque `connectionId` is this controller's instance plus its reconnect generation, matches the parameter targets of the same connection, and fences stale calls under the existing lifecycle lock. SDK work uses the existing bounded adapter workers; GUI catalog updates receive copied queued results. Connection ids identify connection lifetimes, not settings-to-acquisition causality.
+The source-controller adapter implements the SDK `IDeviceConnectionControl` capability; Playground declares the canonical `device.targets`, `device.discover`, `device.connection`, `device.connect`, `device.disconnect`, `device.single`, `device.live-start` and `device.live-stop` tools from it. `device.single` is declared available when the remote node map has a writable `AcquisitionMode` with `SingleFrame`, and unavailable with that reason otherwise. Single writes `AcquisitionMode=SingleFrame` before it starts one native frame; Live writes `AcquisitionMode=Continuous` before continuous acquisition. Only `AcquisitionMode` is written, and a changed value is logged at INFO and recorded in the `diagnostics.Camera` structured journal. Single is never emulated by stopping a continuous stream. Discovery returns copied full transport identities and labels. Connect selects one exact `targetId` and refuses implicit replacement. The opaque `connectionId` is this controller's instance plus its reconnect generation, matches the parameter targets of the same connection, and fences stale calls under the existing lifecycle lock. SDK work uses the existing bounded adapter workers; GUI catalog updates receive copied queued results. Connection ids identify connection lifetimes, not settings-to-acquisition causality.
 
 ## Installed consumer SDK plugin build
 

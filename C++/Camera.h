@@ -30,6 +30,21 @@ struct CameraRuntimeDiagnostics {
     std::uint64_t delivered = 0;
     std::uint64_t failed = 0;
 };
+/** @brief The acquisition action that owns AcquisitionMode and its frame count. */
+enum class CameraAcquisitionAction { Single, Live };
+/** @brief Copies an acquisition start and the AcquisitionMode change it applied. */
+struct CameraAcquisitionStart {
+    bool started = false;
+    std::string reason;
+    bool modeChanged = false;
+    std::string previousMode;
+    std::string currentMode;
+};
+/** @brief Copies cached Single availability observed from the remote node map. */
+struct CameraAcquisitionCapabilities {
+    bool singleAvailable = false;
+    std::string singleReason;
+};
 /** @brief Copies a transport-owned target identity independently of feature widgets. */
 struct CameraDeviceDescriptor { std::string id; std::string displayName; };
 /** @brief Copies current logical connection identity without querying SDK features. */
@@ -82,6 +97,8 @@ public:
         CameraConnectionState* result);
 
     using GrabCallback = std::function<void(const CPylonImage&, size_t frame)>;
+    /** @brief Receives the delivered frame count after one grab worker ends. */
+    using GrabFinished = std::function<void(std::size_t delivered)>;
     /**
      * @brief Registers a callback for 2D grab results.
      * @param cb Callback invoked for every successfully grabbed 2D frame.
@@ -118,11 +135,20 @@ public:
     void clearGrab3DCallbacks();
 
     /**
-     * Arms pylon acquisition and starts the frame-receive worker.
-     * @param frames Number of frames to deliver, or zero for continuous mode.
-     * @note Frame retrieval and callbacks run on the owned worker thread.
+     * @brief Writes AcquisitionMode for the requested action and starts its native acquisition.
+     * @param action Single writes `SingleFrame` and targets one frame; Live writes `Continuous`.
+     * @return The applied or refused start, including the previous/current mode when changed.
+     * @note Only AcquisitionMode is written; trigger and other user settings stay untouched.
      */
-    void grab(size_t frames=0);
+    CameraAcquisitionStart startAcquisition(CameraAcquisitionAction action);
+    /**
+     * @brief Starts the action and reports its grabbed frame count when the grab worker ends.
+     * @param finished Called once on the grab worker with the delivered count; may be empty.
+     * @note A refused start does not call @p finished.
+     */
+    CameraAcquisitionStart startAcquisition(CameraAcquisitionAction action, GrabFinished finished);
+    /** @brief Copies cached Single availability without an SDK wait. */
+    [[nodiscard]] CameraAcquisitionCapabilities acquisitionCapabilities() const;
     /** Requests stop and joins the frame-receive worker. */
     void stop();
     /** Requests worker stop without joining the caller. */
@@ -208,6 +234,28 @@ private:
     std::vector<std::string> _registeredNodeEventNames;
     mutable std::mutex _scene3DProfileMutex;
     PylonScene3DProfile _scene3DProfile;
+    mutable std::mutex _acquisitionCapabilitiesMutex;
+    CameraAcquisitionCapabilities _acquisitionCapabilities{
+        false, "The camera connection has not observed AcquisitionMode yet."};
+
+    /**
+     * @brief Arms pylon acquisition after the caller has applied AcquisitionMode.
+     * @param frames Number of frames to deliver, or zero for continuous mode.
+     * @param finished Called once on the grab worker with the delivered count.
+     * @return `true` when the grab worker started.
+     */
+    bool grab(size_t frames, GrabFinished finished);
+    /** @brief Writes AcquisitionMode and refreshes the cached Single availability. */
+    bool writeAcquisitionMode(const std::string& desired, std::string* previous,
+        std::string* current, std::string* reason);
+    /** @brief Observes AcquisitionMode's SingleFrame capability on one node map. */
+    CameraAcquisitionCapabilities observeAcquisitionCapabilities(GenApi::INodeMap& nodeMap) const;
+    /** @brief Stores one copied capability snapshot. */
+    void setAcquisitionCapabilities(CameraAcquisitionCapabilities capabilities);
+    /** @brief Refreshes the cached capability through the existing feature admission. */
+    void refreshAcquisitionCapabilities();
+    /** @brief Reports a disconnected lifetime instead of a stale capability. */
+    void resetAcquisitionCapabilities(const std::string& reason);
 
     /** @brief Exposes the SDK's recursive lifecycle lock to this owning wrapper. */
     class LockedCamera final : public CBaslerUniversalInstantCamera {

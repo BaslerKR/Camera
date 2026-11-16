@@ -80,6 +80,8 @@ private:
     void scheduleNodeUpdateDrain();
     /** Applies one bounded batch of unique camera-node updates. */
     void drainNodeUpdates();
+    /** @brief Records a mode change or refusal in the panel log and structured diagnostics. */
+    void reportAcquisitionStart(const CameraAcquisitionStart& started, const char* action);
 
     Camera *_camera;
     Camera::CallbackId _statusCallbackId = 0;
