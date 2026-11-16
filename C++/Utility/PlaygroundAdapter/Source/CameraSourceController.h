@@ -6,6 +6,7 @@
 #include "DeviceParameterControl.h"
 #include "FrameStorage.h"
 #include <map>
+#include <QString>
 #include <QSet>
 #include <QThread>
 #include <atomic>
@@ -22,6 +23,7 @@ public:
     using Completion = IDeviceParameterControl::Completion;
     using TargetsCompletion = IDeviceConnectionControl::TargetsCompletion;
     CameraSourceController(Camera* camera, IDevicePluginResourceClaims* claims = nullptr,
+        std::shared_ptr<IDevicePluginResourceClaim>* claim = nullptr,
         QObject* parent = nullptr);
     ~CameraSourceController() override;
 
@@ -82,6 +84,8 @@ private:
     QSet<QThread*> _parameterWorkers;
     bool _parameterClosing = false;
     void registerCallbacks();
+    /** @brief Releases the held device claim, if any. */
+    void releaseClaim();
     void deregisterCallbacks();
     /** @brief Assigns observed revisions while holding the owning camera/node-map locks. */
     DeviceParameterDescriptor observeParameter(GenApi::INode* node, std::uint64_t generation);
@@ -95,7 +99,8 @@ private:
 
     Camera* _camera;
     IDevicePluginResourceClaims* _claims = nullptr;
-    std::shared_ptr<IDevicePluginResourceClaim> _claim;
+    std::shared_ptr<IDevicePluginResourceClaim>* _claim = nullptr;
+    QString _claimKey;
     FrameConsumer _frameConsumer;
     std::atomic<bool> _isGrabbing{false};
     std::atomic<uint64_t> _frameSeq{0};

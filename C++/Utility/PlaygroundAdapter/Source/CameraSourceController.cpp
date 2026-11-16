@@ -8,8 +8,8 @@
 
 
 CameraSourceController::CameraSourceController(Camera* camera, IDevicePluginResourceClaims* claims,
-    QObject* parent)
-    : AbstractSourceController(parent), _camera(camera), _claims(claims) {
+    std::shared_ptr<IDevicePluginResourceClaim>* claim, QObject* parent)
+    : AbstractSourceController(parent), _camera(camera), _claims(claims), _claim(claim) {
     _parameterInstance = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     registerCallbacks();
 }
@@ -20,8 +20,12 @@ void CameraSourceController::setFrameStorageProvider(std::shared_ptr<IFrameStora
     _graphicsStream->setFrameStorage(frameStorageFunction(std::move(provider)));
 }
 
+void CameraSourceController::releaseClaim() {
+    if (_claim) _claim->reset();
+    _claimKey.clear();
+}
+
 CameraSourceController::~CameraSourceController() {
-    _claim.reset();
     _parameterClosing = true;
     const auto workers = _parameterWorkers;
     for (auto* worker : workers) {

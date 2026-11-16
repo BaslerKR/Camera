@@ -1,6 +1,8 @@
 #include "CameraSourceController.h"
 #include "ToolProvider.h"
 #include "CameraSystem.h"
+#include "DevicePlugin/HardwareResourceKey.h"
+#include <QSet>
 #include <QtTest>
 #include <algorithm>
 #include <future>
@@ -8,6 +10,46 @@
 #include <memory>
 #include <atomic>
 #include <stdexcept>
+
+namespace {
+
+/** @brief One host-side claim handle whose release updates a test registry. */
+class TestClaimHandle final : public IDevicePluginResourceClaim {
+public:
+    TestClaimHandle(QSet<QString>* held, QString key)
+        : _held(held), _key(std::move(key)) {}
+    ~TestClaimHandle() override { release(); }
+    QString key() const override { return _key; }
+    void release() override
+    {
+        if (_released) return;
+        _released = true;
+        _held->remove(_key);
+    }
+private:
+    QSet<QString>* _held = nullptr;
+    QString _key;
+    bool _released = false;
+};
+
+/** @brief Minimal claims service used to observe the controller claim lifecycle. */
+class TestClaims final : public IDevicePluginResourceClaims {
+public:
+    std::shared_ptr<IDevicePluginResourceClaim> claimResource(const QString& key, QString* error) override
+    {
+        if (_held.contains(key)) {
+            if (error) *error = QStringLiteral("The test claim is already held.");
+            return {};
+        }
+        _held.insert(key);
+        return std::make_shared<TestClaimHandle>(&_held, key);
+    }
+    QSet<QString> held() const { return _held; }
+private:
+    QSet<QString> _held;
+};
+
+} // namespace
 
 class CameraParameterControlTests : public QObject {
     Q_OBJECT
@@ -124,6 +166,80 @@ private slots:
         QCOMPARE(busy.error, DeviceConnectionError::Busy); QVERIFY(camera->connectionState().connected);
         QCOMPARE(disconnect(second).error, DeviceConnectionError::None);
     }
+    void removedCameraReleasesItsClaimBeforeAnotherTarget() {
+        qputenv("PYLON_CAMEMU", "1");
+        auto& system = *_system;
+        auto* camera = system.addCamera(); QVERIFY(camera);
+        TestClaims claims;
+        std::shared_ptr<IDevicePluginResourceClaim> held;
+        auto controller = std::make_unique<CameraSourceController>(camera, &claims, &held);
+        auto* connection = qobject_cast<IDeviceConnectionControl*>(controller.get()); QVERIFY(connection);
+        const auto wait = [](auto& future) {
+            const bool ready = future.wait_for(std::chrono::seconds(30)) == std::future_status::ready;
+            QCoreApplication::processEvents();
+            return ready;
+        };
+        const auto run = [&](auto admit) {
+            auto promise = std::make_shared<std::promise<DeviceConnectionResult>>();
+            auto future = promise->get_future();
+            const auto admitted = admit([promise](DeviceConnectionResult result) {
+                promise->set_value(std::move(result));
+            });
+            if (admitted.error != DeviceConnectionError::None) return admitted;
+            if (!wait(future))
+                return DeviceConnectionResult{DeviceConnectionError::BackendFailure,
+                    "Emulator completion timed out."};
+            return future.get();
+        };
+        auto discovered = std::make_shared<std::promise<DeviceConnectionTargets>>();
+        auto targets = discovered->get_future();
+        QCOMPARE(connection->requestDiscover([discovered](DeviceConnectionTargets value) {
+            discovered->set_value(std::move(value));
+        }).error, DeviceConnectionError::None);
+        QVERIFY(wait(targets));
+        const auto catalog = targets.get();
+        QCOMPARE(catalog.result.error, DeviceConnectionError::None);
+        std::vector<std::pair<std::string, QString>> emulators;
+        for (const auto& target : catalog.targets) {
+            const auto info = system.getCameraInfo(target.displayName);
+            if (std::string(info.GetDeviceClass().c_str()) != "BaslerCamEmu") continue;
+            emulators.emplace_back(target.targetId,
+                playgroundCameraResourceKey(QString::fromStdString(info.GetSerialNumber().c_str())));
+        }
+        if (emulators.size() < 2) QSKIP("The pylon two-camera emulator is not configured.");
+        const auto connect = [&](const std::string& id) {
+            return run([&](auto done) { return connection->requestConnect(id, done); });
+        };
+        const auto disconnected = [&](const std::string& id) {
+            return run([&](auto done) { return connection->requestDisconnect(id, done); });
+        };
+
+        auto connected = connect(emulators.at(0).first);
+        QCOMPARE(connected.error, DeviceConnectionError::None);
+        QVERIFY(held && held->key() == emulators.at(0).second);
+        QCOMPARE(claims.held(), QSet<QString>({emulators.at(0).second}));
+
+        // A camera removal invalidates the connection without a disconnect request. The next
+        // target must release the old key before claiming its own, or a sibling session could
+        // open the removed camera while this session still holds its key.
+        camera->close();
+        connected = connect(emulators.at(1).first);
+        QCOMPARE(connected.error, DeviceConnectionError::None);
+        QCOMPARE(claims.held(), QSet<QString>({emulators.at(1).second}));
+        QVERIFY(held && held->key() == emulators.at(1).second);
+
+        // Disconnecting an already invalidated connection also releases the stale key.
+        camera->close();
+        const auto stale = disconnected(connected.state->connectionId);
+        QCOMPARE(stale.error, DeviceConnectionError::Disconnected);
+        QVERIFY(claims.held().isEmpty());
+        QVERIFY(!held);
+
+        held.reset();
+        controller.reset();
+        system.removeCamera(camera);
+    }
+
     void emulatedSdkParametersAndConnectionLifetime() {
         // Only an explicitly selected pylon emulator is opened, even if real devices exist.
         qputenv("PYLON_CAMEMU", "1");

@@ -68,7 +68,7 @@ public:
         IDevicePluginResourceClaims* claims)
         : _system(std::move(system)), _camera(camera),
           _discoveredCameraNames(std::move(discoveredCameraNames)),
-          _controller(std::make_unique<CameraSourceController>(_camera, claims))
+          _controller(std::make_unique<CameraSourceController>(_camera, claims, &_claim))
     {
         std::weak_ptr<CameraPluginTitleState> titleState = _titleState;
         Camera* const cameraForCallback = _camera;
@@ -99,6 +99,8 @@ public:
         if (_system && _camera) {
             _system->removeCamera(_camera);
         }
+        // Release the device key only after the native camera close completed.
+        _claim.reset();
     }
 
     QString title() const override { return _titleState->title(); }
@@ -130,6 +132,7 @@ private:
     std::shared_ptr<CameraSystem> _system;
     Camera* _camera = nullptr;
     QStringList _discoveredCameraNames;
+    std::shared_ptr<IDevicePluginResourceClaim> _claim;
     std::unique_ptr<CameraSourceController> _controller;
     QPointer<QCameraWidget> _widget;
     Camera::CallbackId _statusCallback = 0;
