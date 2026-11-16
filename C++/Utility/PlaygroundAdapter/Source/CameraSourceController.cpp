@@ -1,4 +1,5 @@
 #include "CameraSourceController.h"
+#include "DevicePlugin/HardwareResourceKey.h"
 #include "engine/GraphicsFrame.h"
 #include "SessionFrame.h"
 #include "Utility/PlaygroundAdapter/PylonGraphicsFrameStream.h"
@@ -6,6 +7,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLoggingCategory>
+#include <QString>
 #include <QUuid>
 #include <condition_variable>
 
@@ -13,8 +15,9 @@
 // Host Debug enables diagnostics.* output; the INFO mode line remains in the normal log.
 Q_LOGGING_CATEGORY(cameraSourceDiagnosticLog, "diagnostics.Camera", QtInfoMsg)
 
-CameraSourceController::CameraSourceController(Camera* camera, QObject* parent)
-    : AbstractSourceController(parent), _camera(camera) {
+CameraSourceController::CameraSourceController(Camera* camera, IDevicePluginResourceClaims* claims,
+    std::shared_ptr<IDevicePluginResourceClaim>* claim, QObject* parent)
+    : AbstractSourceController(parent), _camera(camera), _claims(claims), _claim(claim) {
     _parameterInstance = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     registerCallbacks();
 }
@@ -23,6 +26,11 @@ void CameraSourceController::setFrameStorageProvider(std::shared_ptr<IFrameStora
 {
     if (!_graphicsStream) return;
     _graphicsStream->setFrameStorage(frameStorageFunction(std::move(provider)));
+}
+
+void CameraSourceController::releaseClaim() {
+    if (_claim) _claim->reset();
+    _claimKey.clear();
 }
 
 CameraSourceController::~CameraSourceController() {

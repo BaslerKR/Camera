@@ -428,20 +428,49 @@ DeviceConnectionResult CameraSourceController::connectionOutcome(CameraConnectio
 
 DeviceConnectionResult CameraSourceController::requestConnect(std::string targetId, IDeviceConnectionControl::Completion completion) {
     return scheduleConnectionWork([this, targetId = std::move(targetId)]() -> DeviceConnectionResult {
+        // claims and the native connection move under one lock, so concurrent connect
+        // requests in one session cannot release a claim another request already took.
+        std::lock_guard<std::mutex> connectionLock(_connectionWorkMutex);
         auto state = _camera->connectionState();
         if (state.connected)
             return {DeviceConnectionError::Conflict, "Disconnect the current target explicitly before connecting another."};
+        // A network or USB camera is the exclusive resource per session. The key is derived
+        // from the exact target before the SDK open. A target that changed without a completed
+        // disconnect releases the old key first; otherwise a removed camera would leave one
+        // session holding A while it opens B.
+        const auto claimKey = _claims
+            ? playgroundCameraResourceKey(QString::fromStdString(_camera->deviceSerialNumber(targetId)))
+            : QString();
+        if (_claims && _claimKey != claimKey) releaseClaim();
+        if (_claims && _claim && !*_claim && !claimKey.isEmpty()) {
+            QString claimError;
+            *_claim = _claims->claimResource(claimKey, &claimError);
+            if (!*_claim) {
+                return {DeviceConnectionError::Conflict, claimError.toStdString(),
+                    DeviceConnectionEffect::None, std::nullopt};
+            }
+            _claimKey = claimKey;
+        }
         const auto outcome = _camera->controlConnection(true, targetId, state.generation, &state);
+        if (outcome != CameraConnectionOutcome::Success) releaseClaim();
         return connectionOutcome(outcome, state);
     }, std::move(completion));
 }
 
 DeviceConnectionResult CameraSourceController::requestDisconnect(std::string connectionId, IDeviceConnectionControl::Completion completion) {
     return scheduleConnectionWork([this, connectionId = std::move(connectionId)]() -> DeviceConnectionResult {
+        // claims and the native connection move under one lock, so concurrent connect
+        // requests in one session cannot release a claim another request already took.
+        std::lock_guard<std::mutex> connectionLock(_connectionWorkMutex);
         auto state = _camera->connectionState();
-        if (!state.connected) return {DeviceConnectionError::Disconnected, "The camera is disconnected."};
+        if (!state.connected) {
+            // A device removal can invalidate the connection without a disconnect request.
+            releaseClaim();
+            return {DeviceConnectionError::Disconnected, "The camera is disconnected."};
+        }
         if (connectionIdFor(state) != connectionId) return {DeviceConnectionError::Conflict, "The connection changed; observe it again."};
         const auto outcome = _camera->controlConnection(false, {}, state.generation, &state);
+        if (outcome == CameraConnectionOutcome::Success) releaseClaim();
         return connectionOutcome(outcome, state);
     }, std::move(completion));
 }

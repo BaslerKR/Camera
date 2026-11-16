@@ -7,6 +7,7 @@
 
 #include <QPointer>
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 
@@ -63,10 +64,11 @@ public:
     CameraPluginSession(
         std::shared_ptr<CameraSystem> system,
         Camera* camera,
-        QStringList discoveredCameraNames)
+        QStringList discoveredCameraNames,
+        IDevicePluginResourceClaims* claims)
         : _system(std::move(system)), _camera(camera),
           _discoveredCameraNames(std::move(discoveredCameraNames)),
-          _controller(std::make_unique<CameraSourceController>(_camera))
+          _controller(std::make_unique<CameraSourceController>(_camera, claims, &_claim))
     {
         std::weak_ptr<CameraPluginTitleState> titleState = _titleState;
         Camera* const cameraForCallback = _camera;
@@ -97,6 +99,8 @@ public:
         if (_system && _camera) {
             _system->removeCamera(_camera);
         }
+        // Release the device key only after the native camera close completed.
+        _claim.reset();
     }
 
     QString title() const override { return _titleState->title(); }
@@ -128,16 +132,17 @@ private:
     std::shared_ptr<CameraSystem> _system;
     Camera* _camera = nullptr;
     QStringList _discoveredCameraNames;
+    std::shared_ptr<IDevicePluginResourceClaim> _claim;
     std::unique_ptr<CameraSourceController> _controller;
     QPointer<QCameraWidget> _widget;
     Camera::CallbackId _statusCallback = 0;
     std::shared_ptr<CameraPluginTitleState> _titleState = std::make_shared<CameraPluginTitleState>();
 };
 
-class CameraPlugin final : public DevicePluginTemplate {
+class CameraPlugin final : public DevicePluginTemplate, public IDevicePluginResourceClaimsReceiver {
     Q_OBJECT
     Q_PLUGIN_METADATA(IID PlaygroundDevicePlugin_iid)
-    Q_INTERFACES(IDevicePlugin)
+    Q_INTERFACES(IDevicePlugin IDevicePluginResourceClaimsReceiver)
 
 public:
     DevicePluginDescriptor descriptor() const override
@@ -184,15 +189,22 @@ public:
                 if (errorMessage) *errorMessage = QStringLiteral("No Basler camera was detected.");
                 return {};
             }
-            return std::make_unique<CameraPluginSession>(system, camera, cameraNames);
+            return std::make_unique<CameraPluginSession>(system, camera, cameraNames,
+                _claims.load(std::memory_order_acquire));
         } catch (const std::exception& error) {
             if (errorMessage) *errorMessage = QString::fromLocal8Bit(error.what());
             return {};
         }
     }
 
+    void setResourceClaims(IDevicePluginResourceClaims* claims) override
+    {
+        _claims.store(claims, std::memory_order_release);
+    }
+
     void shutdown() override
     {
+        _claims.store(nullptr, std::memory_order_release);
         std::shared_ptr<CameraSystem> system;
         {
             std::lock_guard<std::mutex> lock(_systemMutex);
@@ -214,6 +226,7 @@ private:
 
     std::mutex _systemMutex;
     std::shared_ptr<CameraSystem> _system;
+    std::atomic<IDevicePluginResourceClaims*> _claims{nullptr};
     bool _shuttingDown = false;
 };
 
