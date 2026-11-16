@@ -296,12 +296,24 @@ std::string findEmulator(CameraSystem& system)
     return {};
 }
 
+/**
+ * @brief Reports whether a normal delta flips any observed name's writability.
+ * @note Snapshots reset the baseline; a resync snapshot never counts as a transition,
+ *       so the test proves the device observation arrived as a delta.
+ */
 bool sawWritabilityTransition(const std::vector<DeviceParameterChange>& changes,
     const bool fromWritable, const bool toWritable)
 {
     std::map<std::string, bool> writable;
     for (const auto& change : changes) {
         if (change.error != DeviceParameterError::None) continue;
+        if (change.kind == DeviceParameterChangeKind::Snapshot) {
+            writable.clear();
+            for (const auto& descriptor : change.descriptors)
+                writable[descriptor.target.name] = descriptor.writable;
+            continue;
+        }
+        if (change.resync) continue;
         for (const auto& descriptor : change.descriptors) {
             const auto previous = writable.find(descriptor.target.name);
             if (previous != writable.end() && previous->second == fromWritable
@@ -867,13 +879,25 @@ private slots:
                 collector.listener()).error, DeviceParameterError::None);
             QVERIFY(collector.waitFor(1, 5000));
             collector.holdDeltas(true);
+            // An observation may hold the feature lock briefly; a write retries that admission.
+            const auto writeWithRetry = [&](const DeviceParameterTarget& target,
+                                            const DeviceParameterValue& value,
+                                            std::optional<std::uint64_t> revision) {
+                DeviceParameterResult result;
+                for (int attempt = 0; attempt < 200; ++attempt) {
+                    result = controller.writeParameter(target, value, revision);
+                    if (result.error != DeviceParameterError::Busy) return result;
+                    QTest::qWait(5);
+                }
+                return result;
+            };
             std::optional<WritableCandidate> held;
             for (const auto& descriptor : inventory) {
                 if (descriptor.target.name != "Width") continue;
                 held = writableChange(descriptor);
             }
             QVERIFY(held.has_value());
-            QVERIFY(controller.writeParameter(held->descriptor.target, held->value,
+            QVERIFY(writeWithRetry(held->descriptor.target, held->value,
                 held->descriptor.revision).error == DeviceParameterError::None);
             QVERIFY(collector.waitUntilHeld(5000));
 
@@ -884,16 +908,20 @@ private slots:
                 if (used.count(descriptor.target.name)) continue;
                 const auto candidate = writableChange(descriptor);
                 if (!candidate) continue;
-                if (controller.writeParameter(candidate->descriptor.target, candidate->value,
+                if (writeWithRetry(candidate->descriptor.target, candidate->value,
                         candidate->descriptor.revision).error != DeviceParameterError::None)
                     continue;
                 used.insert(descriptor.target.name);
                 ++changed;
+                // Let the observer turn this write into its own delta while delivery is held.
+                QTest::qWait(40);
             }
             collector.releaseHeld();
             if (changed < deviceParameterChangeQueueLimit + 1) {
                 collector.holdDeltas(false);
-                QSKIP("The emulator does not expose enough writable scalar features to overflow the queue.");
+                QSKIP(qPrintable(QStringLiteral(
+                    "The emulator exposes only %1 writable scalar features; the queue cannot overflow.")
+                    .arg(changed)));
             }
             QVERIFY(collector.waitForResync(15000));
             bool sawResync = false;

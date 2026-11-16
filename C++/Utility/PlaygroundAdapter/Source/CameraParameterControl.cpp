@@ -427,8 +427,10 @@ struct CameraSourceController::ParameterSubscription {
 };
 
 void CameraSourceController::startChangeWorker() {
-    if (_changeThread.joinable()) return;
-    _changeThread = std::thread([this] { changeWorkerLoop(); });
+    if (!_changeThread.joinable())
+        _changeThread = std::thread([this] { changeWorkerLoop(); });
+    if (!_deliveryThread.joinable())
+        _deliveryThread = std::thread([this] { deliveryWorkerLoop(); });
 }
 
 void CameraSourceController::stopChangeWorker() {
@@ -439,15 +441,42 @@ void CameraSourceController::stopChangeWorker() {
         _pendingSnapshotIds.clear();
     }
     _changeCondition.notify_all();
-    if (_changeThread.joinable()) _changeThread.join();
-    std::vector<std::shared_ptr<ParameterSubscription>> subscriptions;
     {
-        std::lock_guard<std::mutex> lock(_parameterSubscriptionMutex);
-        for (auto& entry : _parameterSubscriptions) {
-            entry.second->active = false;
-            subscriptions.push_back(entry.second);
+        std::lock_guard<std::mutex> lock(_deliveryStateMutex);
+        _deliveryStopping = true;
+        _deliveryPending = true;
+    }
+    _deliveryCondition.notify_all();
+    if (_changeThread.joinable()) _changeThread.join();
+    if (_deliveryThread.joinable()) _deliveryThread.join();
+    std::lock_guard<std::mutex> lock(_parameterSubscriptionMutex);
+    for (auto& entry : _parameterSubscriptions) entry.second->active = false;
+    _parameterSubscriptions.clear();
+}
+
+void CameraSourceController::notifyParameterDelivery() {
+    {
+        std::lock_guard<std::mutex> lock(_deliveryStateMutex);
+        _deliveryPending = true;
+    }
+    _deliveryCondition.notify_one();
+}
+
+void CameraSourceController::deliveryWorkerLoop() {
+    for (;;) {
+        {
+            std::unique_lock<std::mutex> lock(_deliveryStateMutex);
+            _deliveryCondition.wait(lock, [this] {
+                return _deliveryStopping || _deliveryPending;
+            });
+            if (_deliveryStopping) return;
+            _deliveryPending = false;
         }
-        _parameterSubscriptions.clear();
+        try {
+            deliverParameterChanges();
+        } catch (...) {
+            // A delivery failure must not stop the other subscriptions.
+        }
     }
 }
 
@@ -461,11 +490,14 @@ void CameraSourceController::enqueueParameterChange(const std::string& nodeName)
     {
         std::lock_guard<std::mutex> lock(_changeMutex);
         if (_changeStopping) return;
-        if (nodeName == "Root") {
+        // Each notification stays a separate observation. A listener slower than the
+        // notification stream therefore fills the bounded queue and forces one resync
+        // snapshot instead of silently merging state updates.
+        if (_pendingChangeNames.size() >= 256) {
             _pendingChangeNames.clear();
-            _pendingChangeNames.insert(nodeName);
-        } else if (_pendingChangeNames.count("Root") == 0) {
-            _pendingChangeNames.insert(nodeName);
+            _pendingChangeNames.push_back("Root");
+        } else {
+            _pendingChangeNames.push_back(nodeName);
         }
     }
     _changeCondition.notify_one();
@@ -487,18 +519,25 @@ void CameraSourceController::enqueueParameterConnectionLost(const std::string& m
 bool CameraSourceController::observeParameterInventory(std::vector<DeviceParameterDescriptor>* output) {
     if (!output || !_camera) return false;
     std::vector<DeviceParameterDescriptor> copied;
-    try {
-        if (!_camera->accessFeatures([&](GenApi::INodeMap& map, std::uint64_t generation) {
-            GenApi::NodeList_t nodes;
-            map.GetNodes(nodes);
-            for (auto* node : nodes) if (supported(node)) copied.push_back(observeParameter(node, generation));
-        })) return false;
-    } catch (const Pylon::GenericException&) {
-        return false;
-    } catch (const std::exception&) {
-        return false;
-    } catch (...) {
-        return false;
+    for (;;) {
+        bool busy = false;
+        try {
+            if (_camera->accessFeatures([&](GenApi::INodeMap& map, std::uint64_t generation) {
+                GenApi::NodeList_t nodes;
+                map.GetNodes(nodes);
+                for (auto* node : nodes)
+                    if (supported(node)) copied.push_back(observeParameter(node, generation));
+            }, &busy)) break;
+        } catch (const Pylon::GenericException&) {
+            return false;
+        } catch (const std::exception&) {
+            return false;
+        } catch (...) {
+            return false;
+        }
+        // Observation yields to API reads/writes and lifecycle work instead of blocking them.
+        if (!busy || _parameterClosing) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     std::sort(copied.begin(), copied.end(),
         [](const auto& a, const auto& b) { return a.target.name < b.target.name; });
@@ -508,7 +547,7 @@ bool CameraSourceController::observeParameterInventory(std::vector<DeviceParamet
 
 void CameraSourceController::changeWorkerLoop() {
     for (;;) {
-        std::set<std::string> names;
+        std::deque<std::string> names;
         std::vector<std::string> snapshotIds;
         bool lost = false;
         std::string lostMessage;
@@ -542,119 +581,81 @@ void CameraSourceController::changeWorkerLoop() {
     }
 }
 
-void CameraSourceController::processParameterChanges(const std::set<std::string>& names,
+void CameraSourceController::processParameterChanges(const std::deque<std::string>& names,
     const std::vector<std::string>& snapshotIds) {
-    const bool fullObservation = names.count("Root") > 0;
-    std::vector<DeviceParameterDescriptor> inventory;
-    std::map<std::string, DeviceParameterDescriptor> observed;
-    std::set<std::string> missing;
-    if (fullObservation) {
-        if (!observeParameterInventory(&inventory)) {
-            enqueueParameterConnectionLost("The camera disconnected while observing parameter changes.");
-            return;
-        }
-        for (const auto& descriptor : inventory) observed.emplace(descriptor.target.name, descriptor);
-    } else if (!names.empty()) {
-        if (!_camera) {
-            enqueueParameterConnectionLost("The camera is disconnected.");
-            return;
-        }
-        for (const auto& name : names) {
-            bool found = false;
-            try {
-                if (!_camera->accessFeatures([&](GenApi::INodeMap& map, std::uint64_t generation) {
-                    auto* node = map.GetNode(name.c_str());
-                    if (!node || !supported(node)) return;
-                    found = true;
-                    observed[name] = observeParameter(node, generation);
-                })) {
-                    enqueueParameterConnectionLost(
-                        "The camera disconnected while observing parameter changes.");
-                    return;
-                }
-            } catch (const Pylon::GenericException&) {
-                // A transient SDK failure leaves the node unobserved; consumers may re-read it.
-                found = false;
-            } catch (const std::exception&) {
-                found = false;
-            } catch (...) {
-                found = false;
-            }
-            if (!found) missing.insert(name);
-        }
-    }
-    std::vector<std::shared_ptr<ParameterSubscription>> snapshots;
     {
         std::lock_guard<std::mutex> lock(_parameterSubscriptionMutex);
-        for (const auto& id : snapshotIds) {
-            const auto found = _parameterSubscriptions.find(id);
-            if (found != _parameterSubscriptions.end() && found->second->active
-                && found->second->awaitingSnapshot)
-                snapshots.push_back(found->second);
-        }
+        if (_parameterSubscriptions.empty()) return;
     }
-    if (!snapshots.empty()) {
-        if (inventory.empty()) {
+    // Snapshots are observed before the per-event deltas below, so a delta can never be
+    // older than the snapshot it follows.
+    if (!snapshotIds.empty()) {
+        std::vector<std::shared_ptr<ParameterSubscription>> snapshots;
+        {
+            std::lock_guard<std::mutex> lock(_parameterSubscriptionMutex);
+            for (const auto& id : snapshotIds) {
+                const auto found = _parameterSubscriptions.find(id);
+                if (found != _parameterSubscriptions.end() && found->second->active
+                    && found->second->awaitingSnapshot)
+                    snapshots.push_back(found->second);
+            }
+        }
+        if (!snapshots.empty()) {
+            std::vector<DeviceParameterDescriptor> inventory;
             if (!observeParameterInventory(&inventory)) {
                 endParameterSubscriptions(DeviceParameterError::Disconnected,
                     "The camera disconnected while building a parameter snapshot.");
                 return;
             }
-        }
-        std::uint64_t revision = 0;
-        for (const auto& descriptor : inventory) revision = std::max(revision, descriptor.revision);
-        std::lock_guard<std::mutex> lock(_parameterSubscriptionMutex);
-        for (const auto& subscription : snapshots) {
-            if (!subscription->active || !subscription->awaitingSnapshot) continue;
-            DeviceParameterChange snapshot;
-            snapshot.kind = DeviceParameterChangeKind::Snapshot;
-            snapshot.connectionId = subscription->connectionId;
-            snapshot.subscriptionId = subscription->subscriptionId;
-            snapshot.sequence = ++subscription->nextSequence;
-            snapshot.revision = revision;
-            snapshot.descriptors = inventory;
-            subscription->deliveredRevisions.clear();
+            std::uint64_t revision = 0;
             for (const auto& descriptor : inventory)
-                subscription->deliveredRevisions[descriptor.target.name] = descriptor.revision;
-            subscription->queue.push(std::move(snapshot));
-            subscription->awaitingSnapshot = false;
+                revision = std::max(revision, descriptor.revision);
+            std::lock_guard<std::mutex> lock(_parameterSubscriptionMutex);
+            for (const auto& subscription : snapshots) {
+                if (!subscription->active || !subscription->awaitingSnapshot) continue;
+                DeviceParameterChange snapshot;
+                snapshot.kind = DeviceParameterChangeKind::Snapshot;
+                snapshot.connectionId = subscription->connectionId;
+                snapshot.subscriptionId = subscription->subscriptionId;
+                snapshot.sequence = ++subscription->nextSequence;
+                snapshot.revision = revision;
+                snapshot.descriptors = inventory;
+                subscription->deliveredRevisions.clear();
+                for (const auto& descriptor : inventory)
+                    subscription->deliveredRevisions[descriptor.target.name] = descriptor.revision;
+                subscription->queue.push(std::move(snapshot));
+                subscription->awaitingSnapshot = false;
+            }
         }
     }
     std::vector<std::string> resync;
-    {
+    // One observation contributes one delta per subscription, up to the contract's chunk
+    // bound. Only a burst of observations can fill the bounded queue, never one observation.
+    const auto emitObservation = [&](const bool full,
+        const std::map<std::string, DeviceParameterDescriptor>& observed,
+        const std::set<std::string>& missing) {
         std::lock_guard<std::mutex> lock(_parameterSubscriptionMutex);
         for (auto& entry : _parameterSubscriptions) {
             const auto& subscription = entry.second;
             if (!subscription->active || subscription->awaitingSnapshot) continue;
-            bool overflowed = false;
-            const auto queueDelta = [&](DeviceParameterChange delta) {
-                if (overflowed) return;
-                delta.kind = DeviceParameterChangeKind::Delta;
-                delta.connectionId = subscription->connectionId;
-                delta.subscriptionId = subscription->subscriptionId;
-                delta.sequence = ++subscription->nextSequence;
-                if (!subscription->queue.push(std::move(delta))) overflowed = true;
-            };
+            std::vector<DeviceParameterDescriptor> changed;
+            std::vector<DeviceParameterTarget> invalidated;
             for (const auto& item : observed) {
                 const auto previous = subscription->deliveredRevisions.find(item.first);
                 if (previous != subscription->deliveredRevisions.end()
                     && previous->second == item.second.revision) continue;
                 subscription->deliveredRevisions[item.first] = item.second.revision;
-                DeviceParameterChange delta;
-                delta.revision = item.second.revision;
-                delta.descriptors.push_back(item.second);
-                queueDelta(std::move(delta));
+                changed.push_back(item.second);
             }
-            DeviceParameterChange invalidated;
             for (const auto& name : missing) {
                 if (subscription->deliveredRevisions.erase(name) == 0) continue;
                 DeviceParameterTarget target;
                 target.connectionId = subscription->connectionId;
                 target.scope = "remote";
                 target.name = name;
-                invalidated.invalidated.push_back(std::move(target));
+                invalidated.push_back(std::move(target));
             }
-            if (fullObservation) {
+            if (full) {
                 for (auto it = subscription->deliveredRevisions.begin();
                      it != subscription->deliveredRevisions.end();) {
                     if (observed.count(it->first)) {
@@ -665,22 +666,108 @@ void CameraSourceController::processParameterChanges(const std::set<std::string>
                     target.connectionId = subscription->connectionId;
                     target.scope = "remote";
                     target.name = it->first;
-                    invalidated.invalidated.push_back(std::move(target));
+                    invalidated.push_back(std::move(target));
                     it = subscription->deliveredRevisions.erase(it);
                 }
             }
-            if (!invalidated.invalidated.empty()) queueDelta(std::move(invalidated));
+            bool overflowed = false;
+            const auto queueDelta = [&](std::vector<DeviceParameterDescriptor> descriptors,
+                                        std::vector<DeviceParameterTarget> targets) {
+                if (overflowed || (descriptors.empty() && targets.empty())) return;
+                DeviceParameterChange delta;
+                delta.kind = DeviceParameterChangeKind::Delta;
+                delta.connectionId = subscription->connectionId;
+                delta.subscriptionId = subscription->subscriptionId;
+                delta.sequence = ++subscription->nextSequence;
+                for (const auto& descriptor : descriptors)
+                    delta.revision = std::max(delta.revision, descriptor.revision);
+                delta.descriptors = std::move(descriptors);
+                delta.invalidated = std::move(targets);
+                if (!subscription->queue.push(std::move(delta))) overflowed = true;
+            };
+            for (std::size_t offset = 0; offset < changed.size();
+                 offset += deviceParameterDeltaDescriptorLimit) {
+                const auto count = std::min(deviceParameterDeltaDescriptorLimit,
+                    changed.size() - offset);
+                queueDelta({changed.begin() + std::ptrdiff_t(offset),
+                    changed.begin() + std::ptrdiff_t(offset + count)}, {});
+            }
+            for (std::size_t offset = 0; offset < invalidated.size();
+                 offset += deviceParameterDeltaInvalidationLimit) {
+                const auto count = std::min(deviceParameterDeltaInvalidationLimit,
+                    invalidated.size() - offset);
+                queueDelta({}, {invalidated.begin() + std::ptrdiff_t(offset),
+                    invalidated.begin() + std::ptrdiff_t(offset + count)});
+            }
             if (overflowed) resync.push_back(entry.first);
+        }
+    };
+    for (const auto& name : names) {
+        if (name == "Root") {
+            std::vector<DeviceParameterDescriptor> inventory;
+            if (!observeParameterInventory(&inventory)) {
+                enqueueParameterConnectionLost(
+                    "The camera disconnected while observing parameter changes.");
+                return;
+            }
+            std::map<std::string, DeviceParameterDescriptor> observed;
+            for (const auto& descriptor : inventory)
+                observed.emplace(descriptor.target.name, descriptor);
+            emitObservation(true, observed, {});
+        } else {
+            if (!_camera) {
+                enqueueParameterConnectionLost("The camera is disconnected.");
+                return;
+            }
+            std::map<std::string, DeviceParameterDescriptor> observed;
+            std::set<std::string> missing;
+            bool found = false;
+            for (;;) {
+                bool busy = false;
+                try {
+                    if (_camera->accessFeatures([&](GenApi::INodeMap& map, std::uint64_t generation) {
+                        auto* node = map.GetNode(name.c_str());
+                        if (!node || !supported(node)) return;
+                        found = true;
+                        observed[name] = observeParameter(node, generation);
+                    }, &busy)) break;
+                } catch (const Pylon::GenericException&) {
+                    // A transient SDK failure leaves the node unobserved; consumers may re-read it.
+                    found = false;
+                    observed.clear();
+                    break;
+                } catch (const std::exception&) {
+                    found = false;
+                    observed.clear();
+                    break;
+                } catch (...) {
+                    found = false;
+                    observed.clear();
+                    break;
+                }
+                if (!busy) {
+                    enqueueParameterConnectionLost(
+                        "The camera disconnected while observing parameter changes.");
+                    return;
+                }
+                if (_parameterClosing) return;
+                // Observation yields to API reads/writes and lifecycle work.
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            if (!found) missing.insert(name);
+            emitObservation(false, observed, missing);
         }
     }
     if (!resync.empty()) {
-        if (inventory.empty() && !observeParameterInventory(&inventory)) {
+        std::vector<DeviceParameterDescriptor> inventory;
+        if (!observeParameterInventory(&inventory)) {
             endParameterSubscriptions(DeviceParameterError::Disconnected,
                 "The camera disconnected while resynchronizing parameter changes.");
             return;
         }
         std::uint64_t revision = 0;
-        for (const auto& descriptor : inventory) revision = std::max(revision, descriptor.revision);
+        for (const auto& descriptor : inventory)
+            revision = std::max(revision, descriptor.revision);
         std::lock_guard<std::mutex> lock(_parameterSubscriptionMutex);
         for (const auto& id : resync) {
             const auto found = _parameterSubscriptions.find(id);
@@ -700,7 +787,7 @@ void CameraSourceController::processParameterChanges(const std::set<std::string>
                 "The camera parameter change queue overflowed; observe the full inventory again.");
         }
     }
-    deliverParameterChanges();
+    notifyParameterDelivery();
 }
 
 void CameraSourceController::deliverParameterChanges() {
