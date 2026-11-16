@@ -143,6 +143,8 @@ private:
     std::uint64_t _parameterRevision = 0;
     std::uint64_t _observedConnectionGeneration = 0;
     std::map<std::string, DeviceParameterDescriptor> _parameterObservations;
+    /** @brief Serializes change observation with API feature work without blocking on lifecycle work. */
+    std::mutex _featureObservationMutex;
 
     std::thread _changeThread;
     std::mutex _changeMutex;

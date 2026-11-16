@@ -821,6 +821,23 @@ private slots:
             }
             QVERIFY2(sawWrittenDelta, "The write did not deliver a revision-stamped delta.");
 
+            // An active subscription must not turn a following write into a Busy refusal while
+            // the observer catches up; no caller-side retry is involved here.
+            std::set<std::string> writtenNames{written->descriptor.target.name};
+            for (int round = 0; round < 3; ++round) {
+                std::optional<WritableCandidate> next;
+                for (const auto& descriptor : inventory) {
+                    if (writtenNames.count(descriptor.target.name)) continue;
+                    next = writableChange(descriptor);
+                    if (next) break;
+                }
+                QVERIFY(next.has_value());
+                writtenNames.insert(next->descriptor.target.name);
+                QCOMPARE(controller.writeParameter(next->descriptor.target, next->value, {}).error,
+                    DeviceParameterError::None);
+                QTest::qWait(20);
+            }
+
             const auto waitTransition = [&](const bool from, const bool to) {
                 QElapsedTimer timer;
                 timer.start();
@@ -885,26 +902,14 @@ private slots:
                 collector.listener()).error, DeviceParameterError::None);
             QVERIFY(collector.waitFor(1, 5000));
             collector.holdDeltas(true);
-            // An observation may hold the feature lock briefly; a write retries that admission.
-            const auto writeWithRetry = [&](const DeviceParameterTarget& target,
-                                            const DeviceParameterValue& value,
-                                            std::optional<std::uint64_t> revision) {
-                DeviceParameterResult result;
-                for (int attempt = 0; attempt < 200; ++attempt) {
-                    result = controller.writeParameter(target, value, revision);
-                    if (result.error != DeviceParameterError::Busy) return result;
-                    QTest::qWait(5);
-                }
-                return result;
-            };
             std::optional<WritableCandidate> held;
             for (const auto& descriptor : inventory) {
                 if (descriptor.target.name != "Width") continue;
                 held = writableChange(descriptor);
             }
             QVERIFY(held.has_value());
-            QVERIFY(writeWithRetry(held->descriptor.target, held->value,
-                held->descriptor.revision).error == DeviceParameterError::None);
+            QCOMPARE(controller.writeParameter(held->descriptor.target, held->value,
+                held->descriptor.revision).error, DeviceParameterError::None);
             QVERIFY(collector.waitUntilHeld(5000));
 
             std::size_t changed = 0;
@@ -914,9 +919,8 @@ private slots:
                 if (used.count(descriptor.target.name)) continue;
                 const auto candidate = writableChange(descriptor);
                 if (!candidate) continue;
-                if (writeWithRetry(candidate->descriptor.target, candidate->value,
-                        candidate->descriptor.revision).error != DeviceParameterError::None)
-                    continue;
+                QCOMPARE(controller.writeParameter(candidate->descriptor.target,
+                    candidate->value, {}).error, DeviceParameterError::None);
                 used.insert(descriptor.target.name);
                 ++changed;
                 // Let the observer turn this write into its own delta while delivery is held.

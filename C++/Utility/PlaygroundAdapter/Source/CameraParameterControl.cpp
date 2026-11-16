@@ -263,6 +263,7 @@ DeviceParameterResult CameraSourceController::parameters(std::vector<DeviceParam
     std::vector<DeviceParameterDescriptor> copied;
     bool busy = false;
     try {
+        std::lock_guard<std::mutex> observation(_featureObservationMutex);
         if (!_camera || !_camera->accessFeatures([&](GenApi::INodeMap& map, std::uint64_t generation) {
             GenApi::NodeList_t nodes;
             map.GetNodes(nodes);
@@ -281,6 +282,7 @@ DeviceParameterResult CameraSourceController::readParameter(const DeviceParamete
     DeviceParameterResult result;
     bool busy = false;
     try {
+        std::lock_guard<std::mutex> observation(_featureObservationMutex);
         if (!_camera || !_camera->accessFeatures([&](GenApi::INodeMap& map, std::uint64_t generation) {
             if (target.connectionId != _parameterInstance + ":" + std::to_string(generation)) {
                 result = {DeviceParameterError::Conflict, "Camera connection changed."}; return;
@@ -312,6 +314,7 @@ DeviceParameterResult CameraSourceController::changeParameter(const DeviceParame
     DeviceParameterResult result;
     bool busy = false;
     try {
+        std::lock_guard<std::mutex> observation(_featureObservationMutex);
         if (!_camera || !_camera->accessFeatures([&](GenApi::INodeMap& map, std::uint64_t generation) {
             if (target.connectionId != _parameterInstance + ":" + std::to_string(generation)) {
                 result = {DeviceParameterError::Conflict, "Camera connection changed."}; return;
@@ -521,21 +524,25 @@ bool CameraSourceController::observeParameterInventory(std::vector<DeviceParamet
     std::vector<DeviceParameterDescriptor> copied;
     for (;;) {
         bool busy = false;
-        try {
-            if (_camera->accessFeatures([&](GenApi::INodeMap& map, std::uint64_t generation) {
-                GenApi::NodeList_t nodes;
-                map.GetNodes(nodes);
-                for (auto* node : nodes)
-                    if (supported(node)) copied.push_back(observeParameter(node, generation));
-            }, &busy)) break;
-        } catch (const Pylon::GenericException&) {
-            return false;
-        } catch (const std::exception&) {
-            return false;
-        } catch (...) {
-            return false;
+        {
+            // API feature work waits only for another observation, never for connect/disconnect.
+            std::lock_guard<std::mutex> observation(_featureObservationMutex);
+            try {
+                if (_camera->accessFeatures([&](GenApi::INodeMap& map, std::uint64_t generation) {
+                    GenApi::NodeList_t nodes;
+                    map.GetNodes(nodes);
+                    for (auto* node : nodes)
+                        if (supported(node)) copied.push_back(observeParameter(node, generation));
+                }, &busy)) break;
+            } catch (const Pylon::GenericException&) {
+                return false;
+            } catch (const std::exception&) {
+                return false;
+            } catch (...) {
+                return false;
+            }
         }
-        // Observation yields to API reads/writes and lifecycle work instead of blocking them.
+        // Lifecycle work keeps its Busy admission; the observer retries without the barrier.
         if (!busy || _parameterClosing) return false;
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
@@ -724,26 +731,30 @@ void CameraSourceController::processParameterChanges(const std::deque<std::strin
             bool found = false;
             for (;;) {
                 bool busy = false;
-                try {
-                    if (_camera->accessFeatures([&](GenApi::INodeMap& map, std::uint64_t generation) {
-                        auto* node = map.GetNode(name.c_str());
-                        if (!node || !supported(node)) return;
-                        found = true;
-                        observed[name] = observeParameter(node, generation);
-                    }, &busy)) break;
-                } catch (const Pylon::GenericException&) {
-                    // A transient SDK failure leaves the node unobserved; consumers may re-read it.
-                    found = false;
-                    observed.clear();
-                    break;
-                } catch (const std::exception&) {
-                    found = false;
-                    observed.clear();
-                    break;
-                } catch (...) {
-                    found = false;
-                    observed.clear();
-                    break;
+                {
+                    std::lock_guard<std::mutex> observation(_featureObservationMutex);
+                    try {
+                        if (_camera->accessFeatures([&](GenApi::INodeMap& map,
+                                                        std::uint64_t generation) {
+                            auto* node = map.GetNode(name.c_str());
+                            if (!node || !supported(node)) return;
+                            found = true;
+                            observed[name] = observeParameter(node, generation);
+                        }, &busy)) break;
+                    } catch (const Pylon::GenericException&) {
+                        // A transient SDK failure leaves the node unobserved; consumers may re-read it.
+                        found = false;
+                        observed.clear();
+                        break;
+                    } catch (const std::exception&) {
+                        found = false;
+                        observed.clear();
+                        break;
+                    } catch (...) {
+                        found = false;
+                        observed.clear();
+                        break;
+                    }
                 }
                 if (!busy) {
                     enqueueParameterConnectionLost(
@@ -751,7 +762,6 @@ void CameraSourceController::processParameterChanges(const std::deque<std::strin
                     return;
                 }
                 if (_parameterClosing) return;
-                // Observation yields to API reads/writes and lifecycle work.
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
             }
             if (!found) missing.insert(name);
@@ -1071,7 +1081,12 @@ DeviceConnectionResult CameraSourceController::requestConnect(std::string target
             }
             _claimKey = claimKey;
         }
-        const auto outcome = _camera->controlConnection(true, targetId, state.generation, &state);
+        CameraConnectionOutcome outcome;
+        {
+            // Wait only for an in-progress change observation, never for another lifecycle call.
+            std::lock_guard<std::mutex> observation(_featureObservationMutex);
+            outcome = _camera->controlConnection(true, targetId, state.generation, &state);
+        }
         if (outcome != CameraConnectionOutcome::Success) releaseClaim();
         return connectionOutcome(outcome, state);
     }, std::move(completion));
@@ -1089,7 +1104,11 @@ DeviceConnectionResult CameraSourceController::requestDisconnect(std::string con
             return {DeviceConnectionError::Disconnected, "The camera is disconnected."};
         }
         if (connectionIdFor(state) != connectionId) return {DeviceConnectionError::Conflict, "The connection changed; observe it again."};
-        const auto outcome = _camera->controlConnection(false, {}, state.generation, &state);
+        CameraConnectionOutcome outcome;
+        {
+            std::lock_guard<std::mutex> observation(_featureObservationMutex);
+            outcome = _camera->controlConnection(false, {}, state.generation, &state);
+        }
         if (outcome == CameraConnectionOutcome::Success) releaseClaim();
         return connectionOutcome(outcome, state);
     }, std::move(completion));

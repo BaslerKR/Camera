@@ -835,12 +835,13 @@ void Camera::setAcquisitionCapabilities(CameraAcquisitionCapabilities capabiliti
 
 void Camera::refreshAcquisitionCapabilities()
 {
-    bool busy = false;
     CameraAcquisitionCapabilities capabilities;
     try {
+        // A stop/refresh waits for a short change observation instead of silently skipping,
+        // so Single availability cannot stay stale until the next write.
         if (!accessFeatures([&](GenApi::INodeMap& nodeMap, std::uint64_t) {
             capabilities = observeAcquisitionCapabilities(nodeMap);
-        }, &busy)) return;
+        })) return;
     } catch (const GenericException&) {
         return;
     } catch (const std::exception&) {
