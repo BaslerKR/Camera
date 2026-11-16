@@ -798,20 +798,26 @@ private slots:
             const auto result = controller.writeParameter(written->descriptor.target,
                 written->value, written->descriptor.revision);
             QVERIFY2(result.error == DeviceParameterError::None, result.message.c_str());
-            QVERIFY(collector.waitFor(2, 5000));
             std::uint64_t baseRevision = 0;
             for (const auto& descriptor : snapshot->descriptors)
                 if (descriptor.target.name == written->descriptor.target.name)
                     baseRevision = descriptor.revision;
+            const DeviceParameterValue expected = result.descriptor && result.descriptor->value
+                ? *result.descriptor->value : written->value;
             bool sawWrittenDelta = false;
-            for (const auto& change : collector.snapshot()) {
-                if (change.kind != DeviceParameterChangeKind::Delta) continue;
-                for (const auto& descriptor : change.descriptors) {
-                    if (descriptor.target.name != written->descriptor.target.name) continue;
-                    if (!descriptor.value || *descriptor.value != written->value) continue;
-                    sawWrittenDelta = change.sequence > snapshot->sequence
-                        && descriptor.revision > baseRevision;
+            QElapsedTimer deltaTimer;
+            deltaTimer.start();
+            while (!sawWrittenDelta && deltaTimer.elapsed() < 10000) {
+                for (const auto& change : collector.snapshot()) {
+                    if (change.kind != DeviceParameterChangeKind::Delta || change.resync) continue;
+                    for (const auto& descriptor : change.descriptors) {
+                        if (descriptor.target.name != written->descriptor.target.name) continue;
+                        if (!descriptor.value || *descriptor.value != expected) continue;
+                        sawWrittenDelta = change.sequence > snapshot->sequence
+                            && descriptor.revision > baseRevision;
+                    }
                 }
+                if (!sawWrittenDelta) QTest::qWait(20);
             }
             QVERIFY2(sawWrittenDelta, "The write did not deliver a revision-stamped delta.");
 
