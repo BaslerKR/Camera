@@ -38,7 +38,8 @@ function(camera_prepare_playground_plugin_runtime target_name)
             PATTERN "Qt5*" EXCLUDE
             PATTERN "Qt6*" EXCLUDE
             PATTERN "qt*" EXCLUDE
-            REGEX "(PylonDataProcessingGui|PylonVTool.*Editor)" EXCLUDE
+            PATTERN "*DataProcessingGui*" EXCLUDE
+            PATTERN "*Editor*" EXCLUDE
         )
         set_target_properties(${target_name} PROPERTIES
             PLAYGROUND_PLUGIN_RUNTIME_CANONICAL_SDK_DIR
