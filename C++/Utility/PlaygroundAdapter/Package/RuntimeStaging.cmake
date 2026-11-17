@@ -31,7 +31,8 @@ function(camera_prepare_playground_plugin_runtime target_name)
         # a private Qt in the package can shadow the worker's Qt and break the
         # plugin ABI. The pylon DataProcessing GUI and VTool editor DLLs are
         # standalone Qt Widgets design tools, not part of the widget-free capture
-        # runtime; no staged capture payload imports them.
+        # runtime; no staged capture payload imports them. Their OpenGL helper
+        # glew32.dll imports opengl32.dll and is excluded for the same reason.
         file(COPY "${PLAYGROUND_LOCAL_PYLON_RUNTIME_DIR}/"
             DESTINATION "${payload_dir}"
             PATTERN "pylonCXP" EXCLUDE
@@ -40,6 +41,7 @@ function(camera_prepare_playground_plugin_runtime target_name)
             PATTERN "qt*" EXCLUDE
             PATTERN "*DataProcessingGui*" EXCLUDE
             PATTERN "*Editor*" EXCLUDE
+            PATTERN "*glew*" EXCLUDE
         )
         set_target_properties(${target_name} PROPERTIES
             PLAYGROUND_PLUGIN_RUNTIME_CANONICAL_SDK_DIR
