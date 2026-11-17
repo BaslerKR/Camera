@@ -97,8 +97,6 @@ public:
 
     QString title() const override { return _titleState->title(); }
 
-    std::vector<DevicePluginDock> createDockWidgets(QWidget*) override { return {}; }
-
     AbstractSourceController* sourceController() const override { return _controller.get(); }
     unsigned int capabilities() const noexcept override
     {
@@ -131,7 +129,7 @@ public:
         return {QStringLiteral("camera"), playgroundDevicePluginDisplayName(), playgroundDevicePluginVersion(), true};
     }
 
-    bool discoverDevices(QVariantMap* discoveryData, QString* errorMessage) override
+    bool discoverDevices(QString* errorMessage) override
     {
         try {
             const auto system = cameraSystem();
@@ -139,15 +137,8 @@ public:
                 if (errorMessage) *errorMessage = QStringLiteral("Camera plugin is shutting down.");
                 return false;
             }
-            const auto cameraNames = system->getCameraList();
             // An empty list is a valid startup state. The camera control owns
             // the subsequent hardware rescan through its Refresh action.
-            QStringList names;
-            names.reserve(static_cast<qsizetype>(cameraNames.size()));
-            for (const std::string& cameraName : cameraNames) {
-                names.append(QString::fromStdString(cameraName));
-            }
-            if (discoveryData) discoveryData->insert(QStringLiteral("cameraNames"), names);
             return true;
         } catch (const std::exception& error) {
             if (errorMessage) *errorMessage = QString::fromLocal8Bit(error.what());
@@ -156,9 +147,9 @@ public:
     }
 
     std::unique_ptr<IDevicePluginSession> createSession(
-        const QVariantMap& discoveryData, QString* errorMessage) override
+        const QVariantMap& sessionOptions, QString* errorMessage) override
     {
-        Q_UNUSED(discoveryData)
+        Q_UNUSED(sessionOptions)
         try {
             const auto system = cameraSystem();
             if (!system) {

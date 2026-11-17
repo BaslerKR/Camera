@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Drop the device widget ABI and the QVariantMap discovery hand-back. `IDevicePluginSession` no longer implements `createDockWidgets()`, and `discoverDevices()`/`createSession()` no longer pass discovery data through a `QVariantMap`; discovery and session creation now take only an error message.
+
 - Build against the widget-free device runtime SDK: the contract target is `Playground::DeviceRuntimeContract`, headers live under `DeviceRuntime/Contract`, and the interface is `IDeviceRuntime`. The plugin object derives directly from `QObject`/`IDeviceRuntime`, so the package needs neither the widget-side template nor Qt Widgets headers.
 
 - Remove the Qt widget library and the widget tests. `QCameraWidget`, `CameraControlUi`, `CameraPresentation`, `CameraQtWidget` and `createDockWidgets()`'s widget path are gone; the plugin session creates no widget or dock and the host's common device panel owns the session UI. The package target links Qt Core and Concurrent only: no Qt Widgets, Resources widget or dialog library, and no OpenGL. Single during Live now refuses with "Stop Live before a single grab."
