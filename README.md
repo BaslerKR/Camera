@@ -116,12 +116,3 @@ Set `CMAKE_BUILD_TYPE=Release` for a single-configuration generator. The staged
 package links no Qt Widgets, Resources widget/dialog library or OpenGL; check
 its binaries with `otool -L` on macOS, `readelf -d` on Linux or `dumpbin` on
 Windows.
-
-## Favourites key
-
-The session declares `UI/FeatureTrees/WyJDYW1lcmFGZWF0dXJlc1RyZWUiXQ==/Favorites`
-through `DeviceSessionMetadata::favoritesSettingsKey`. The encoded component is
-base64url(JSON(["CameraFeaturesTree"])), the object name of the retired
-`CameraControlUi` feature tree that the host's `PluginFeatureTreeSearch` used
-as its settings namespace. The host panel keeps that key so saved favourites
-carry over without a migration.

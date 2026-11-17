@@ -97,15 +97,6 @@ public:
 
     QString title() const override { return _titleState->title(); }
 
-    // The retired Qt widget stored feature favourites under this key through the
-    // host's PluginFeatureTreeSearch. The common panel keeps the namespace so
-    // saved favourites carry over without a migration. The encoded component is
-    // base64url(JSON(["CameraFeaturesTree"])), the tree's objectName.
-    DeviceSessionMetadata sessionMetadata() const override
-    {
-        return {QStringLiteral("UI/FeatureTrees/WyJDYW1lcmFGZWF0dXJlc1RyZWUiXQ==/Favorites")};
-    }
-
     std::vector<DevicePluginDock> createDockWidgets(QWidget*) override { return {}; }
 
     AbstractSourceController* sourceController() const override { return _controller.get(); }
