@@ -27,10 +27,18 @@ function(camera_prepare_playground_plugin_runtime target_name)
         file(REMOVE_RECURSE "${payload_dir}")
         file(MAKE_DIRECTORY "${payload_dir}")
         # CXP is owned by FramegrabberPlugin. Exclude pylonCXP so Camera cannot
-        # load a second CXP GenTL producer for the same board.
+        # load a second CXP GenTL producer for the same board. Qt is Core-owned:
+        # a private Qt in the package can shadow the worker's Qt and break the
+        # plugin ABI. The pylon DataProcessing GUI and VTool editor DLLs are
+        # standalone Qt Widgets design tools, not part of the widget-free capture
+        # runtime; no staged capture payload imports them.
         file(COPY "${PLAYGROUND_LOCAL_PYLON_RUNTIME_DIR}/"
             DESTINATION "${payload_dir}"
             PATTERN "pylonCXP" EXCLUDE
+            PATTERN "Qt5*" EXCLUDE
+            PATTERN "Qt6*" EXCLUDE
+            PATTERN "qt*" EXCLUDE
+            REGEX "(PylonDataProcessingGui|PylonVTool.*Editor)" EXCLUDE
         )
         set_target_properties(${target_name} PROPERTIES
             PLAYGROUND_PLUGIN_RUNTIME_CANONICAL_SDK_DIR

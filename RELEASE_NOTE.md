@@ -4,6 +4,8 @@
 
 - Remove the Qt widget library and the widget tests. `QCameraWidget`, `CameraControlUi`, `CameraPresentation`, `CameraQtWidget` and `createDockWidgets()`'s widget path are gone; the plugin session creates no widget or dock and the host's common device panel owns the session UI. The package target links Qt Core and Concurrent only: no Qt Widgets, Resources widget or dialog library, and no OpenGL. Single during Live now refuses with "Stop Live before a single grab."
 
+- Exclude the pylon Windows runtime's standalone Qt Widgets design tools (DataProcessing GUI and VTool editor DLLs) and any private Qt payload from the staged package, so the widget-free package has no Qt Widgets dependency on Windows as it does on macOS.
+
 - Favourites saved by the retired widget are dropped (owner decision in issue #440). The Host panel uses its default `Plugins/camera/Favorites` key; no legacy key or migration is shipped.
 
 - Publish the GenApi feature tree through parameter descriptors: category path, GenICam visibility mapped to the API presentation level, representation hint, selector relationships in both directions and the transport-layer shared-scope marker. A bounded change subscription delivers one full snapshot and revision-stamped deltas from the Camera's node and acquisition-status callbacks, resynchronizes with a snapshot when its queue overflows, and re-observes writability when acquisition starts or stops; the GUI does not poll.
