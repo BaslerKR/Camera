@@ -946,8 +946,21 @@ std::string CameraSourceController::connectionIdFor(const CameraConnectionState&
 }
 
 DeviceConnectionState CameraSourceController::copiedConnectionState(const CameraConnectionState& state) const {
-    return {state.connected, state.connected && _isGrabbing.load(), connectionIdFor(state),
-        state.connected ? state.deviceId : std::string(), state.connected ? state.displayName : std::string(), std::nullopt};
+    DeviceConnectionState copied;
+    copied.connected = state.connected;
+    copied.live = state.connected && _isGrabbing.load();
+    copied.connectionId = connectionIdFor(state);
+    copied.targetId = state.connected ? state.deviceId : std::string();
+    copied.displayName = state.connected ? state.displayName : std::string();
+    if (_camera) {
+        // The same producer snapshot as source.diagnostics, so a per-connection counter and the
+        // per-source counter never disagree about which run delivered these frames.
+        const auto diagnostics = _camera->runtimeDiagnostics();
+        copied.deliveredFrames = diagnostics.delivered;
+    }
+    for (const auto& source : ownedSourceDescriptors(state))
+        copied.sources.push_back({source.id, source.index});
+    return copied;
 }
 
 DeviceConnectionCapabilities CameraSourceController::connectionCapabilities() const {
@@ -1090,6 +1103,7 @@ DeviceConnectionResult CameraSourceController::requestConnect(std::string target
             outcome = _camera->controlConnection(true, targetId, state.generation, &state);
         }
         if (outcome != CameraConnectionOutcome::Success) releaseClaim();
+        else publishSourceDescriptors();
         return connectionOutcome(outcome, state);
     }, std::move(completion));
 }
@@ -1111,7 +1125,10 @@ DeviceConnectionResult CameraSourceController::requestDisconnect(std::string con
             std::lock_guard<std::mutex> observation(_featureObservationMutex);
             outcome = _camera->controlConnection(false, {}, state.generation, &state);
         }
-        if (outcome == CameraConnectionOutcome::Success) releaseClaim();
+        if (outcome == CameraConnectionOutcome::Success) {
+            releaseClaim();
+            publishSourceDescriptors();
+        }
         return connectionOutcome(outcome, state);
     }, std::move(completion));
 }

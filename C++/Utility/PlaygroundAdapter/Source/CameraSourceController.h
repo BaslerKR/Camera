@@ -38,6 +38,8 @@ public:
 
     /** @brief Copies producer counters used by the device statusbar. */
     std::optional<SourceRuntimeDiagnostics> sourceRuntimeDiagnostics(unsigned sourceIndex) const override;
+    /** @brief Publishes the connected camera as this connection's one-owned source. */
+    std::vector<GraphicsSourceDescriptor> sourceDescriptors() const override;
     void start() override;
     void stop() override;
     bool isGrabbing() const override;
@@ -127,6 +129,8 @@ private:
     void reportAcquisitionStart(const CameraAcquisitionStart& start, const char* action);
     /** @brief Matches the parameter target connection id, so one id addresses both capabilities. */
     std::string connectionIdFor(const CameraConnectionState& state) const;
+    /** @brief Copies the source descriptors one connection snapshot owns. */
+    std::vector<GraphicsSourceDescriptor> ownedSourceDescriptors(const CameraConnectionState& state) const;
     DeviceConnectionState copiedConnectionState(const CameraConnectionState& state) const;
     QSet<QThread*> _parameterWorkers;
     std::atomic<bool> _parameterClosing{false};

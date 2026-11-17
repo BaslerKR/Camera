@@ -452,6 +452,93 @@ private slots:
         QCOMPARE(busy.error, DeviceConnectionError::Busy); QVERIFY(camera->connectionState().connected);
         QCOMPARE(disconnect(second).error, DeviceConnectionError::None);
     }
+    void connectionStateReportsItsSourceAndDeliveredFrames() {
+        qputenv("PYLON_CAMEMU", "1");
+        auto& system = *_system;
+        auto* camera = system.addCamera(); QVERIFY(camera);
+        CameraSourceController controller(camera);
+        auto* connection = qobject_cast<IDeviceConnectionControl*>(&controller); QVERIFY(connection);
+        const auto wait = [](auto& future) {
+            const bool ready = future.wait_for(std::chrono::seconds(30)) == std::future_status::ready;
+            QCoreApplication::processEvents();
+            return ready;
+        };
+        const auto run = [&](auto admit) {
+            auto promise = std::make_shared<std::promise<DeviceConnectionResult>>();
+            auto future = promise->get_future();
+            const auto admitted = admit([promise](DeviceConnectionResult result) {
+                promise->set_value(std::move(result));
+            });
+            if (admitted.error != DeviceConnectionError::None) return admitted;
+            if (!wait(future)) return DeviceConnectionResult{DeviceConnectionError::BackendFailure,
+                "Emulator completion timed out."};
+            return future.get();
+        };
+        const auto emulator = findEmulator(system);
+        std::string emulatorId;
+        for (const auto& target : camera->deviceCatalog(true))
+            if (target.displayName == emulator) { emulatorId = target.id; break; }
+        if (emulatorId.empty()) QSKIP("The pylon camera emulator is not installed.");
+
+        const auto initial = run([&](auto done) { return connection->requestConnectionState(done); });
+        QVERIFY(initial.state && !initial.state->connected);
+        QVERIFY(controller.sourceDescriptors().empty());
+
+        const auto connected = run([&](auto done) { return connection->requestConnect(emulatorId, done); });
+        QCOMPARE(connected.error, DeviceConnectionError::None);
+        QVERIFY(connected.state && connected.state->connected);
+        QCOMPARE(connected.state->sources.size(), std::size_t(1));
+        QCOMPARE(connected.state->sources.front().sourceId, emulatorId);
+        QCOMPARE(connected.state->sources.front().sourceIndex, 0U);
+        QVERIFY(connected.state->deliveredFrames.has_value());
+        QCOMPARE(*connected.state->deliveredFrames, std::uint64_t(0));
+        const auto descriptors = controller.sourceDescriptors();
+        QCOMPARE(descriptors.size(), std::size_t(1));
+        QCOMPARE(descriptors.front().id, emulatorId);
+        QCOMPARE(descriptors.front().index, 0U);
+        const auto connectionId = connected.state->connectionId;
+
+        QCOMPARE(run([&](auto done) { return connection->requestLiveStart(connectionId, done); }).error,
+            DeviceConnectionError::None);
+        std::optional<std::uint64_t> firstDelivered;
+        QElapsedTimer firstTimer;
+        firstTimer.start();
+        while (firstTimer.elapsed() < 15000) {
+            const auto diagnostics = controller.sourceRuntimeDiagnostics(0);
+            const auto observed = run([&](auto done) { return connection->requestConnectionState(done); });
+            if (diagnostics && diagnostics->delivered > 0 && observed.state
+                && observed.state->deliveredFrames && *observed.state->deliveredFrames > 0) {
+                QVERIFY(observed.state->live);
+                QCOMPARE(observed.state->sources.size(), std::size_t(1));
+                QCOMPARE(observed.state->sources.front().sourceId, emulatorId);
+                QCOMPARE(observed.state->sources.front().sourceIndex, 0U);
+                firstDelivered = *observed.state->deliveredFrames;
+                break;
+            }
+            QTest::qWait(20);
+        }
+        QVERIFY2(firstDelivered.has_value(),
+            "The connection state did not report the source.diagnostics delivered count.");
+        bool grew = false;
+        QElapsedTimer growthTimer;
+        growthTimer.start();
+        while (growthTimer.elapsed() < 15000 && !grew) {
+            const auto observed = run([&](auto done) { return connection->requestConnectionState(done); });
+            grew = observed.state && observed.state->deliveredFrames
+                && *observed.state->deliveredFrames > *firstDelivered;
+            if (!grew) QTest::qWait(50);
+        }
+        QVERIFY2(grew, "The connection state's delivered frame count did not grow while Live.");
+        QCOMPARE(run([&](auto done) { return connection->requestLiveStop(connectionId, done); }).error,
+            DeviceConnectionError::None);
+
+        const auto disconnected = run([&](auto done) { return connection->requestDisconnect(connectionId, done); });
+        QCOMPARE(disconnected.error, DeviceConnectionError::None);
+        QVERIFY(disconnected.state && !disconnected.state->connected);
+        QVERIFY(disconnected.state->sources.empty());
+        QVERIFY(controller.sourceDescriptors().empty());
+        camera->close();
+    }
     void removedCameraReleasesItsClaimBeforeAnotherTarget() {
         qputenv("PYLON_CAMEMU", "1");
         auto& system = *_system;
