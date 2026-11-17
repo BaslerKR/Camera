@@ -44,6 +44,8 @@ private:
 
     CTlFactory *_tlFactory = nullptr;
     DeviceInfoList_t _devices;
+    /** @brief Tracks whether the device inventory has ever been populated. */
+    bool _catalogInitialized = false;
     std::vector<Camera*> _cameraList;
     std::size_t _nextCameraNumber = 0;
     mutable std::mutex _mutex;

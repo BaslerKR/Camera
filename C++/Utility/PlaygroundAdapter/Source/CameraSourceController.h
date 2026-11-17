@@ -73,7 +73,7 @@ public:
         std::string subscriptionId, Completion completion) override;
     /** @brief Declares Single from the observed AcquisitionMode and Live as continuous. */
     DeviceConnectionCapabilities connectionCapabilities() const override;
-    /** @brief Copies the cached system catalog on a bounded worker. */
+    /** @brief Initializes or copies the system catalog on a bounded worker. */
     DeviceConnectionResult requestConnectionTargets(TargetsCompletion completion) override;
     /** @brief Refreshes the catalog through the existing system discovery authority. */
     DeviceConnectionResult requestDiscover(TargetsCompletion completion) override;

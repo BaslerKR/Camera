@@ -337,6 +337,27 @@ private slots:
         _system = std::make_unique<CameraSystem>();
     }
     void cleanupTestCase() { _system.reset(); }
+    void firstConnectionTargetsRequestDiscoversEmulator() {
+        CameraSystem system;
+        auto* camera = system.addCamera(); QVERIFY(camera);
+        CameraSourceController controller(camera);
+        auto* connection = qobject_cast<IDeviceConnectionControl*>(&controller); QVERIFY(connection);
+
+        auto promise = std::make_shared<std::promise<DeviceConnectionTargets>>();
+        auto targets = promise->get_future();
+        QCOMPARE(connection->requestConnectionTargets([promise](DeviceConnectionTargets value) {
+            promise->set_value(std::move(value));
+        }).error, DeviceConnectionError::None);
+        QVERIFY(targets.wait_for(std::chrono::seconds(30)) == std::future_status::ready);
+        QCoreApplication::processEvents();
+        const auto catalog = targets.get();
+        QCOMPARE(catalog.result.error, DeviceConnectionError::None);
+
+        const bool hasEmulator = std::any_of(catalog.targets.begin(), catalog.targets.end(),
+            [](const auto& target) { return target.displayName.find("Emulation") != std::string::npos; });
+        if (!hasEmulator) QSKIP("The pylon camera emulator is not installed.");
+        QVERIFY(hasEmulator);
+    }
     void connectionCapabilityRejectsMalformedCallsAndCompletesExactlyOnce() {
         auto* camera = _system->addCamera(); QVERIFY(camera);
         auto controller = std::make_unique<CameraSourceController>(camera);
