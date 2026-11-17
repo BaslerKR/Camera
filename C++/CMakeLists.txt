@@ -11,13 +11,8 @@ option(CAMERA_BUILD_PLAYGROUND_PLUGIN
     OFF
 )
 option(CAMERA_BUILD_TESTS "Build focused Camera adapter tests." OFF)
-option(CAMERA_BUILD_QT_WIDGET
-    "Build the optional Camera Qt widget target."
-    OFF
-)
 if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
     set(CAMERA_BUILD_PLAYGROUND_ADAPTER ON)
-    set(CAMERA_BUILD_QT_WIDGET ON)
 endif()
 if(PROJECT_NAME STREQUAL "Camera" AND PROJECT_IS_TOP_LEVEL AND
    (CAMERA_BUILD_PLAYGROUND_ADAPTER OR CAMERA_BUILD_PLAYGROUND_PLUGIN))
@@ -36,48 +31,11 @@ set(SOURCES
     CameraSystem.cpp
 )
 
-set(QT_HEADERS
-    Utility/Qt/QCameraWidget.h
-)
-set(QT_SOURCES
-    Utility/Qt/QCameraWidget.cpp
-)
-
 add_library(${PROJECT_NAME} STATIC ${HEADERS} ${SOURCES})
 target_include_directories(${PROJECT_NAME} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(WIN32)
     target_compile_definitions(${PROJECT_NAME} PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
-endif()
-
-if(CAMERA_BUILD_QT_WIDGET)
-    if(TARGET Qt6::Core)
-        set(_camera_qt_package Qt6)
-    elseif(TARGET Qt5::Core)
-        set(_camera_qt_package Qt5)
-    else()
-        find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Core)
-        set(_camera_qt_package Qt${QT_VERSION_MAJOR})
-    endif()
-
-    find_package(${_camera_qt_package} REQUIRED COMPONENTS Core Gui Widgets)
-
-    add_subdirectory(Utility/Qt)
-    add_library(CameraQtWidget STATIC ${QT_HEADERS} ${QT_SOURCES})
-    add_library(Camera::QtWidget ALIAS CameraQtWidget)
-    set_target_properties(CameraQtWidget PROPERTIES AUTOMOC ON)
-    target_compile_features(CameraQtWidget PUBLIC cxx_std_17)
-    target_include_directories(CameraQtWidget PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(CameraQtWidget
-        PUBLIC
-            Camera
-            ${_camera_qt_package}::Core
-            ${_camera_qt_package}::Gui
-            ${_camera_qt_package}::Widgets
-    )
-    message(STATUS "[${PROJECT_NAME}] Camera::QtWidget enabled with ${_camera_qt_package}.")
-else()
-    message(STATUS "[${PROJECT_NAME}] Camera::QtWidget disabled.")
 endif()
 
 
@@ -281,24 +239,13 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
             "CAMERA_BUILD_PLAYGROUND_ADAPTER."
         )
     endif()
-    if(NOT CAMERA_BUILD_QT_WIDGET)
-        message(FATAL_ERROR
-            "[Camera] CAMERA_BUILD_PLAYGROUND_PLUGIN=ON requires "
-            "CAMERA_BUILD_QT_WIDGET."
-        )
-    endif()
     if(NOT TARGET Playground::DeviceRuntimeContract)
         message(FATAL_ERROR
             "[Camera] CAMERA_BUILD_PLAYGROUND_PLUGIN=ON requires "
             "Playground::DeviceRuntimeContract."
         )
     endif()
-    if(NOT TARGET Qt6::Widgets)
-        message(FATAL_ERROR
-            "[Camera] CAMERA_BUILD_PLAYGROUND_PLUGIN=ON requires Qt 6."
-        )
-    endif()
-    find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGL OpenGLWidgets Concurrent)
+    find_package(Qt6 REQUIRED COMPONENTS Core Concurrent)
 
     add_library(CameraPlugin MODULE
         Utility/PlaygroundAdapter/Plugin/CameraPlugin.cpp
@@ -323,11 +270,8 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
     )
     target_link_libraries(CameraPlugin PRIVATE
         Playground::DeviceRuntimeContract
-        Camera::QtWidget
         Camera::PlaygroundAdapter
-        Qt6::Widgets
-        Qt6::OpenGL
-        Qt6::OpenGLWidgets
+        Qt6::Core
         Qt6::Concurrent
     )
     if(CAMERA_BUILD_TESTS)
@@ -347,9 +291,8 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
         )
         target_link_libraries(camera_parameter_control_test PRIVATE
             Playground::DeviceRuntimeContract
-            Camera::QtWidget
             Camera::PlaygroundAdapter
-            Qt6::Widgets
+            Qt6::Core
             Qt6::Concurrent
             Qt6::Test
         )
@@ -386,17 +329,3 @@ foreach(module_test IN ITEMS camera_graphics_image_adapter_test camera_grab_diag
             $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-UNDEBUG>)
     endif()
 endforeach()
-
-if(TARGET CameraQtWidget)
-    target_link_libraries(CameraQtWidget PUBLIC CameraPresentation)
-endif()
-
-if(CAMERA_BUILD_TESTS AND TARGET CameraQtWidget)
-    enable_testing()
-    find_package(${_camera_qt_package} REQUIRED COMPONENTS Test)
-    qt_add_executable(CameraAcquisitionControlsTest Utility/Qt/Tests/AcquisitionControlsTest.cpp)
-    set_target_properties(CameraAcquisitionControlsTest PROPERTIES AUTOMOC ON)
-    target_link_libraries(CameraAcquisitionControlsTest PRIVATE Camera::QtWidget ${_camera_qt_package}::Test)
-    add_test(NAME CameraAcquisitionControlsTest COMMAND CameraAcquisitionControlsTest)
-    set_tests_properties(CameraAcquisitionControlsTest PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-endif()

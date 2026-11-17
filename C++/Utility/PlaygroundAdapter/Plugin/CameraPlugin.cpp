@@ -1,11 +1,8 @@
-#include "DevicePluginTemplate.h"
+#include "DevicePluginSession.h"
 
 #include "Camera.h"
 #include "CameraSystem.h"
 #include "CameraSourceController.h"
-#include "Utility/Qt/QCameraWidget.h"
-
-#include <QPointer>
 
 #include <atomic>
 #include <memory>
@@ -64,10 +61,8 @@ public:
     CameraPluginSession(
         std::shared_ptr<CameraSystem> system,
         Camera* camera,
-        QStringList discoveredCameraNames,
         IDevicePluginResourceClaims* claims)
         : _system(std::move(system)), _camera(camera),
-          _discoveredCameraNames(std::move(discoveredCameraNames)),
           _controller(std::make_unique<CameraSourceController>(_camera, claims, &_claim))
     {
         std::weak_ptr<CameraPluginTitleState> titleState = _titleState;
@@ -92,9 +87,6 @@ public:
         if (_camera && _statusCallback != 0) {
             _camera->deregisterStatusCallback(_statusCallback);
         }
-        if (_widget) {
-            _widget->prepareForShutdown();
-        }
         _controller.reset();
         if (_system && _camera) {
             _system->removeCamera(_camera);
@@ -105,17 +97,16 @@ public:
 
     QString title() const override { return _titleState->title(); }
 
-    std::vector<DevicePluginDock> createDockWidgets(QWidget* parent) override
+    // The retired Qt widget stored feature favourites under this key through the
+    // host's PluginFeatureTreeSearch. The common panel keeps the namespace so
+    // saved favourites carry over without a migration. The encoded component is
+    // base64url(JSON(["CameraFeaturesTree"])), the tree's objectName.
+    DeviceSessionMetadata sessionMetadata() const override
     {
-        if (!_widget) {
-            _widget = new QCameraWidget(parent, _camera);
-            _widget->setDiscoveredCameraNames(_discoveredCameraNames);
-            QObject::connect(_controller.get(), &CameraSourceController::deviceCatalogChanged,
-                _widget.data(), &QCameraWidget::setDiscoveredCameraNames, Qt::QueuedConnection);
-        }
-        return {{QStringLiteral("device-controls"), QStringLiteral("Device Controls"),
-                 Qt::LeftDockWidgetArea, _widget, true}};
+        return {QStringLiteral("UI/FeatureTrees/WyJDYW1lcmFGZWF0dXJlc1RyZWUiXQ==/Favorites")};
     }
+
+    std::vector<DevicePluginDock> createDockWidgets(QWidget*) override { return {}; }
 
     AbstractSourceController* sourceController() const override { return _controller.get(); }
     unsigned int capabilities() const noexcept override
@@ -131,15 +122,14 @@ public:
 private:
     std::shared_ptr<CameraSystem> _system;
     Camera* _camera = nullptr;
-    QStringList _discoveredCameraNames;
     std::shared_ptr<IDevicePluginResourceClaim> _claim;
     std::unique_ptr<CameraSourceController> _controller;
-    QPointer<QCameraWidget> _widget;
     Camera::CallbackId _statusCallback = 0;
     std::shared_ptr<CameraPluginTitleState> _titleState = std::make_shared<CameraPluginTitleState>();
 };
 
-class CameraPlugin final : public DevicePluginTemplate, public IDevicePluginResourceClaimsReceiver {
+class CameraPlugin final : public QObject, public IDeviceRuntime,
+    public IDevicePluginResourceClaimsReceiver {
     Q_OBJECT
     Q_PLUGIN_METADATA(IID PlaygroundDeviceRuntime_iid)
     Q_INTERFACES(IDeviceRuntime IDevicePluginResourceClaimsReceiver)
@@ -177,8 +167,8 @@ public:
     std::unique_ptr<IDevicePluginSession> createSession(
         const QVariantMap& discoveryData, QString* errorMessage) override
     {
+        Q_UNUSED(discoveryData)
         try {
-            const QStringList cameraNames = discoveryData.value(QStringLiteral("cameraNames")).toStringList();
             const auto system = cameraSystem();
             if (!system) {
                 if (errorMessage) *errorMessage = QStringLiteral("Camera plugin is shutting down.");
@@ -189,7 +179,7 @@ public:
                 if (errorMessage) *errorMessage = QStringLiteral("No Basler camera was detected.");
                 return {};
             }
-            return std::make_unique<CameraPluginSession>(system, camera, cameraNames,
+            return std::make_unique<CameraPluginSession>(system, camera,
                 _claims.load(std::memory_order_acquire));
         } catch (const std::exception& error) {
             if (errorMessage) *errorMessage = QString::fromLocal8Bit(error.what());

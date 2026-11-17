@@ -1146,7 +1146,7 @@ private slots:
             DeviceConnectionError::None);
         const auto refused = invoke([&](auto done) { return connection->requestSingle(connectionId, done); });
         QCOMPARE(refused.error, DeviceConnectionError::Busy);
-        QVERIFY(!refused.message.empty());
+        QVERIFY2(refused.message == "Stop Live before a single grab.", refused.message.c_str());
         QCOMPARE(invoke([&](auto done) { return connection->requestLiveStop(connectionId, done); }).error,
             DeviceConnectionError::None);
         controller.setFrameConsumer({});
