@@ -134,3 +134,19 @@ std::optional<SourceRuntimeDiagnostics> CameraSourceController::sourceRuntimeDia
     const auto value = _camera->runtimeDiagnostics();
     return SourceRuntimeDiagnostics{value.grabbing, value.delivered, value.failed};
 }
+
+std::vector<GraphicsSourceDescriptor> CameraSourceController::ownedSourceDescriptors(
+    const CameraConnectionState& state) const
+{
+    // One Camera connection owns one native stream. The source id is the exact connected device
+    // identity, so source.sources, the producer counters and the connection state address the
+    // same source; the index is the fixed single-stream slot.
+    if (!state.connected) return {};
+    return {{0U, state.deviceId, state.displayName}};
+}
+
+std::vector<GraphicsSourceDescriptor> CameraSourceController::sourceDescriptors() const
+{
+    if (!_camera) return {};
+    return ownedSourceDescriptors(_camera->connectionState());
+}

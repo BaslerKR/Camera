@@ -10,6 +10,8 @@
 
 - Deliver Basler blaze 3D range data through the GraphicsEngine range writer into Playground shared frame storage. The range channels are written once into provided storage; an empty result drops the range. A blaze frame no longer carries a second explicit point cloud of the same points: GraphicsEngine derives it from the range, and the range RGB channel carries the grayscale intensity colours the explicit cloud used.
 
+- Report the connection's owned source and its delivered frame count in `device.connection` and `device.connections`, and publish the same source through `source.sources`. The connection state copies the device identity as the stable source id at index 0 and the delivered count from the same producer snapshot as `source.diagnostics`, so a per-connection status bar can show a counter and map a partial start back to its connection.
+
 ## v1.4.0 (2026-11-14)
 
 - Require Playground 0.7.0 or later; this package uses the frame storage interface introduced in that release.
