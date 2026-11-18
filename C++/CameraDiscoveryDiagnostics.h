@@ -27,6 +27,8 @@ public:
     virtual ~Environment() = default;
     virtual std::string pylonVersion() const = 0;
     virtual std::vector<TransportLayer> transportLayers() const = 0;
+    /** @brief False when transport layer enumeration itself failed. */
+    virtual bool transportLayersAvailable() const = 0;
 };
 
 /**
@@ -38,6 +40,10 @@ inline std::string emptyDiscoveryMessage(const Environment& environment)
 {
     std::string message = "pylon initialized but enumerated 0 devices; pylon version: "
         + environment.pylonVersion() + "; loaded transport layers: ";
+    if (!environment.transportLayersAvailable()) {
+        message += "unavailable";
+        return message;
+    }
     const std::vector<TransportLayer> layers = environment.transportLayers();
     if (layers.empty()) {
         message += "none";

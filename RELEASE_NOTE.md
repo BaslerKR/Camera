@@ -1,6 +1,6 @@
 ## Unreleased
 
-- Select one complete macOS pylon SDK framework from `/Library/Frameworks` or an explicit `PYLON_ROOT`/`pylon_DIR` hint, require both headers and `pylon-targets.cmake` in that tree, and stage the same framework at runtime; an unresolved hint now fails configure with the path instead of silently falling back. Zero-device discovery logs the pylon version and loaded transport layers.
+- Select one complete macOS pylon SDK framework from `/Library/Frameworks`, an already-provided pylon target, or any explicit CMake/environment hint, require both headers and `pylon-targets.cmake` in that tree, resolve bundle-internal paths to the framework root, and stage the same framework at runtime; an unresolved or conflicting hint now fails configure with the path instead of silently falling back. Zero-device discovery logs the pylon version and loaded transport layers, marking the layer list unavailable when its enumeration fails.
 
 - Drop the device widget ABI and the QVariantMap discovery hand-back. `IDevicePluginSession` no longer implements `createDockWidgets()`, and `discoverDevices()`/`createSession()` no longer pass discovery data through a `QVariantMap`; discovery and session creation now take only an error message.
 

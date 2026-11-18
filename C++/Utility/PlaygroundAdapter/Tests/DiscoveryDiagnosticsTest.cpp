@@ -10,18 +10,21 @@ namespace {
 class FakeBackend final : public CameraDiscoveryDiagnostics::Environment {
 public:
     FakeBackend(std::string version,
-        std::vector<CameraDiscoveryDiagnostics::TransportLayer> layers)
-        : _version(std::move(version)), _layers(std::move(layers)) {}
+        std::vector<CameraDiscoveryDiagnostics::TransportLayer> layers,
+        bool available = true)
+        : _version(std::move(version)), _layers(std::move(layers)), _available(available) {}
 
     std::string pylonVersion() const override { return _version; }
     std::vector<CameraDiscoveryDiagnostics::TransportLayer> transportLayers() const override
     {
         return _layers;
     }
+    bool transportLayersAvailable() const override { return _available; }
 
 private:
     std::string _version;
     std::vector<CameraDiscoveryDiagnostics::TransportLayer> _layers;
+    bool _available;
 };
 
 bool contains(const std::string& text, const std::string& fragment)
@@ -56,5 +59,11 @@ int main()
         CameraDiscoveryDiagnostics::emptyDiscoveryMessage(noVersions);
     assert(contains(noVersionMessage, "BaslerCamEmu"));
     assert(!contains(noVersionMessage, "()"));
+
+    const FakeBackend failedQuery("12.5.2.1565", {}, false);
+    const std::string failedMessage = CameraDiscoveryDiagnostics::emptyDiscoveryMessage(failedQuery);
+    assert(contains(failedMessage, "12.5.2.1565"));
+    assert(contains(failedMessage, "loaded transport layers: unavailable"));
+    assert(!contains(failedMessage, "loaded transport layers: none"));
     return 0;
 }

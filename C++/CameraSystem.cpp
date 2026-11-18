@@ -28,13 +28,16 @@ public:
                     std::string(info.GetVersion().c_str())});
             }
         } catch (const GenericException&) {
-            // The version alone still explains an empty discovery when TL enumeration fails.
+            _layersAvailable = false;
         }
         return layers;
     }
 
+    bool transportLayersAvailable() const override { return _layersAvailable; }
+
 private:
     CTlFactory& _factory;
+    mutable bool _layersAvailable = true;
 };
 
 } // namespace

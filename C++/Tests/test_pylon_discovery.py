@@ -41,12 +41,18 @@ def main():
         ("windows-explicit-finder", "Windows", "module", "root", True),
         ("macos-framework", "Darwin", "framework", "root", True),
         ("macos-framework-dir", "Darwin", "framework", "dir", True),
+        ("macos-framework-realpath", "Darwin", "framework-realpath", "dir", True),
+        ("macos-framework-cmake-hint", "Darwin", "framework", "cmake", True),
+        ("macos-framework-root-var", "Darwin", "framework", "rootvar", True),
+        ("macos-framework-preloaded", "Darwin", "preloaded-framework", "default", True),
+        ("macos-conflicting-hints", "Darwin", "framework", "conflict", False),
         ("macos-hint-missing-headers", "Darwin", "framework-no-headers", "root", False),
         ("macos-hint-missing-targets", "Darwin", "framework-no-targets", "root", False),
         ("macos-hint-unresolved", "Darwin", "missing", "root", False),
         ("preloaded-target", "Linux", "preloaded", "root", True),
     ]
     expected_errors = {
+        "macos-conflicting-hints": "Conflicting pylon hints",
         "macos-hint-missing-headers": "does not resolve to a complete pylon SDK framework",
         "macos-hint-missing-targets": "does not resolve to a complete pylon SDK framework",
         "macos-hint-unresolved": "does not resolve to a complete pylon SDK framework",
@@ -55,8 +61,13 @@ def main():
         with tempfile.TemporaryDirectory(prefix=name + "-", dir=args.work_dir) as tmp:
             root = Path(tmp)
             sdk = root / "sysroot/opt/pylon" if hint == "default" else root / "sdk with spaces"
+            if name in ("macos-framework-realpath", "macos-framework-preloaded",
+                        "macos-conflicting-hints"):
+                sdk = root / "pylon.framework"
             sdk.mkdir(parents=True)
-            expected = "config" if layout in ("config", "both") else layout
+            expected = ("config" if layout in ("config", "both")
+                        else "framework" if layout == "framework-realpath"
+                        else "preloaded" if layout == "preloaded-framework" else layout)
             package = lambda marker: (
                 "add_library(pylon::pylon INTERFACE IMPORTED)\n"
                 f"set_property(TARGET pylon::pylon PROPERTY INTERFACE_COMPILE_DEFINITIONS SDK_{marker})\n"
@@ -69,18 +80,31 @@ def main():
                 module = sdk / "lib/cmake"
                 module.mkdir(parents=True)
                 (module / "Findpylon.cmake").write_text(package("module"))
-            if layout in ("framework", "framework-no-headers", "framework-no-targets"):
+            if layout in ("framework", "framework-no-headers", "framework-no-targets",
+                          "framework-realpath", "preloaded-framework"):
                 framework = sdk / "Resources/CMake"
-                if layout != "framework-no-targets":
+                if layout == "framework-realpath":
+                    framework = sdk / "Versions/A/Resources/CMake"
+                if layout not in ("framework-no-targets",):
                     framework.mkdir(parents=True)
                     (framework / "pylon-targets.cmake").write_text(package("framework"))
                     (framework / "genicam-targets.cmake").write_text("")
                     (framework / "pylon-config-version.cmake").write_text("set(PACKAGE_VERSION 8.0.0)\n")
+                if layout == "framework-realpath":
+                    (sdk / "Resources").mkdir(parents=True, exist_ok=True)
+                    (sdk / "Resources/CMake").symlink_to(framework, target_is_directory=True)
                 if layout != "framework-no-headers":
                     (sdk / "Headers").mkdir(parents=True)
                     (sdk / "Headers/PylonIncludes.h").touch()
-                (sdk / "Libraries").mkdir(parents=True, exist_ok=True)
-                (sdk / "Libraries/libpylonbase.8.0.0.dylib").touch()
+                for libraries in (sdk / "Libraries", sdk / "Versions/A/Libraries"):
+                    libraries.mkdir(parents=True, exist_ok=True)
+                    (libraries / "libpylonbase.8.0.0.dylib").touch()
+            if name == "macos-conflicting-hints":
+                other = root / "other.framework"
+                (other / "Resources/CMake").mkdir(parents=True)
+                (other / "Resources/CMake/pylon-targets.cmake").write_text(package("other"))
+                (other / "Headers").mkdir(parents=True)
+                (other / "Headers/PylonIncludes.h").touch()
             checks = ""
             if name.startswith("windows-pylon12"):
                 libraries = sdk / "lib/x64"
@@ -103,7 +127,11 @@ def main():
                           'message(FATAL_ERROR "Unselected default SDK overwrote library paths")\nendif()\n')
             source = root / "source"
             source.mkdir()
-            preload = package("preloaded") if layout == "preloaded" else ""
+            preload = package("preloaded") if layout in ("preloaded", "preloaded-framework") else ""
+            if layout == "preloaded-framework":
+                imported = sdk / "Versions/A/Libraries/libpylonbase.8.0.0.dylib"
+                preload += ('add_library(pylon::PylonBase SHARED IMPORTED)\n'
+                            f'set_property(TARGET pylon::PylonBase PROPERTY IMPORTED_LOCATION "{imported}")\n')
             (source / "CMakeLists.txt").write_text(
                 "cmake_minimum_required(VERSION 3.16)\nproject(Discovery NONE)\n"
                 + preload
@@ -143,7 +171,18 @@ def main():
             if hint == "root":
                 env["PYLON_ROOT"] = str(sdk)
             elif hint == "dir":
-                command.append(f"-Dpylon_DIR={sdk / 'share/pylon/cmake'}")
+                dir_hint = (sdk / "Versions/A/Resources/CMake"
+                            if name == "macos-framework-realpath" else
+                            sdk / "Resources/CMake" if system == "Darwin" else
+                            sdk / "share/pylon/cmake")
+                command.append(f"-Dpylon_DIR={dir_hint}")
+            elif hint == "cmake":
+                command.append(f"-Dpylon_cmake={sdk / 'Resources/CMake'}")
+            elif hint == "rootvar":
+                command.append(f"-Dpylon_ROOT={sdk}")
+            elif hint == "conflict":
+                env["PYLON_ROOT"] = str(root / "other.framework")
+                command.append(f"-Dpylon_DIR={sdk / 'Resources/CMake'}")
             elif hint == "prefix":
                 command.append(f"-DCMAKE_PREFIX_PATH={sdk}")
             else:
@@ -160,8 +199,15 @@ def main():
                 if expected_error not in log:
                     raise RuntimeError(f"{name}: failure did not identify the rejected SDK\n{log}")
             if success and system == "Darwin":
-                if "macOS pylon framework:" not in log or "macOS pylonbase version: 8.0.0" not in log:
+                if "macOS pylonbase version: 8.0.0" not in log:
                     raise RuntimeError(f"{name}: configure did not report the selected SDK\n{log}")
+                framework_line = next((line.strip() for line in log.splitlines()
+                                       if "macOS pylon framework:" in line), "")
+                expected_line = f"-- [Camera] macOS pylon framework: {sdk}"
+                if framework_line != expected_line:
+                    raise RuntimeError(
+                        f"{name}: wrong framework selected\n"
+                        f"expected: {expected_line}\nactual: {framework_line}\n{log}")
             print(f"PASS {name}")
     print(f"Passed {len(cases)}/{len(cases)} discovery cases (synthetic configure only).")
 
