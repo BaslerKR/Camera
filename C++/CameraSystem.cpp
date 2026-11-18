@@ -269,6 +269,8 @@ void CameraSystem::runInitialDiscovery(std::chrono::milliseconds discoveryWindow
     const auto deadline = std::chrono::steady_clock::now() + discoveryWindow;
     const auto retryInterval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
         std::chrono::seconds{1});
+    const auto minimumAttemptWindow = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+        std::chrono::milliseconds{1});
     std::size_t attempts = 0;
     std::string error;
     bool cancelled = false;
@@ -278,8 +280,8 @@ void CameraSystem::runInitialDiscovery(std::chrono::milliseconds discoveryWindow
             break;
         }
         const auto attemptWindowRemaining = deadline - std::chrono::steady_clock::now();
-        // Do not start another SDK enumeration after the startup discovery deadline.
-        if (attempts > 0 && attemptWindowRemaining <= std::chrono::steady_clock::duration::zero()) break;
+        // Do not start another SDK enumeration when its minimum start window has elapsed.
+        if (attempts > 0 && attemptWindowRemaining <= minimumAttemptWindow) break;
         {
             std::lock_guard<std::mutex> lock(_mutex);
             _initialDiscoveryEnumerationInProgress = true;
@@ -304,7 +306,8 @@ void CameraSystem::runInitialDiscovery(std::chrono::milliseconds discoveryWindow
             const bool foundTargets = !_devices.empty();
             const auto timeRemaining = deadline - std::chrono::steady_clock::now();
             const bool windowElapsed = timeRemaining <= std::chrono::steady_clock::duration::zero();
-            finished = !error.empty() || foundTargets || stopRequested || windowElapsed;
+            const bool noAttemptWindowRemains = timeRemaining <= minimumAttemptWindow;
+            finished = !error.empty() || foundTargets || stopRequested || windowElapsed || noAttemptWindowRemains;
             if (finished) {
                 _initialDiscoveryError = error;
                 _initialDiscoveryRunning = false;

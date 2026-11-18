@@ -619,7 +619,7 @@ private slots:
         auto targetsFuture = std::async(std::launch::async, [&] {
             return camera->deviceCatalogAfterInitialDiscovery(std::chrono::milliseconds{50});
         });
-        const bool stayedPendingAfterBudget = targetsFuture.wait_for(std::chrono::milliseconds{190})
+        const bool stayedPendingAfterBudget = targetsFuture.wait_for(std::chrono::milliseconds{250})
             == std::future_status::timeout;
         releaseScan();
         QVERIFY(targetsFuture.wait_for(std::chrono::seconds{2}) == std::future_status::ready);
@@ -633,6 +633,41 @@ private slots:
         }
         QVERIFY2(stayedPendingAfterBudget, "The target read timed out while EnumerateDevices was still in flight.");
         QVERIFY2(error.isEmpty(), qPrintable(error));
+        QVERIFY(targets.empty());
+        QCOMPARE(enumerationCalls.load(), 1);
+    }
+    void startupDiscoveryDoesNotEnumerateAgainAtItsDeadline() {
+        std::promise<void> enumerationStarted;
+        auto started = enumerationStarted.get_future();
+        std::promise<void> releaseEnumeration;
+        auto release = releaseEnumeration.get_future().share();
+        std::atomic<bool> enumerationReleased{false};
+        const auto releaseScan = [&] {
+            if (!enumerationReleased.exchange(true)) releaseEnumeration.set_value();
+        };
+        std::atomic<int> enumerationCalls{0};
+        CameraSystem system([&](DeviceInfoList_t&) {
+            const int call = enumerationCalls.fetch_add(1);
+            if (call == 0) {
+                enumerationStarted.set_value();
+                release.wait();
+            }
+        });
+        ScanReleaseGuard releaseGuard{releaseScan};
+        auto* camera = system.addCamera(); QVERIFY(camera);
+        system.startInitialDiscovery(std::chrono::milliseconds{200});
+        if (started.wait_for(std::chrono::seconds{2}) != std::future_status::ready) {
+            releaseScan();
+            QFAIL("Startup discovery did not reach the first fake transport enumeration.");
+        }
+
+        auto targetsFuture = std::async(std::launch::async, [&] {
+            return camera->deviceCatalogAfterInitialDiscovery(std::chrono::seconds{2});
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds{190});
+        releaseScan();
+        QVERIFY(targetsFuture.wait_for(std::chrono::seconds{2}) == std::future_status::ready);
+        const auto targets = targetsFuture.get();
         QVERIFY(targets.empty());
         QCOMPARE(enumerationCalls.load(), 1);
     }
