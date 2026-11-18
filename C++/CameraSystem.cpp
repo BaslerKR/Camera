@@ -112,7 +112,7 @@ std::vector<CameraDeviceDescriptor> CameraSystem::discoverInitialCatalog(
     std::chrono::milliseconds firstDeviceWait, const std::function<bool()>& interrupted) {
     std::lock_guard<std::mutex> lock(_mutex);
     const auto deadline = std::chrono::steady_clock::now() + firstDeviceWait;
-    const auto retryInterval = std::chrono::milliseconds{250};
+    const auto retryInterval = std::chrono::milliseconds{1000};
     for (;;) {
         if (interrupted && interrupted()) break;
         updateCameraListLocked(false);
