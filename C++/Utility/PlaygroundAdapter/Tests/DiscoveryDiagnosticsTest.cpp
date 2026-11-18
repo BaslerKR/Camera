@@ -1,6 +1,7 @@
 #include "CameraDiscoveryDiagnostics.h"
 
 #include <cassert>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -15,16 +16,29 @@ public:
         : _version(std::move(version)), _layers(std::move(layers)), _available(available) {}
 
     std::string pylonVersion() const override { return _version; }
-    std::vector<CameraDiscoveryDiagnostics::TransportLayer> transportLayers() const override
+    CameraDiscoveryDiagnostics::TransportLayerSnapshot transportLayers() const override
     {
-        return _layers;
+        return {_available, _layers};
     }
-    bool transportLayersAvailable() const override { return _available; }
 
 private:
     std::string _version;
     std::vector<CameraDiscoveryDiagnostics::TransportLayer> _layers;
     bool _available;
+};
+
+/** @brief Fails inside the query, as the production CTlFactory wrapper can. */
+class ThrowingBackend final : public CameraDiscoveryDiagnostics::Environment {
+public:
+    std::string pylonVersion() const override { return "12.5.2.1565"; }
+    CameraDiscoveryDiagnostics::TransportLayerSnapshot transportLayers() const override
+    {
+        try {
+            throw std::runtime_error("TL query failed");
+        } catch (const std::runtime_error&) {
+            return {false, {}};
+        }
+    }
 };
 
 bool contains(const std::string& text, const std::string& fragment)
@@ -65,5 +79,10 @@ int main()
     assert(contains(failedMessage, "12.5.2.1565"));
     assert(contains(failedMessage, "loaded transport layers: unavailable"));
     assert(!contains(failedMessage, "loaded transport layers: none"));
+
+    const ThrowingBackend throwing;
+    const std::string thrownMessage = CameraDiscoveryDiagnostics::emptyDiscoveryMessage(throwing);
+    assert(contains(thrownMessage, "loaded transport layers: unavailable"));
+    assert(!contains(thrownMessage, "loaded transport layers: none"));
     return 0;
 }

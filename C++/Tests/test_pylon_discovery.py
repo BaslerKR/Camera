@@ -44,7 +44,9 @@ def main():
         ("macos-framework-realpath", "Darwin", "framework-realpath", "dir", True),
         ("macos-framework-cmake-hint", "Darwin", "framework", "cmake", True),
         ("macos-framework-root-var", "Darwin", "framework", "rootvar", True),
+        ("macos-version-numeric", "Darwin", "framework", "root", True),
         ("macos-framework-preloaded", "Darwin", "preloaded-framework", "default", True),
+        ("macos-preloaded-hint-conflict", "Darwin", "preloaded-framework", "root", False),
         ("macos-conflicting-hints", "Darwin", "framework", "conflict", False),
         ("macos-hint-missing-headers", "Darwin", "framework-no-headers", "root", False),
         ("macos-hint-missing-targets", "Darwin", "framework-no-targets", "root", False),
@@ -53,6 +55,7 @@ def main():
     ]
     expected_errors = {
         "macos-conflicting-hints": "Conflicting pylon hints",
+        "macos-preloaded-hint-conflict": "cannot use different frameworks",
         "macos-hint-missing-headers": "does not resolve to a complete pylon SDK framework",
         "macos-hint-missing-targets": "does not resolve to a complete pylon SDK framework",
         "macos-hint-unresolved": "does not resolve to a complete pylon SDK framework",
@@ -62,7 +65,7 @@ def main():
             root = Path(tmp)
             sdk = root / "sysroot/opt/pylon" if hint == "default" else root / "sdk with spaces"
             if name in ("macos-framework-realpath", "macos-framework-preloaded",
-                        "macos-conflicting-hints"):
+                        "macos-preloaded-hint-conflict", "macos-conflicting-hints"):
                 sdk = root / "pylon.framework"
             sdk.mkdir(parents=True)
             expected = ("config" if layout in ("config", "both")
@@ -99,7 +102,10 @@ def main():
                 for libraries in (sdk / "Libraries", sdk / "Versions/A/Libraries"):
                     libraries.mkdir(parents=True, exist_ok=True)
                     (libraries / "libpylonbase.8.0.0.dylib").touch()
-            if name == "macos-conflicting-hints":
+            if name == "macos-version-numeric":
+                for version in ("9.0.0", "10.0.0"):
+                    (sdk / "Libraries" / f"libpylonbase.{version}.dylib").touch()
+            if name in ("macos-conflicting-hints", "macos-preloaded-hint-conflict"):
                 other = root / "other.framework"
                 (other / "Resources/CMake").mkdir(parents=True)
                 (other / "Resources/CMake/pylon-targets.cmake").write_text(package("other"))
@@ -169,7 +175,8 @@ def main():
                 command.extend(["-DCMAKE_IGNORE_PREFIX_PATH=/opt/pylon",
                                 "-DCMAKE_IGNORE_PATH=/opt/pylon/lib/cmake"])
             if hint == "root":
-                env["PYLON_ROOT"] = str(sdk)
+                env["PYLON_ROOT"] = (str(root / "other.framework")
+                                     if name == "macos-preloaded-hint-conflict" else str(sdk))
             elif hint == "dir":
                 dir_hint = (sdk / "Versions/A/Resources/CMake"
                             if name == "macos-framework-realpath" else
@@ -199,7 +206,8 @@ def main():
                 if expected_error not in log:
                     raise RuntimeError(f"{name}: failure did not identify the rejected SDK\n{log}")
             if success and system == "Darwin":
-                if "macOS pylonbase version: 8.0.0" not in log:
+                expected_version = "10.0.0" if name == "macos-version-numeric" else "8.0.0"
+                if f"macOS pylonbase version: {expected_version}" not in log:
                     raise RuntimeError(f"{name}: configure did not report the selected SDK\n{log}")
                 framework_line = next((line.strip() for line in log.splitlines()
                                        if "macOS pylon framework:" in line), "")

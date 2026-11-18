@@ -18,6 +18,12 @@ struct TransportLayer {
     std::string version;
 };
 
+/** @brief The transport layer query result and the layers it produced. */
+struct TransportLayerSnapshot {
+    bool available = true;
+    std::vector<TransportLayer> layers;
+};
+
 /**
  * @brief Supplies the pylon state observed at discovery time.
  * @note The camera module wraps CTlFactory here; tests supply a fixed fake.
@@ -26,9 +32,8 @@ class Environment {
 public:
     virtual ~Environment() = default;
     virtual std::string pylonVersion() const = 0;
-    virtual std::vector<TransportLayer> transportLayers() const = 0;
-    /** @brief False when transport layer enumeration itself failed. */
-    virtual bool transportLayersAvailable() const = 0;
+    /** @brief Queries once; an unavailable result means the query itself failed. */
+    virtual TransportLayerSnapshot transportLayers() const = 0;
 };
 
 /**
@@ -40,19 +45,19 @@ inline std::string emptyDiscoveryMessage(const Environment& environment)
 {
     std::string message = "pylon initialized but enumerated 0 devices; pylon version: "
         + environment.pylonVersion() + "; loaded transport layers: ";
-    if (!environment.transportLayersAvailable()) {
+    const TransportLayerSnapshot snapshot = environment.transportLayers();
+    if (!snapshot.available) {
         message += "unavailable";
         return message;
     }
-    const std::vector<TransportLayer> layers = environment.transportLayers();
-    if (layers.empty()) {
+    if (snapshot.layers.empty()) {
         message += "none";
         return message;
     }
-    for (std::size_t i = 0; i < layers.size(); ++i) {
+    for (std::size_t i = 0; i < snapshot.layers.size(); ++i) {
         if (i != 0U) message += ", ";
-        message += layers[i].name;
-        if (!layers[i].version.empty()) message += " (" + layers[i].version + ")";
+        message += snapshot.layers[i].name;
+        if (!snapshot.layers[i].version.empty()) message += " (" + snapshot.layers[i].version + ")";
     }
     return message;
 }

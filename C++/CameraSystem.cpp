@@ -17,27 +17,24 @@ public:
         return version ? version : "unknown";
     }
 
-    std::vector<CameraDiscoveryDiagnostics::TransportLayer> transportLayers() const override
+    CameraDiscoveryDiagnostics::TransportLayerSnapshot transportLayers() const override
     {
-        std::vector<CameraDiscoveryDiagnostics::TransportLayer> layers;
+        CameraDiscoveryDiagnostics::TransportLayerSnapshot snapshot;
         try {
             TlInfoList_t infos;
             _factory.EnumerateTls(infos);
             for (const auto& info : infos) {
-                layers.push_back({std::string(info.GetFriendlyName().c_str()),
+                snapshot.layers.push_back({std::string(info.GetFriendlyName().c_str()),
                     std::string(info.GetVersion().c_str())});
             }
         } catch (const GenericException&) {
-            _layersAvailable = false;
+            snapshot.available = false;
         }
-        return layers;
+        return snapshot;
     }
-
-    bool transportLayersAvailable() const override { return _layersAvailable; }
 
 private:
     CTlFactory& _factory;
-    mutable bool _layersAvailable = true;
 };
 
 } // namespace

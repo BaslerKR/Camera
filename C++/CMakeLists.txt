@@ -164,6 +164,16 @@ if(APPLE)
         endif()
     endforeach()
 
+    set(camera_target_framework "")
+    camera_pylon_framework_from_target(camera_target_framework)
+    if(pylon_FOUND AND "${camera_target_framework}" STREQUAL "")
+        message(FATAL_ERROR
+            "[${PROJECT_NAME}] pylon_FOUND is set but no pylon framework can be derived "
+            "from the provided target, so linking and staging could use different SDKs. "
+            "Provide a located pylon target or an explicit hint (pylon_cmake, pylon_ROOT, "
+            "pylon_DIR, PYLON_ROOT or PYLON_DIR).")
+    endif()
+
     set(camera_pylon_macos_framework "")
     foreach(hint IN LISTS camera_pylon_hints)
         camera_pylon_framework_from_hint("${hint}" resolved)
@@ -172,6 +182,13 @@ if(APPLE)
                 "[${PROJECT_NAME}] The pylon hint '${hint}' does not resolve to a "
                 "complete pylon SDK framework (Headers/PylonIncludes.h and "
                 "pylon-targets.cmake are required). No other install is used.")
+        endif()
+        if(NOT "${camera_target_framework}" STREQUAL ""
+           AND NOT "${resolved}" STREQUAL "${camera_target_framework}")
+            message(FATAL_ERROR
+                "[${PROJECT_NAME}] The provided pylon target uses framework "
+                "'${camera_target_framework}' but hint '${hint}' resolves to "
+                "'${resolved}'. Linking and staging cannot use different frameworks.")
         endif()
         if("${camera_pylon_macos_framework}" STREQUAL "")
             set(camera_pylon_macos_framework "${resolved}")
@@ -183,8 +200,8 @@ if(APPLE)
     endforeach()
 
     if("${camera_pylon_macos_framework}" STREQUAL "")
-        camera_pylon_framework_from_target(camera_pylon_macos_framework)
-        if(NOT "${camera_pylon_macos_framework}" STREQUAL "")
+        if(NOT "${camera_target_framework}" STREQUAL "")
+            set(camera_pylon_macos_framework "${camera_target_framework}")
             camera_pylon_framework_is_complete("${camera_pylon_macos_framework}" complete)
             if(NOT complete)
                 message(FATAL_ERROR
@@ -200,7 +217,8 @@ if(APPLE)
                     "[${PROJECT_NAME}] The default macOS pylon SDK "
                     "'${camera_pylon_macos_framework}' is missing or incomplete "
                     "(Headers/PylonIncludes.h and pylon-targets.cmake are required). "
-                    "Install the pylon SDK or set PYLON_ROOT or pylon_DIR.")
+                    "Install the pylon SDK or set pylon_cmake, pylon_ROOT, pylon_DIR, "
+                    "PYLON_ROOT or PYLON_DIR.")
             endif()
         endif()
     endif()
