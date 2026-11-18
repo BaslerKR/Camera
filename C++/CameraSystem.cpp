@@ -1,9 +1,51 @@
 #include "CameraSystem.h"
+#include "CameraDiscoveryDiagnostics.h"
 
 #include <algorithm>
 #include <chrono>
 #include <stdexcept>
 #include <thread>
+
+namespace {
+
+/** @brief Reads the pylon version and loaded transport layers for the empty-list diagnostic. */
+class PylonDiscoveryEnvironment final : public CameraDiscoveryDiagnostics::Environment {
+public:
+    explicit PylonDiscoveryEnvironment(CTlFactory& factory) : _factory(factory) {}
+
+    std::string pylonVersion() const override
+    {
+        const char* version = Pylon::GetPylonVersionString();
+        return version ? version : "unknown";
+    }
+
+    CameraDiscoveryDiagnostics::TransportLayerSnapshot transportLayers() const override
+    {
+        CameraDiscoveryDiagnostics::TransportLayerSnapshot snapshot;
+        try {
+            TlInfoList_t infos;
+            _factory.EnumerateTls(infos);
+            for (const auto& info : infos) {
+                snapshot.layers.push_back({std::string(info.GetFriendlyName().c_str()),
+                    std::string(info.GetVersion().c_str())});
+            }
+        } catch (const GenericException&) {
+            snapshot.available = false;
+        }
+        return snapshot;
+    }
+
+private:
+    CTlFactory& _factory;
+};
+
+void reportEmptyDiscovery(CTlFactory& factory)
+{
+    PylonDiscoveryEnvironment environment(factory);
+    CameraSystem::syslog(CameraDiscoveryDiagnostics::emptyDiscoveryMessage(environment), true);
+}
+
+} // namespace
 
 CameraSystem::CameraSystem() : CameraSystem(DeviceEnumerator{}) {}
 
@@ -50,6 +92,7 @@ void CameraSystem::updateCameraListLocked(bool report)
     }
     if (report) {
         syslog("Updated the camera list: " + to_string(count) + " Camera(s) found.");
+        if (count == 0 && !_deviceEnumerator && _tlFactory) reportEmptyDiscovery(*_tlFactory);
         for(std::size_t i = 0; i < _devices.size(); ++i){
             syslog("-- " + std::string(_devices.at(i).GetFriendlyName()));
         }
@@ -124,6 +167,7 @@ std::vector<CameraDeviceDescriptor> CameraSystem::discoverInitialCatalog(
         std::this_thread::sleep_for(std::min(remaining, retryInterval));
     }
     syslog("Completed initial camera discovery with " + to_string(_devices.size()) + " Camera(s).");
+    if (_devices.empty() && !_deviceEnumerator && _tlFactory) reportEmptyDiscovery(*_tlFactory);
     for (const auto& device : _devices) syslog("-- " + std::string(device.GetFriendlyName()));
     return deviceCatalogLocked();
 }

@@ -1,6 +1,9 @@
 ## Unreleased
 
 - Keep Camera's initial worker discovery active for up to twenty-five seconds while it waits for a first GigE or other transport target. Session preflight finishes that scan before creating the session, so the first `device.targets` read receives a target published during startup without a separate `device.discover` call; later sessions reuse the catalog until explicit discovery refreshes it.
+
+- Select one complete macOS pylon SDK framework from `/Library/Frameworks`, a located already-provided pylon target, or any explicit CMake/environment hint, require both headers and `pylon-targets.cmake` in that tree, resolve bundle-internal paths to the framework root, and stage the same framework at runtime; an unlocatable target or an unresolved, conflicting, or target-disagreeing hint now fails configure with the paths instead of silently falling back. Zero-device discovery logs the pylon version and loaded transport layers, marking the layer list unavailable when its enumeration fails.
+
 - Ship the package icon from this repository (`C++/Utility/PlaygroundAdapter/Package/icon.png`) instead of the SDK-installed Resources brand asset. Include `DeviceRuntime/Contract/DevicePluginSession.h` from the contract include root; the SDK no longer installs a `PlaygroundWidget` header path or vendor icons.
 
 - Drop the device widget ABI and the QVariantMap discovery hand-back. `IDevicePluginSession` no longer implements `createDockWidgets()`, and `discoverDevices()`/`createSession()` no longer pass discovery data through a `QVariantMap`; discovery and session creation now take only an error message.

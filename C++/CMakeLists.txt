@@ -22,6 +22,7 @@ endif()
 
 set(HEADERS
     Camera.h
+    CameraDiscoveryDiagnostics.h
     CameraGrabDiagnostics.h
     CameraSystem.h
     PylonScene3DProfile.h
@@ -45,15 +46,195 @@ endif()
 if(POLICY CMP0144)
     cmake_policy(SET CMP0144 NEW)
 endif()
+
+# A macOS pylon SDK is one framework tree that carries both the public headers
+# and pylon's CMake targets. Mixing headers from one install with a runtime from
+# another is not ABI-safe, so an explicit hint must resolve to such a tree or
+# configuration stops with the rejected path. Nothing silently falls back.
+function(camera_pylon_framework_is_complete framework out_result)
+    set(complete FALSE)
+    if(EXISTS "${framework}/Headers/PylonIncludes.h")
+        if(EXISTS "${framework}/Resources/CMake/pylon-targets.cmake"
+           OR EXISTS "${framework}/Versions/A/Resources/CMake/pylon-targets.cmake")
+            set(complete TRUE)
+        endif()
+    endif()
+    set(${out_result} ${complete} PARENT_SCOPE)
+endfunction()
+
+function(camera_pylon_bundle_root path out_root)
+    get_filename_component(absolute "${path}" ABSOLUTE)
+    if(absolute MATCHES "^(.*\\.framework)(/.*)?$")
+        set(${out_root} "${CMAKE_MATCH_1}" PARENT_SCOPE)
+    else()
+        set(${out_root} "" PARENT_SCOPE)
+    endif()
+endfunction()
+
+function(camera_pylon_framework_from_hint hint out_framework)
+    get_filename_component(start "${hint}" ABSOLUTE)
+    camera_pylon_bundle_root("${start}" bundle)
+    if(NOT "${bundle}" STREQUAL "")
+        camera_pylon_framework_is_complete("${bundle}" complete)
+        if(complete)
+            set(${out_framework} "${bundle}" PARENT_SCOPE)
+        else()
+            set(${out_framework} "" PARENT_SCOPE)
+        endif()
+        return()
+    endif()
+    set(candidate "${start}")
+    foreach(step RANGE 0 5)
+        camera_pylon_framework_is_complete("${candidate}" complete)
+        if(complete)
+            set(${out_framework} "${candidate}" PARENT_SCOPE)
+            return()
+        endif()
+        camera_pylon_framework_is_complete("${candidate}/pylon.framework" complete)
+        if(complete)
+            set(${out_framework} "${candidate}/pylon.framework" PARENT_SCOPE)
+            return()
+        endif()
+        get_filename_component(parent "${candidate}" DIRECTORY)
+        if(parent STREQUAL candidate)
+            break()
+        endif()
+        set(candidate "${parent}")
+    endforeach()
+    set(${out_framework} "" PARENT_SCOPE)
+endfunction()
+
+function(camera_pylon_framework_from_target out_framework)
+    set(framework "")
+    foreach(target IN ITEMS pylon::PylonBase pylon::PylonUtility pylon::pylon)
+        if(NOT TARGET ${target})
+            continue()
+        endif()
+        foreach(property IN ITEMS IMPORTED_LOCATION_RELEASE IMPORTED_LOCATION)
+            get_target_property(location ${target} ${property})
+            if(location AND NOT location MATCHES "-NOTFOUND$")
+                camera_pylon_bundle_root("${location}" bundle)
+                if(NOT "${bundle}" STREQUAL "")
+                    set(framework "${bundle}")
+                    break()
+                endif()
+            endif()
+        endforeach()
+        if(NOT "${framework}" STREQUAL "")
+            break()
+        endif()
+    endforeach()
+    set(${out_framework} "${framework}" PARENT_SCOPE)
+endfunction()
+
+function(camera_pylonbase_version framework out_version)
+    set(best_version "")
+    set(best_score -1)
+    file(GLOB dylibs
+        "${framework}/Libraries/libpylonbase.*.dylib"
+        "${framework}/Versions/A/Libraries/libpylonbase.*.dylib")
+    foreach(dylib IN LISTS dylibs)
+        if(dylib MATCHES "libpylonbase\\.([0-9]+)\\.([0-9]+)\\.([0-9]+)\\.dylib$")
+            set(major ${CMAKE_MATCH_1})
+            set(minor ${CMAKE_MATCH_2})
+            set(patch ${CMAKE_MATCH_3})
+            math(EXPR score "${major} * 1000000 + ${minor} * 1000 + ${patch}")
+            if(score GREATER best_score)
+                set(best_score ${score})
+                set(best_version "${major}.${minor}.${patch}")
+            endif()
+        endif()
+    endforeach()
+    if("${best_version}" STREQUAL "")
+        set(best_version "unavailable")
+    endif()
+    set(${out_version} "${best_version}" PARENT_SCOPE)
+endfunction()
+
+if(APPLE)
+    set(camera_pylon_hints)
+    foreach(name IN ITEMS pylon_cmake pylon_ROOT pylon_DIR)
+        if(DEFINED ${name} AND NOT "${${name}}" STREQUAL "")
+            list(APPEND camera_pylon_hints "${${name}}")
+        endif()
+    endforeach()
+    foreach(name IN ITEMS PYLON_ROOT PYLON_DIR)
+        if(NOT "$ENV{${name}}" STREQUAL "")
+            list(APPEND camera_pylon_hints "$ENV{${name}}")
+        endif()
+    endforeach()
+
+    set(camera_target_framework "")
+    camera_pylon_framework_from_target(camera_target_framework)
+    if(pylon_FOUND AND "${camera_target_framework}" STREQUAL "")
+        message(FATAL_ERROR
+            "[${PROJECT_NAME}] pylon_FOUND is set but no pylon framework can be derived "
+            "from the provided target, so linking and staging could use different SDKs. "
+            "Provide a located pylon target or let Camera discover pylon itself.")
+    endif()
+
+    set(camera_pylon_macos_framework "")
+    foreach(hint IN LISTS camera_pylon_hints)
+        camera_pylon_framework_from_hint("${hint}" resolved)
+        if("${resolved}" STREQUAL "")
+            message(FATAL_ERROR
+                "[${PROJECT_NAME}] The pylon hint '${hint}' does not resolve to a "
+                "complete pylon SDK framework (Headers/PylonIncludes.h and "
+                "pylon-targets.cmake are required). No other install is used.")
+        endif()
+        if(NOT "${camera_target_framework}" STREQUAL ""
+           AND NOT "${resolved}" STREQUAL "${camera_target_framework}")
+            message(FATAL_ERROR
+                "[${PROJECT_NAME}] The provided pylon target uses framework "
+                "'${camera_target_framework}' but hint '${hint}' resolves to "
+                "'${resolved}'. Linking and staging cannot use different frameworks.")
+        endif()
+        if("${camera_pylon_macos_framework}" STREQUAL "")
+            set(camera_pylon_macos_framework "${resolved}")
+        elseif(NOT "${resolved}" STREQUAL "${camera_pylon_macos_framework}")
+            message(FATAL_ERROR
+                "[${PROJECT_NAME}] Conflicting pylon hints resolve to different frameworks: "
+                "'${camera_pylon_macos_framework}' and '${resolved}'.")
+        endif()
+    endforeach()
+
+    if("${camera_pylon_macos_framework}" STREQUAL "")
+        if(NOT "${camera_target_framework}" STREQUAL "")
+            set(camera_pylon_macos_framework "${camera_target_framework}")
+            camera_pylon_framework_is_complete("${camera_pylon_macos_framework}" complete)
+            if(NOT complete)
+                message(FATAL_ERROR
+                    "[${PROJECT_NAME}] The pylon target's framework "
+                    "'${camera_pylon_macos_framework}' is not a complete pylon SDK "
+                    "(Headers/PylonIncludes.h and pylon-targets.cmake are required).")
+            endif()
+        else()
+            set(camera_pylon_macos_framework "/Library/Frameworks/pylon.framework")
+            camera_pylon_framework_is_complete("${camera_pylon_macos_framework}" complete)
+            if(NOT complete)
+                message(FATAL_ERROR
+                    "[${PROJECT_NAME}] The default macOS pylon SDK "
+                    "'${camera_pylon_macos_framework}' is missing or incomplete "
+                    "(Headers/PylonIncludes.h and pylon-targets.cmake are required). "
+                    "Install the pylon SDK or set pylon_cmake, pylon_ROOT, pylon_DIR, "
+                    "PYLON_ROOT or PYLON_DIR.")
+            endif()
+        endif()
+    endif()
+
+    if(EXISTS "${camera_pylon_macos_framework}/Resources/CMake/pylon-targets.cmake")
+        set(camera_pylon_cmake_dir "${camera_pylon_macos_framework}/Resources/CMake")
+    else()
+        set(camera_pylon_cmake_dir "${camera_pylon_macos_framework}/Versions/A/Resources/CMake")
+    endif()
+    camera_pylonbase_version("${camera_pylon_macos_framework}" camera_pylonbase_version)
+    message(STATUS "[${PROJECT_NAME}] macOS pylon framework: ${camera_pylon_macos_framework}")
+    message(STATUS "[${PROJECT_NAME}] macOS pylonbase version: ${camera_pylonbase_version}")
+endif()
+
 if(NOT pylon_FOUND)
     if(APPLE)
-        find_path(pylon_cmake
-            NAMES pylon-targets.cmake
-            HINTS "${pylon_DIR}"
-                  "$ENV{PYLON_ROOT}/Resources/CMake"
-                  "/Library/Frameworks/pylon.framework/Resources/CMake"
-            REQUIRED
-        )
+        set(pylon_cmake "${camera_pylon_cmake_dir}")
         file(REAL_PATH "${pylon_cmake}" pylon_cmake_real)
         include("${pylon_cmake_real}/pylon-config-version.cmake")
         include("${pylon_cmake_real}/genicam-targets.cmake")
@@ -229,6 +410,18 @@ if(CAMERA_BUILD_PLAYGROUND_ADAPTER)
             NAME camera_grab_diagnostics_test
             COMMAND camera_grab_diagnostics_test
         )
+
+        add_executable(camera_discovery_diagnostics_test
+            Utility/PlaygroundAdapter/Tests/DiscoveryDiagnosticsTest.cpp
+        )
+        target_link_libraries(camera_discovery_diagnostics_test
+            PRIVATE
+                Camera::PlaygroundAdapter
+        )
+        add_test(
+            NAME camera_discovery_diagnostics_test
+            COMMAND camera_discovery_diagnostics_test
+        )
     endif()
 endif()
 
@@ -321,7 +514,7 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
 endif()
 
 # Keep contract assertions active in Release validation.
-foreach(module_test IN ITEMS camera_graphics_image_adapter_test camera_grab_diagnostics_test)
+foreach(module_test IN ITEMS camera_graphics_image_adapter_test camera_grab_diagnostics_test camera_discovery_diagnostics_test)
     if(TARGET ${module_test})
         target_compile_options(${module_test} PRIVATE
             $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG>
