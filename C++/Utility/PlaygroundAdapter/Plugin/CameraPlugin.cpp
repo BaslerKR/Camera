@@ -141,7 +141,7 @@ public:
                 return false;
             }
             // Keep startup discovery active while a slower transport publishes its first device.
-            (void)system->discoverInitialCatalog(std::chrono::seconds{20}, [] {
+            (void)system->discoverInitialCatalog(std::chrono::seconds{25}, [] {
                 return QThread::currentThread()->isInterruptionRequested();
             });
             if (QThread::currentThread()->isInterruptionRequested()) {
