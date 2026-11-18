@@ -13,8 +13,8 @@ Camera is a C++17 acquisition library for Basler cameras supported by the pylon 
 ## Requirements
 
 - CMake 3.16 or newer and a C++17 compiler.
-- A Basler pylon SDK supported by the target operating system.
-- `PYLON_ROOT`, `PYLON_DEV_DIR`, or `pylon_DIR` when CMake cannot discover pylon automatically.
+- A Basler pylon SDK supported by the target operating system. On macOS this is the SDK framework installed at `/Library/Frameworks/pylon.framework`; pylon Viewer's embedded framework is a runtime-only bundle and is not an SDK. The SDK and Viewer must come from the same pylon release so staged libraries match the build headers.
+- `PYLON_ROOT`, `PYLON_DEV_DIR`, or `pylon_DIR` when CMake cannot discover pylon automatically. On macOS an explicit `PYLON_ROOT` or `pylon_DIR` must resolve to a framework with both `Headers/` and `pylon-targets.cmake`; an unresolved hint is a configure error that names the path instead of falling back to another install.
 - The matching supplementary package and runtime producer for supported stereo 3D devices.
 - Qt Core and Concurrent only when the Playground device plugin is built; no Qt Widgets, Resources widget or OpenGL dependency.
 
@@ -41,7 +41,9 @@ Windows library defaults come from the selected `Findpylon.cmake` installation.
 Explicit finder/module paths and library overrides take precedence over a
 machine-wide pylon installation; pylon 12 name defaults fill unresolved values.
 
-Linux first searches for the pylon config package using `pylon_DIR`, standard CMake prefixes, `PYLON_ROOT`, and `/opt/pylon` (including its `share/pylon/cmake` layout). If no config package is available, it tries the SDK-provided `Findpylon.cmake`. Windows retains find-module discovery; macOS retains framework-target discovery.
+Linux first searches for the pylon config package using `pylon_DIR`, standard CMake prefixes, `PYLON_ROOT`, and `/opt/pylon` (including its `share/pylon/cmake` layout). If no config package is available, it tries the SDK-provided `Findpylon.cmake`. Windows retains find-module discovery.
+
+On macOS a single framework supplies both the build headers and the staged runtime. Without a hint, CMake uses `/Library/Frameworks/pylon.framework`; with `PYLON_ROOT` or `pylon_DIR`, that hint must resolve to a framework containing `Headers/PylonIncludes.h` and `pylon-targets.cmake`, or configuration fails with the rejected path. There is no fallback to another install and no search inside application bundles. Configure prints the chosen framework and its `libpylonbase` version, and the package stages that same framework. When pylon initializes but enumerates zero devices, the discovery log reports the pylon version and every loaded transport layer through `CameraSystem::syslog()`.
 
 Run the configure-only regression suite with Python 3 and CMake on `PATH`. It
 uses Ninja when available; Linux and macOS hosts without Ninja use `make`:
@@ -50,7 +52,7 @@ uses Ninja when available; Linux and macOS hosts without Ninja use `make`:
 python path/to/Camera/C++/Tests/test_pylon_discovery.py --work-dir build/pylon-discovery-tests
 ```
 
-The ten synthetic SDK-layout cases cover Linux default/custom prefixes, explicit config directories, config preference over a find module, module-only SDKs, missing SDKs, Windows find modules, macOS framework targets, and a consumer-provided SDK target. These checks do not compile vendor headers or establish native Linux/macOS or device acceptance.
+The synthetic SDK-layout cases cover Linux default/custom prefixes, explicit config directories, config preference over a find module, module-only SDKs, missing SDKs, Windows find modules, macOS framework targets with root and CMake-directory hints, macOS hints that miss headers or targets, and a consumer-provided SDK target. These checks do not compile vendor headers or establish native Linux/macOS or device acceptance.
 
 ## Acquisition Contract
 

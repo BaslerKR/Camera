@@ -40,8 +40,17 @@ def main():
         ("windows-pylon12-overrides", "Windows", "module", "root", True),
         ("windows-explicit-finder", "Windows", "module", "root", True),
         ("macos-framework", "Darwin", "framework", "root", True),
+        ("macos-framework-dir", "Darwin", "framework", "dir", True),
+        ("macos-hint-missing-headers", "Darwin", "framework-no-headers", "root", False),
+        ("macos-hint-missing-targets", "Darwin", "framework-no-targets", "root", False),
+        ("macos-hint-unresolved", "Darwin", "missing", "root", False),
         ("preloaded-target", "Linux", "preloaded", "root", True),
     ]
+    expected_errors = {
+        "macos-hint-missing-headers": "does not resolve to a complete pylon SDK framework",
+        "macos-hint-missing-targets": "does not resolve to a complete pylon SDK framework",
+        "macos-hint-unresolved": "does not resolve to a complete pylon SDK framework",
+    }
     for name, system, layout, hint, success in cases:
         with tempfile.TemporaryDirectory(prefix=name + "-", dir=args.work_dir) as tmp:
             root = Path(tmp)
@@ -60,12 +69,18 @@ def main():
                 module = sdk / "lib/cmake"
                 module.mkdir(parents=True)
                 (module / "Findpylon.cmake").write_text(package("module"))
-            if layout == "framework":
+            if layout in ("framework", "framework-no-headers", "framework-no-targets"):
                 framework = sdk / "Resources/CMake"
-                framework.mkdir(parents=True)
-                (framework / "pylon-targets.cmake").write_text(package("framework"))
-                (framework / "genicam-targets.cmake").write_text("")
-                (framework / "pylon-config-version.cmake").write_text("set(PACKAGE_VERSION 8.0.0)\n")
+                if layout != "framework-no-targets":
+                    framework.mkdir(parents=True)
+                    (framework / "pylon-targets.cmake").write_text(package("framework"))
+                    (framework / "genicam-targets.cmake").write_text("")
+                    (framework / "pylon-config-version.cmake").write_text("set(PACKAGE_VERSION 8.0.0)\n")
+                if layout != "framework-no-headers":
+                    (sdk / "Headers").mkdir(parents=True)
+                    (sdk / "Headers/PylonIncludes.h").touch()
+                (sdk / "Libraries").mkdir(parents=True, exist_ok=True)
+                (sdk / "Libraries/libpylonbase.8.0.0.dylib").touch()
             checks = ""
             if name.startswith("windows-pylon12"):
                 libraries = sdk / "lib/x64"
@@ -139,8 +154,14 @@ def main():
             (args.work_dir / f"{name}.log").write_text(log, encoding="utf-8")
             if (result.returncode == 0) != success:
                 raise RuntimeError(f"{name}: unexpected configure result\n{log}")
-            if not success and 'Could not find a package configuration file provided by "pylon"' not in log:
-                raise RuntimeError(f"{name}: failure did not identify missing pylon\n{log}")
+            if not success:
+                expected_error = expected_errors.get(
+                    name, 'Could not find a package configuration file provided by "pylon"')
+                if expected_error not in log:
+                    raise RuntimeError(f"{name}: failure did not identify the rejected SDK\n{log}")
+            if success and system == "Darwin":
+                if "macOS pylon framework:" not in log or "macOS pylonbase version: 8.0.0" not in log:
+                    raise RuntimeError(f"{name}: configure did not report the selected SDK\n{log}")
             print(f"PASS {name}")
     print(f"Passed {len(cases)}/{len(cases)} discovery cases (synthetic configure only).")
 

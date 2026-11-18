@@ -70,45 +70,17 @@ function(camera_prepare_playground_plugin_runtime target_name)
     endif()
 
     if(APPLE)
-        set(pylon_framework "")
-        foreach(pylon_target pylon::PylonBase pylon::PylonUtility)
-            if(NOT TARGET ${pylon_target})
-                continue()
-            endif()
-            foreach(pylon_location_property IMPORTED_LOCATION_RELEASE IMPORTED_LOCATION)
-                get_target_property(pylon_location ${pylon_target} ${pylon_location_property})
-                if(pylon_location AND NOT pylon_location MATCHES "-NOTFOUND$")
-                    string(REGEX REPLACE "^(.*\\.framework)/.*$" "\\1"
-                        pylon_candidate_framework "${pylon_location}")
-                    if(IS_DIRECTORY "${pylon_candidate_framework}")
-                        set(pylon_framework "${pylon_candidate_framework}")
-                        break()
-                    endif()
-                endif()
-            endforeach()
-            if(pylon_framework)
-                break()
-            endif()
-        endforeach()
-        if(NOT pylon_framework)
-            set(pylon_framework_candidates
-                "$ENV{PYLON_ROOT}/pylon.framework"
-                "/Library/Frameworks/pylon.framework")
-            if(DEFINED pylon_DIR AND NOT "${pylon_DIR}" STREQUAL "")
-                list(PREPEND pylon_framework_candidates "${pylon_DIR}/../..")
-            endif()
-            foreach(pylon_candidate IN LISTS pylon_framework_candidates)
-                if(IS_DIRECTORY "${pylon_candidate}")
-                    set(pylon_framework "${pylon_candidate}")
-                    break()
-                endif()
-            endforeach()
-        endif()
-        if(NOT pylon_framework)
+        # The same framework that supplied the headers and CMake targets at
+        # configure time supplies the staged runtime. There is no second search.
+        if("${camera_pylon_macos_framework}" STREQUAL ""
+           OR NOT IS_DIRECTORY "${camera_pylon_macos_framework}")
             message(FATAL_ERROR
-                "[Camera] CameraPlugin requires pylon.framework for macOS bundling. "
-                "Set PYLON_ROOT or install pylon.framework in /Library/Frameworks.")
+                "[Camera] CameraPlugin requires the macOS pylon SDK framework selected "
+                "at configure time. Set PYLON_ROOT or pylon_DIR to a complete framework "
+                "with Headers/ and pylon-targets.cmake, or install the SDK in "
+                "/Library/Frameworks.")
         endif()
+        set(pylon_framework "${camera_pylon_macos_framework}")
         get_filename_component(pylon_framework_parent "${pylon_framework}" DIRECTORY)
         list(APPEND search_paths "${pylon_framework_parent}")
         set(payload_dir "${CMAKE_CURRENT_BINARY_DIR}/plugin-runtime")

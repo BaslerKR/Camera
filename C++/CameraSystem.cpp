@@ -1,7 +1,43 @@
 #include "CameraSystem.h"
+#include "CameraDiscoveryDiagnostics.h"
 
 #include <algorithm>
 #include <stdexcept>
+
+namespace {
+
+/** @brief Reads the pylon version and loaded transport layers for the empty-list diagnostic. */
+class PylonDiscoveryEnvironment final : public CameraDiscoveryDiagnostics::Environment {
+public:
+    explicit PylonDiscoveryEnvironment(CTlFactory& factory) : _factory(factory) {}
+
+    std::string pylonVersion() const override
+    {
+        const char* version = Pylon::GetPylonVersionString();
+        return version ? version : "unknown";
+    }
+
+    std::vector<CameraDiscoveryDiagnostics::TransportLayer> transportLayers() const override
+    {
+        std::vector<CameraDiscoveryDiagnostics::TransportLayer> layers;
+        try {
+            TlInfoList_t infos;
+            _factory.EnumerateTls(infos);
+            for (const auto& info : infos) {
+                layers.push_back({std::string(info.GetFriendlyName().c_str()),
+                    std::string(info.GetVersion().c_str())});
+            }
+        } catch (const GenericException&) {
+            // The version alone still explains an empty discovery when TL enumeration fails.
+        }
+        return layers;
+    }
+
+private:
+    CTlFactory& _factory;
+};
+
+} // namespace
 
 CameraSystem::CameraSystem(){
     PylonInitialize();
@@ -38,6 +74,10 @@ void CameraSystem::updateCameraListLocked()
     _devices.clear();
     auto cnt = _tlFactory->EnumerateDevices(_devices);
     syslog("Updated the camera list: " + to_string(cnt) + " Camera(s) found.");
+    if(cnt == 0 && _tlFactory){
+        PylonDiscoveryEnvironment environment(*_tlFactory);
+        syslog(CameraDiscoveryDiagnostics::emptyDiscoveryMessage(environment), true);
+    }
     for(std::size_t i = 0; i < _devices.size(); ++i){
         syslog("-- " + std::string(_devices.at(i).GetFriendlyName()));
     }
