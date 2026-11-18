@@ -41,13 +41,6 @@ public:
     /** @brief Waits for a running initial scan, then copies its published target catalog. */
     std::vector<CameraDeviceDescriptor> deviceCatalogAfterInitialDiscovery(
         std::chrono::milliseconds waitLimit, const std::function<bool()>& cancellationRequested = {});
-    /** @brief Resolves a targeted open against the running startup scan before returning absence. */
-    std::vector<CameraDeviceDescriptor> deviceCatalogForTargetResolution(
-        std::chrono::milliseconds waitLimit, const std::function<bool()>& cancellationRequested = {});
-    /** @brief Returns whether the worker-owned initial scan is still active. */
-    bool initialDiscoveryRunning() const;
-    /** @brief Wakes target observers when their owning session is closing. */
-    void wakeInitialDiscoveryWaiters();
     bool isAccessible(const std::string &camera);
 
     CDeviceInfo getCameraInfo(const std::string &cameraName);

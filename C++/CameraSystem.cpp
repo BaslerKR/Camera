@@ -259,26 +259,6 @@ std::vector<CameraDeviceDescriptor> CameraSystem::deviceCatalogAfterInitialDisco
     return deviceCatalogLocked();
 }
 
-std::vector<CameraDeviceDescriptor> CameraSystem::deviceCatalogForTargetResolution(
-    std::chrono::milliseconds waitLimit, const std::function<bool()>& cancellationRequested)
-{
-    if (initialDiscoveryRunning()) {
-        return deviceCatalogAfterInitialDiscovery(waitLimit, cancellationRequested);
-    }
-    return deviceCatalog(false);
-}
-
-bool CameraSystem::initialDiscoveryRunning() const
-{
-    std::lock_guard<std::mutex> lock(_mutex);
-    return _initialDiscoveryRunning;
-}
-
-void CameraSystem::wakeInitialDiscoveryWaiters()
-{
-    _initialDiscoveryCondition.notify_all();
-}
-
 void CameraSystem::runInitialDiscovery(std::chrono::milliseconds discoveryWindow)
 {
     const auto deadline = std::chrono::steady_clock::now() + discoveryWindow;

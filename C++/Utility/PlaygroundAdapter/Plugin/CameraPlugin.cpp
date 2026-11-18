@@ -8,7 +8,6 @@
 #include <chrono>
 #include <memory>
 #include <mutex>
-#include <QThread>
 
 class CameraPluginTitleState final {
 public:
@@ -141,13 +140,8 @@ public:
                 if (errorMessage) *errorMessage = QStringLiteral("Camera plugin is shutting down.");
                 return false;
             }
-            system->deviceCatalogForTargetResolution(std::chrono::seconds{65}, [] {
-                const auto* current = QThread::currentThread();
-                return current && current->isInterruptionRequested();
-            });
-            // The first worker discovery sees the current snapshot; repeated calls resolve an
-            // in-flight scan above before targeted session resolution treats an ID as absent.
-            // Retained sessions wait on later target observations as well.
+            // Keep the package preflight prompt while a bounded startup scan publishes the
+            // catalog used by the session's first target observation.
             system->startInitialDiscovery(std::chrono::seconds{60});
             {
                 std::lock_guard<std::mutex> lock(_systemMutex);
