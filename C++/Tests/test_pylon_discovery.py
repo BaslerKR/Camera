@@ -93,9 +93,6 @@ def main():
                     (framework / "pylon-targets.cmake").write_text(package("framework"))
                     (framework / "genicam-targets.cmake").write_text("")
                     (framework / "pylon-config-version.cmake").write_text("set(PACKAGE_VERSION 8.0.0)\n")
-                if layout == "framework-realpath":
-                    (sdk / "Resources").mkdir(parents=True, exist_ok=True)
-                    (sdk / "Resources/CMake").symlink_to(framework, target_is_directory=True)
                 if layout != "framework-no-headers":
                     (sdk / "Headers").mkdir(parents=True)
                     (sdk / "Headers/PylonIncludes.h").touch()
