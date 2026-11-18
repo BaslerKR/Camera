@@ -47,6 +47,7 @@ def main():
         ("macos-version-numeric", "Darwin", "framework", "root", True),
         ("macos-framework-preloaded", "Darwin", "preloaded-framework", "default", True),
         ("macos-preloaded-hint-conflict", "Darwin", "preloaded-framework", "root", False),
+        ("macos-preloaded-unlocatable", "Darwin", "preloaded-unlocatable", "default", False),
         ("macos-conflicting-hints", "Darwin", "framework", "conflict", False),
         ("macos-hint-missing-headers", "Darwin", "framework-no-headers", "root", False),
         ("macos-hint-missing-targets", "Darwin", "framework-no-targets", "root", False),
@@ -56,6 +57,7 @@ def main():
     expected_errors = {
         "macos-conflicting-hints": "Conflicting pylon hints",
         "macos-preloaded-hint-conflict": "cannot use different frameworks",
+        "macos-preloaded-unlocatable": "no pylon framework can be derived",
         "macos-hint-missing-headers": "does not resolve to a complete pylon SDK framework",
         "macos-hint-missing-targets": "does not resolve to a complete pylon SDK framework",
         "macos-hint-unresolved": "does not resolve to a complete pylon SDK framework",
@@ -130,7 +132,8 @@ def main():
                           'message(FATAL_ERROR "Unselected default SDK overwrote library paths")\nendif()\n')
             source = root / "source"
             source.mkdir()
-            preload = package("preloaded") if layout in ("preloaded", "preloaded-framework") else ""
+            preload = (package("preloaded") if layout in
+                       ("preloaded", "preloaded-framework", "preloaded-unlocatable") else "")
             if layout == "preloaded-framework":
                 imported = sdk / "Versions/A/Libraries/libpylonbase.8.0.0.dylib"
                 preload += ('add_library(pylon::PylonBase SHARED IMPORTED)\n'
@@ -202,13 +205,15 @@ def main():
                     name, 'Could not find a package configuration file provided by "pylon"')
                 if expected_error not in log:
                     raise RuntimeError(f"{name}: failure did not identify the rejected SDK\n{log}")
+                if name == "macos-preloaded-unlocatable" and "macOS pylon framework:" in log:
+                    raise RuntimeError(f"{name}: fell back to a system framework\n{log}")
             if success and system == "Darwin":
                 expected_version = "10.0.0" if name == "macos-version-numeric" else "8.0.0"
                 if f"macOS pylonbase version: {expected_version}" not in log:
                     raise RuntimeError(f"{name}: configure did not report the selected SDK\n{log}")
                 framework_line = next((line.strip() for line in log.splitlines()
                                        if "macOS pylon framework:" in line), "")
-                expected_line = f"-- [Camera] macOS pylon framework: {sdk}"
+                expected_line = f"-- [Camera] macOS pylon framework: {sdk.as_posix()}"
                 if framework_line != expected_line:
                     raise RuntimeError(
                         f"{name}: wrong framework selected\n"

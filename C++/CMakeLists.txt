@@ -170,8 +170,7 @@ if(APPLE)
         message(FATAL_ERROR
             "[${PROJECT_NAME}] pylon_FOUND is set but no pylon framework can be derived "
             "from the provided target, so linking and staging could use different SDKs. "
-            "Provide a located pylon target or an explicit hint (pylon_cmake, pylon_ROOT, "
-            "pylon_DIR, PYLON_ROOT or PYLON_DIR).")
+            "Provide a located pylon target or let Camera discover pylon itself.")
     endif()
 
     set(camera_pylon_macos_framework "")
