@@ -1017,19 +1017,24 @@ DeviceConnectionResult CameraSourceController::scheduleConnectionWork(std::funct
     return {connectionError(admitted.error), admitted.message};
 }
 
-DeviceConnectionResult CameraSourceController::catalogWork(bool refresh, TargetsCompletion completion) {
+DeviceConnectionResult CameraSourceController::catalogWork(bool refresh, TargetsCompletion completion,
+    bool waitForInitialDiscovery) {
     Q_ASSERT(QThread::currentThread() == thread());
     if (!completion) return {DeviceConnectionError::InvalidArgument, "Missing completion callback."};
     if (!_camera) return {DeviceConnectionError::Unavailable, "Camera controller is unavailable."};
-    const auto admitted = scheduleParameterWork([this, refresh, completion = std::move(completion)] {
+    const auto admitted = scheduleParameterWork([this, refresh, waitForInitialDiscovery,
+        completion = std::move(completion)] {
         DeviceConnectionTargets copied;
         try {
             QStringList labels;
-            for (const auto& item : _camera->deviceCatalog(refresh)) {
+            const auto catalog = waitForInitialDiscovery && !refresh
+                ? _camera->deviceCatalogAfterInitialDiscovery(std::chrono::seconds{65})
+                : _camera->deviceCatalog(refresh);
+            for (const auto& item : catalog) {
                 copied.targets.push_back({item.id, item.displayName, {}});
                 labels.append(QString::fromStdString(item.displayName));
             }
-            if (refresh) emit deviceCatalogChanged(labels);
+            if (refresh || waitForInitialDiscovery) emit deviceCatalogChanged(labels);
         } catch (const std::exception& error) {
             copied = {{DeviceConnectionError::BackendFailure, error.what()}, {}};
         } catch (...) {
@@ -1042,11 +1047,17 @@ DeviceConnectionResult CameraSourceController::catalogWork(bool refresh, Targets
 }
 
 DeviceConnectionResult CameraSourceController::requestConnectionTargets(TargetsCompletion completion) {
-    return catalogWork(false, std::move(completion));
+    bool waitForInitialDiscovery = false;
+    if (_initialTargetsPolicy == InitialTargetsPolicy::WorkerPreflightThenWait) {
+        _initialTargetsPolicy = InitialTargetsPolicy::WaitForInitialDiscovery;
+    } else if (_initialTargetsPolicy == InitialTargetsPolicy::WaitForInitialDiscovery) {
+        waitForInitialDiscovery = true;
+    }
+    return catalogWork(false, std::move(completion), waitForInitialDiscovery);
 }
 
 DeviceConnectionResult CameraSourceController::requestDiscover(TargetsCompletion completion) {
-    return catalogWork(true, std::move(completion));
+    return catalogWork(true, std::move(completion), false);
 }
 
 DeviceConnectionResult CameraSourceController::requestConnectionState(IDeviceConnectionControl::Completion completion) {

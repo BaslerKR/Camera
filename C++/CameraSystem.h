@@ -13,9 +13,12 @@
 #include "Camera.h"
 
 #include <chrono>
+#include <atomic>
 #include <cstddef>
+#include <condition_variable>
 #include <functional>
 #include <mutex>
+#include <thread>
 
 using namespace Pylon;
 using namespace std;
@@ -33,9 +36,11 @@ public:
     std::vector<std::string> getCachedCameraList() const;
     /** @brief Copies cached identities, optionally refreshing them through the discovery authority. */
     std::vector<CameraDeviceDescriptor> deviceCatalog(bool refresh);
-    /** @brief Keeps startup discovery pending until its first device appears or the wait expires. */
-    std::vector<CameraDeviceDescriptor> discoverInitialCatalog(
-        std::chrono::milliseconds firstDeviceWait, const std::function<bool()>& interrupted = {});
+    /** @brief Starts the one bounded worker startup scan without waiting for network discovery. */
+    void startInitialDiscovery(std::chrono::milliseconds discoveryWindow);
+    /** @brief Waits for a running initial scan, then copies its published target catalog. */
+    std::vector<CameraDeviceDescriptor> deviceCatalogAfterInitialDiscovery(
+        std::chrono::milliseconds waitLimit);
     bool isAccessible(const std::string &camera);
 
     CDeviceInfo getCameraInfo(const std::string &cameraName);
@@ -48,7 +53,9 @@ public:
     static void syslog(const std::string &message, bool warning=false);
 
 private:
-    void updateCameraListLocked(bool report = true);
+    void updateCameraListImpl(bool report = true);
+    void runInitialDiscovery(std::chrono::milliseconds discoveryWindow);
+    void stopInitialDiscovery();
     std::vector<CameraDeviceDescriptor> deviceCatalogLocked() const;
 
     DeviceEnumerator _deviceEnumerator;
@@ -57,6 +64,16 @@ private:
     std::vector<Camera*> _cameraList;
     std::size_t _nextCameraNumber = 0;
     mutable std::mutex _mutex;
+    std::mutex _enumerationMutex;
+    std::condition_variable _initialDiscoveryCondition;
+    bool _initialDiscoveryRunning = false;
+    std::string _initialDiscoveryError;
+    std::mutex _discoveryLifecycleMutex;
+    std::thread _initialDiscoveryThread;
+    bool _initialDiscoveryStarted = false;
+    std::atomic<bool> _stopInitialDiscoveryRequested{false};
+    std::mutex _discoveryStopMutex;
+    std::condition_variable _discoveryStopCondition;
 };
 
 

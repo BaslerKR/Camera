@@ -1,6 +1,6 @@
 ## Unreleased
 
-- Keep Camera's initial worker discovery active for up to twenty-five seconds while it waits for a first GigE or other transport target. Session preflight finishes that scan before creating the session, so the first `device.targets` read receives a target published during startup without a separate `device.discover` call; later sessions reuse the catalog until explicit discovery refreshes it.
+- Keep Camera's initial worker discovery active in a bounded background scan for up to sixty seconds, stopping early when a target appears. The worker's discovery preflight returns its current snapshot promptly, while target observations on the retained session wait until startup discovery publishes a target or completes; the caller's first `device.targets` read therefore needs no separate `device.discover` call. Later sessions reuse the catalog until explicit discovery refreshes it.
 
 - Select one complete macOS pylon SDK framework from `/Library/Frameworks`, a located already-provided pylon target, or any explicit CMake/environment hint, require both headers and `pylon-targets.cmake` in that tree, resolve bundle-internal paths to the framework root, and stage the same framework at runtime; an unlocatable target or an unresolved, conflicting, or target-disagreeing hint now fails configure with the paths instead of silently falling back. Zero-device discovery logs the pylon version and loaded transport layers, marking the layer list unavailable when its enumeration fails.
 

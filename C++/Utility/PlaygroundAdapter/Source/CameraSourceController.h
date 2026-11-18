@@ -31,9 +31,10 @@ public:
     using Completion = IDeviceParameterControl::Completion;
     using ChangeListener = IDeviceParameterControl::ChangeListener;
     using TargetsCompletion = IDeviceConnectionControl::TargetsCompletion;
+    enum class InitialTargetsPolicy { Cached, WaitForInitialDiscovery, WorkerPreflightThenWait };
     CameraSourceController(Camera* camera, IDevicePluginResourceClaims* claims = nullptr,
         std::shared_ptr<IDevicePluginResourceClaim>* claim = nullptr,
-        QObject* parent = nullptr);
+        QObject* parent = nullptr, InitialTargetsPolicy initialTargetsPolicy = InitialTargetsPolicy::Cached);
     ~CameraSourceController() override;
 
     /** @brief Copies producer counters used by the device statusbar. */
@@ -123,7 +124,8 @@ private:
     /** @brief Runs lifecycle work on the same bounded workers and delivers it exactly once. */
     DeviceConnectionResult scheduleConnectionWork(std::function<DeviceConnectionResult()> work,
         IDeviceConnectionControl::Completion completion);
-    DeviceConnectionResult catalogWork(bool refresh, TargetsCompletion completion);
+    DeviceConnectionResult catalogWork(bool refresh, TargetsCompletion completion,
+        bool waitForInitialDiscovery);
     DeviceConnectionResult connectionOutcome(CameraConnectionOutcome outcome, const CameraConnectionState& state) const;
     /** @brief Records an applied mode change in the log and structured diagnostics. */
     void reportAcquisitionStart(const CameraAcquisitionStart& start, const char* action);
@@ -168,6 +170,7 @@ private:
     Camera::CallbackId _nodeCallbackId = 0;
 
     Camera* _camera;
+    InitialTargetsPolicy _initialTargetsPolicy = InitialTargetsPolicy::Cached;
     IDevicePluginResourceClaims* _claims = nullptr;
     std::shared_ptr<IDevicePluginResourceClaim>* _claim = nullptr;
     QString _claimKey;

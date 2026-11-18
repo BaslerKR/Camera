@@ -12,6 +12,7 @@
 #include <pylon/PylonIncludes.h>
 #include <pylon/BaslerUniversalInstantCamera.h>
 #include "PylonScene3DProfile.h"
+#include <chrono>
 #include <thread>
 #include <atomic>
 #include <cstdint>
@@ -90,6 +91,9 @@ public:
     std::string getConnectedCameraName() const;
     /** @brief Copies the cached targets, or refreshes the catalog when requested. */
     std::vector<CameraDeviceDescriptor> deviceCatalog(bool refresh) const;
+    /** @brief Waits for a running startup scan before copying its first published targets. */
+    std::vector<CameraDeviceDescriptor> deviceCatalogAfterInitialDiscovery(
+        std::chrono::milliseconds waitLimit) const;
     /** @brief Copies the device serial for one exact target, or an empty string when absent. */
     std::string deviceSerialNumber(const std::string& deviceId) const;
     /** @brief Copies logical connection state and its reconnect generation. */

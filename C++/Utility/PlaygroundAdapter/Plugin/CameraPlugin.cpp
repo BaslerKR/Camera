@@ -4,8 +4,6 @@
 #include "CameraSystem.h"
 #include "CameraSourceController.h"
 
-#include <QThread>
-
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -64,9 +62,11 @@ public:
     CameraPluginSession(
         std::shared_ptr<CameraSystem> system,
         Camera* camera,
-        IDevicePluginResourceClaims* claims)
+        IDevicePluginResourceClaims* claims,
+        CameraSourceController::InitialTargetsPolicy initialTargetsPolicy)
         : _system(std::move(system)), _camera(camera),
-          _controller(std::make_unique<CameraSourceController>(_camera, claims, &_claim))
+          _controller(std::make_unique<CameraSourceController>(
+              _camera, claims, &_claim, nullptr, initialTargetsPolicy))
     {
         std::weak_ptr<CameraPluginTitleState> titleState = _titleState;
         Camera* const cameraForCallback = _camera;
@@ -140,13 +140,16 @@ public:
                 if (errorMessage) *errorMessage = QStringLiteral("Camera plugin is shutting down.");
                 return false;
             }
-            // Keep startup discovery active while a slower transport publishes its first device.
-            (void)system->discoverInitialCatalog(std::chrono::seconds{25}, [] {
-                return QThread::currentThread()->isInterruptionRequested();
-            });
-            if (QThread::currentThread()->isInterruptionRequested()) {
-                if (errorMessage) *errorMessage = QStringLiteral("Camera discovery was cancelled.");
-                return false;
+            // Keep startup discovery active while returning the worker's preflight catalog quickly.
+            // The retained controller waits on later target observations until this scan publishes.
+            system->startInitialDiscovery(std::chrono::seconds{60});
+            {
+                std::lock_guard<std::mutex> lock(_systemMutex);
+                if (_shuttingDown) {
+                    if (errorMessage) *errorMessage = QStringLiteral("Camera discovery was cancelled.");
+                    return false;
+                }
+                _discoverySessionPending = true;
             }
             return true;
         } catch (const std::exception& error) {
@@ -168,13 +171,22 @@ public:
                 if (errorMessage) *errorMessage = QStringLiteral("Camera plugin is shutting down.");
                 return {};
             }
+            bool firstTargetsRequestIsWorkerSnapshot = false;
+            {
+                std::lock_guard<std::mutex> lock(_systemMutex);
+                firstTargetsRequestIsWorkerSnapshot = _discoverySessionPending;
+                _discoverySessionPending = false;
+            }
+            const auto initialTargetsPolicy = firstTargetsRequestIsWorkerSnapshot
+                ? CameraSourceController::InitialTargetsPolicy::WorkerPreflightThenWait
+                : CameraSourceController::InitialTargetsPolicy::WaitForInitialDiscovery;
             Camera* camera = system->addCamera();
             if (!camera) {
                 if (errorMessage) *errorMessage = QStringLiteral("No Basler camera was detected.");
                 return {};
             }
             return std::make_unique<CameraPluginSession>(system, camera,
-                _claims.load(std::memory_order_acquire));
+                _claims.load(std::memory_order_acquire), initialTargetsPolicy);
         } catch (const std::exception& error) {
             if (errorMessage) *errorMessage = QString::fromLocal8Bit(error.what());
             return {};
@@ -193,6 +205,7 @@ public:
         {
             std::lock_guard<std::mutex> lock(_systemMutex);
             _shuttingDown = true;
+            _discoverySessionPending = false;
             system = std::move(_system);
         }
     }
@@ -210,6 +223,7 @@ private:
 
     std::mutex _systemMutex;
     std::shared_ptr<CameraSystem> _system;
+    bool _discoverySessionPending = false;
     std::atomic<IDevicePluginResourceClaims*> _claims{nullptr};
     bool _shuttingDown = false;
 };

@@ -16,8 +16,9 @@
 Q_LOGGING_CATEGORY(cameraSourceDiagnosticLog, "diagnostics.Camera", QtInfoMsg)
 
 CameraSourceController::CameraSourceController(Camera* camera, IDevicePluginResourceClaims* claims,
-    std::shared_ptr<IDevicePluginResourceClaim>* claim, QObject* parent)
-    : AbstractSourceController(parent), _camera(camera), _claims(claims), _claim(claim) {
+    std::shared_ptr<IDevicePluginResourceClaim>* claim, QObject* parent, InitialTargetsPolicy initialTargetsPolicy)
+    : AbstractSourceController(parent), _camera(camera), _initialTargetsPolicy(initialTargetsPolicy),
+      _claims(claims), _claim(claim) {
     _parameterInstance = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
     registerCallbacks();
     startChangeWorker();

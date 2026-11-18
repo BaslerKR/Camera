@@ -56,6 +56,7 @@ CameraSystem::CameraSystem(DeviceEnumerator deviceEnumerator)
 }
 
 CameraSystem::~CameraSystem(){
+    stopInitialDiscovery();
     while(true){
         Camera* camera = nullptr;
         {
@@ -80,29 +81,50 @@ CameraSystem::~CameraSystem(){
     }
 }
 
-void CameraSystem::updateCameraListLocked(bool report)
+void CameraSystem::updateCameraListImpl(bool report)
 {
-    _devices.clear();
+    DeviceInfoList_t updated;
     std::size_t count = 0;
-    if (_deviceEnumerator) {
-        _deviceEnumerator(_devices);
-        count = _devices.size();
-    } else {
-        count = _tlFactory->EnumerateDevices(_devices);
+    std::vector<std::string> friendlyNames;
+    std::unique_lock<std::mutex> enumerationLock(_enumerationMutex);
+    try {
+        if (_deviceEnumerator) {
+            _deviceEnumerator(updated);
+            count = updated.size();
+        } else {
+            count = _tlFactory->EnumerateDevices(updated);
+        }
+    } catch (...) {
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            _devices.clear();
+        }
+        _initialDiscoveryCondition.notify_all();
+        throw;
     }
+    if (report) {
+        friendlyNames.reserve(updated.size());
+        for (const auto& device : updated) {
+            friendlyNames.emplace_back(device.GetFriendlyName().c_str());
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _devices.clear();
+        for (const auto& device : updated) _devices.push_back(device);
+    }
+    _initialDiscoveryCondition.notify_all();
     if (report) {
         syslog("Updated the camera list: " + to_string(count) + " Camera(s) found.");
         if (count == 0 && !_deviceEnumerator && _tlFactory) reportEmptyDiscovery(*_tlFactory);
-        for(std::size_t i = 0; i < _devices.size(); ++i){
-            syslog("-- " + std::string(_devices.at(i).GetFriendlyName()));
-        }
+        for (const auto& name : friendlyNames) syslog("-- " + name);
     }
+    enumerationLock.unlock();
 }
 
 void CameraSystem::updateCameraList(){
     try{
-        std::lock_guard<std::mutex> lock(_mutex);
-        updateCameraListLocked();
+        updateCameraListImpl();
     }catch(const GenericException &e){
         syslog(e.what(), true);
     }catch(const std::exception &e){
@@ -115,8 +137,8 @@ void CameraSystem::updateCameraList(){
 std::vector<string> CameraSystem::getCameraList() {
     std::vector<std::string> list;
     try{
+        updateCameraList();
         std::lock_guard<std::mutex> lock(_mutex);
-        updateCameraListLocked();
         for(auto &cur : _devices)
             list.emplace_back(cur.GetFriendlyName().c_str());
     }catch(const GenericException &e) {
@@ -146,30 +168,127 @@ std::vector<string> CameraSystem::getCachedCameraList() const {
 }
 
 std::vector<CameraDeviceDescriptor> CameraSystem::deviceCatalog(bool refresh) {
+    if (refresh) updateCameraListImpl();
     std::lock_guard<std::mutex> lock(_mutex);
-    if (refresh) updateCameraListLocked();
+    if (refresh && !_initialDiscoveryRunning) _initialDiscoveryError.clear();
     return deviceCatalogLocked();
 }
 
-std::vector<CameraDeviceDescriptor> CameraSystem::discoverInitialCatalog(
-    std::chrono::milliseconds firstDeviceWait, const std::function<bool()>& interrupted) {
-    std::lock_guard<std::mutex> lock(_mutex);
-    const auto deadline = std::chrono::steady_clock::now() + firstDeviceWait;
+void CameraSystem::startInitialDiscovery(std::chrono::milliseconds discoveryWindow)
+{
+    std::lock_guard<std::mutex> lifecycleLock(_discoveryLifecycleMutex);
+    if (_initialDiscoveryStarted) return;
+    _initialDiscoveryStarted = true;
+    _stopInitialDiscoveryRequested.store(false, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _initialDiscoveryError.clear();
+        _initialDiscoveryRunning = true;
+    }
+    try {
+        _initialDiscoveryThread = std::thread([this, discoveryWindow] {
+            runInitialDiscovery(discoveryWindow);
+        });
+    } catch (...) {
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            _initialDiscoveryRunning = false;
+            _initialDiscoveryError = "The Camera startup discovery thread could not be started.";
+        }
+        _initialDiscoveryStarted = false;
+        _initialDiscoveryCondition.notify_all();
+        throw;
+    }
+}
+
+std::vector<CameraDeviceDescriptor> CameraSystem::deviceCatalogAfterInitialDiscovery(
+    std::chrono::milliseconds waitLimit)
+{
+    std::unique_lock<std::mutex> lock(_mutex);
+    if (_initialDiscoveryRunning) {
+        const bool ready = _initialDiscoveryCondition.wait_for(lock, waitLimit, [this] {
+            return !_devices.empty() || !_initialDiscoveryRunning;
+        });
+        if (!ready) {
+            throw std::runtime_error("Camera startup discovery is still running; target observation timed out.");
+        }
+    }
+    if (!_initialDiscoveryError.empty()) {
+        throw std::runtime_error(_initialDiscoveryError);
+    }
+    return deviceCatalogLocked();
+}
+
+void CameraSystem::runInitialDiscovery(std::chrono::milliseconds discoveryWindow)
+{
+    const auto deadline = std::chrono::steady_clock::now() + discoveryWindow;
     const auto retryInterval = std::chrono::milliseconds{1000};
+    std::size_t attempts = 0;
+    std::string error;
+    bool cancelled = false;
     for (;;) {
-        if (interrupted && interrupted()) break;
-        updateCameraListLocked(false);
-        if (!_devices.empty() || (interrupted && interrupted())) break;
+        if (_stopInitialDiscoveryRequested.load(std::memory_order_acquire)) {
+            cancelled = true;
+            break;
+        }
+        try {
+            updateCameraListImpl(false);
+            ++attempts;
+        } catch (const GenericException& exception) {
+            error = exception.GetDescription();
+            break;
+        } catch (const std::exception& exception) {
+            error = exception.what();
+            break;
+        } catch (...) {
+            error = "Unknown exception during Camera startup discovery.";
+            break;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            if (!_devices.empty()) break;
+        }
 
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
             deadline - std::chrono::steady_clock::now());
         if (remaining <= std::chrono::milliseconds::zero()) break;
-        std::this_thread::sleep_for(std::min(remaining, retryInterval));
+        std::unique_lock<std::mutex> stopLock(_discoveryStopMutex);
+        _discoveryStopCondition.wait_for(stopLock, std::min(remaining, retryInterval), [this] {
+            return _stopInitialDiscoveryRequested.load(std::memory_order_acquire);
+        });
     }
-    syslog("Completed initial camera discovery with " + to_string(_devices.size()) + " Camera(s).");
-    if (_devices.empty() && !_deviceEnumerator && _tlFactory) reportEmptyDiscovery(*_tlFactory);
-    for (const auto& device : _devices) syslog("-- " + std::string(device.GetFriendlyName()));
-    return deviceCatalogLocked();
+
+    std::vector<CameraDeviceDescriptor> targets;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _initialDiscoveryError = error;
+        _initialDiscoveryRunning = false;
+        targets = deviceCatalogLocked();
+    }
+    _initialDiscoveryCondition.notify_all();
+    if (!error.empty()) {
+        syslog("Initial Camera discovery failed: " + error, true);
+    } else {
+        syslog("Completed initial Camera discovery after " + to_string(attempts)
+            + " attempt(s) with " + to_string(targets.size()) + " Camera(s).");
+        if (targets.empty() && !cancelled && !_deviceEnumerator && _tlFactory) {
+            reportEmptyDiscovery(*_tlFactory);
+        }
+        for (const auto& target : targets) syslog("-- " + target.displayName);
+    }
+}
+
+void CameraSystem::stopInitialDiscovery()
+{
+    std::thread thread;
+    {
+        std::lock_guard<std::mutex> lifecycleLock(_discoveryLifecycleMutex);
+        _stopInitialDiscoveryRequested.store(true, std::memory_order_release);
+        if (_initialDiscoveryThread.joinable()) thread = std::move(_initialDiscoveryThread);
+    }
+    _discoveryStopCondition.notify_all();
+    if (thread.joinable()) thread.join();
 }
 
 std::vector<CameraDeviceDescriptor> CameraSystem::deviceCatalogLocked() const {
@@ -183,8 +302,8 @@ std::vector<CameraDeviceDescriptor> CameraSystem::deviceCatalogLocked() const {
 
 bool CameraSystem::isAccessible(const string &camera){
     try{
+        updateCameraListImpl();
         std::lock_guard<std::mutex> lock(_mutex);
-        updateCameraListLocked();
         for(const auto& device : _devices){
             if(camera == device.GetFriendlyName().c_str()){
                 return _tlFactory->IsDeviceAccessible(device);
@@ -202,8 +321,8 @@ bool CameraSystem::isAccessible(const string &camera){
 
 CDeviceInfo CameraSystem::getCameraInfo(const string &cameraName) {
     try{
+        updateCameraListImpl();
         std::lock_guard<std::mutex> lock(_mutex);
-        updateCameraListLocked();
         syslog("Searching for the device information of " + cameraName + "...");
         for(auto &cur:_devices){
             if(cameraName == cur.GetFriendlyName().c_str()){
