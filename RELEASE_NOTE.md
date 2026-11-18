@@ -1,6 +1,7 @@
 ## Unreleased
 
 - Keep Camera's initial worker discovery active for up to twenty seconds while it waits for a first GigE or other transport target. The first `device.targets` read waits for the published catalog without a separate `device.discover` call; later sessions reuse it until explicit discovery refreshes it.
+- Ship the package icon from this repository (`C++/Utility/PlaygroundAdapter/Package/icon.png`) instead of the SDK-installed Resources brand asset. Include `DeviceRuntime/Contract/DevicePluginSession.h` from the contract include root; the SDK no longer installs a `PlaygroundWidget` header path or vendor icons.
 
 - Drop the device widget ABI and the QVariantMap discovery hand-back. `IDevicePluginSession` no longer implements `createDockWidgets()`, and `discoverDevices()`/`createSession()` no longer pass discovery data through a `QVariantMap`; discovery and session creation now take only an error message.
 
