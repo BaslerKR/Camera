@@ -1,6 +1,6 @@
 ## Unreleased
 
-- Populate the Camera worker's shared target catalog during initial discovery, so its first connection list is available without a separate `device.discover` call; later sessions reuse that catalog until it is refreshed.
+- Keep Camera's initial worker discovery active for up to ten seconds while it waits for a first GigE or other transport target. The first `device.targets` read waits for the published catalog without a separate `device.discover` call; later sessions reuse it until explicit discovery refreshes it.
 
 - Drop the device widget ABI and the QVariantMap discovery hand-back. `IDevicePluginSession` no longer implements `createDockWidgets()`, and `discoverDevices()`/`createSession()` no longer pass discovery data through a `QVariantMap`; discovery and session creation now take only an error message.
 

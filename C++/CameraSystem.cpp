@@ -1,9 +1,14 @@
 #include "CameraSystem.h"
 
 #include <algorithm>
+#include <chrono>
 #include <stdexcept>
+#include <thread>
 
-CameraSystem::CameraSystem(){
+CameraSystem::CameraSystem() : CameraSystem(DeviceEnumerator{}) {}
+
+CameraSystem::CameraSystem(DeviceEnumerator deviceEnumerator)
+    : _deviceEnumerator(std::move(deviceEnumerator)){
     PylonInitialize();
     _tlFactory = &CTlFactory::GetInstance();
 }
@@ -33,13 +38,21 @@ CameraSystem::~CameraSystem(){
     }
 }
 
-void CameraSystem::updateCameraListLocked()
+void CameraSystem::updateCameraListLocked(bool report)
 {
     _devices.clear();
-    auto cnt = _tlFactory->EnumerateDevices(_devices);
-    syslog("Updated the camera list: " + to_string(cnt) + " Camera(s) found.");
-    for(std::size_t i = 0; i < _devices.size(); ++i){
-        syslog("-- " + std::string(_devices.at(i).GetFriendlyName()));
+    std::size_t count = 0;
+    if (_deviceEnumerator) {
+        _deviceEnumerator(_devices);
+        count = _devices.size();
+    } else {
+        count = _tlFactory->EnumerateDevices(_devices);
+    }
+    if (report) {
+        syslog("Updated the camera list: " + to_string(count) + " Camera(s) found.");
+        for(std::size_t i = 0; i < _devices.size(); ++i){
+            syslog("-- " + std::string(_devices.at(i).GetFriendlyName()));
+        }
     }
 }
 
@@ -92,6 +105,30 @@ std::vector<string> CameraSystem::getCachedCameraList() const {
 std::vector<CameraDeviceDescriptor> CameraSystem::deviceCatalog(bool refresh) {
     std::lock_guard<std::mutex> lock(_mutex);
     if (refresh) updateCameraListLocked();
+    return deviceCatalogLocked();
+}
+
+std::vector<CameraDeviceDescriptor> CameraSystem::discoverInitialCatalog(
+    std::chrono::milliseconds firstDeviceWait, const std::function<bool()>& interrupted) {
+    std::lock_guard<std::mutex> lock(_mutex);
+    const auto deadline = std::chrono::steady_clock::now() + firstDeviceWait;
+    const auto retryInterval = std::chrono::milliseconds{250};
+    for (;;) {
+        if (interrupted && interrupted()) break;
+        updateCameraListLocked(false);
+        if (!_devices.empty() || (interrupted && interrupted())) break;
+
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now());
+        if (remaining <= std::chrono::milliseconds::zero()) break;
+        std::this_thread::sleep_for(std::min(remaining, retryInterval));
+    }
+    syslog("Completed initial camera discovery with " + to_string(_devices.size()) + " Camera(s).");
+    for (const auto& device : _devices) syslog("-- " + std::string(device.GetFriendlyName()));
+    return deviceCatalogLocked();
+}
+
+std::vector<CameraDeviceDescriptor> CameraSystem::deviceCatalogLocked() const {
     std::vector<CameraDeviceDescriptor> result;
     for (const auto& device : _devices) {
         result.push_back({device.GetFullName().c_str(), device.GetFriendlyName().c_str(),

@@ -4,7 +4,10 @@
 #include "CameraSystem.h"
 #include "CameraSourceController.h"
 
+#include <QThread>
+
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <mutex>
 
@@ -137,9 +140,14 @@ public:
                 if (errorMessage) *errorMessage = QStringLiteral("Camera plugin is shutting down.");
                 return false;
             }
-            // Populate the shared catalog before the worker reads targets; target observation
-            // itself remains a cache copy, and device.discover owns later refreshes.
-            (void)system->deviceCatalog(true);
+            // Keep startup discovery active while a slower transport publishes its first device.
+            (void)system->discoverInitialCatalog(std::chrono::seconds{10}, [] {
+                return QThread::currentThread()->isInterruptionRequested();
+            });
+            if (QThread::currentThread()->isInterruptionRequested()) {
+                if (errorMessage) *errorMessage = QStringLiteral("Camera discovery was cancelled.");
+                return false;
+            }
             return true;
         } catch (const std::exception& error) {
             if (errorMessage) *errorMessage = QString::fromLocal8Bit(error.what());

@@ -12,7 +12,9 @@
 #include <pylon/PylonIncludes.h>
 #include "Camera.h"
 
+#include <chrono>
 #include <cstddef>
+#include <functional>
 #include <mutex>
 
 using namespace Pylon;
@@ -20,7 +22,10 @@ using namespace std;
 
 class CameraSystem{
 public:
+    using DeviceEnumerator = std::function<void(DeviceInfoList_t&)>;
+
     CameraSystem();
+    explicit CameraSystem(DeviceEnumerator deviceEnumerator);
     ~CameraSystem();
 
     void updateCameraList();
@@ -28,6 +33,9 @@ public:
     std::vector<std::string> getCachedCameraList() const;
     /** @brief Copies cached identities, optionally refreshing them through the discovery authority. */
     std::vector<CameraDeviceDescriptor> deviceCatalog(bool refresh);
+    /** @brief Keeps startup discovery pending until its first device appears or the wait expires. */
+    std::vector<CameraDeviceDescriptor> discoverInitialCatalog(
+        std::chrono::milliseconds firstDeviceWait, const std::function<bool()>& interrupted = {});
     bool isAccessible(const std::string &camera);
 
     CDeviceInfo getCameraInfo(const std::string &cameraName);
@@ -40,8 +48,10 @@ public:
     static void syslog(const std::string &message, bool warning=false);
 
 private:
-    void updateCameraListLocked();
+    void updateCameraListLocked(bool report = true);
+    std::vector<CameraDeviceDescriptor> deviceCatalogLocked() const;
 
+    DeviceEnumerator _deviceEnumerator;
     CTlFactory *_tlFactory = nullptr;
     DeviceInfoList_t _devices;
     std::vector<Camera*> _cameraList;

@@ -406,6 +406,68 @@ private slots:
             return target.targetId == expectedEmulatorId;
         }) != refreshed.targets.end());
     }
+    void firstTargetsRequestWaitsForDelayedStartupDiscovery() {
+        std::promise<void> delayedEnumerationStarted;
+        auto delayedStarted = delayedEnumerationStarted.get_future();
+        std::promise<void> releaseEnumeration;
+        auto release = releaseEnumeration.get_future().share();
+        std::atomic<int> enumerationCalls{0};
+        const std::string targetId = "BaslerGigE#12345678#192.0.2.50:3956";
+        CameraSystem system([&](DeviceInfoList_t& devices) {
+            const int call = enumerationCalls.fetch_add(1);
+            if (call == 0) return;
+            if (call == 1) {
+                delayedEnumerationStarted.set_value();
+                release.wait();
+            }
+            Pylon::CDeviceInfo device;
+            device.SetDeviceClass("BaslerGigE");
+            device.SetSerialNumber("12345678");
+            device.SetFriendlyName("Basler GigE (delayed)");
+            device.SetFullName(targetId.c_str());
+            devices.push_back(device);
+        });
+        auto* camera = system.addCamera(); QVERIFY(camera);
+        CameraSourceController controller(camera);
+        auto* connection = qobject_cast<IDeviceConnectionControl*>(&controller); QVERIFY(connection);
+
+        std::thread discovery([&system] {
+            (void)system.discoverInitialCatalog(std::chrono::seconds{2});
+        });
+        const bool discoveryPending = delayedStarted.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+        if (!discoveryPending) {
+            releaseEnumeration.set_value();
+            discovery.join();
+            QFAIL("Startup discovery did not reach the delayed fake transport enumeration.");
+        }
+
+        auto targetsPromise = std::make_shared<std::promise<DeviceConnectionTargets>>();
+        auto targetsFuture = targetsPromise->get_future();
+        const auto admission = connection->requestConnectionTargets(
+            [targetsPromise](DeviceConnectionTargets targets) {
+                targetsPromise->set_value(std::move(targets));
+            });
+        if (admission.error != DeviceConnectionError::None) {
+            releaseEnumeration.set_value();
+            discovery.join();
+            QCOMPARE(admission.error, DeviceConnectionError::None);
+            return;
+        }
+
+        const bool returnedWhileDiscoveryPending =
+            targetsFuture.wait_for(std::chrono::milliseconds(100)) == std::future_status::ready;
+        releaseEnumeration.set_value();
+        const bool completed = targetsFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+        discovery.join();
+        QVERIFY(!returnedWhileDiscoveryPending);
+        QVERIFY(completed);
+        QCOMPARE(enumerationCalls.load(), 2);
+        const auto targets = targetsFuture.get();
+        QCOMPARE(targets.result.error, DeviceConnectionError::None);
+        QCOMPARE(targets.targets.size(), std::size_t(1));
+        QCOMPARE(targets.targets.front().targetId, targetId);
+        QCOMPARE(targets.targets.front().displayName, std::string("Basler GigE (delayed)"));
+    }
     void connectionCapabilityRejectsMalformedCallsAndCompletesExactlyOnce() {
         auto* camera = _system->addCamera(); QVERIFY(camera);
         auto controller = std::make_unique<CameraSourceController>(camera);
