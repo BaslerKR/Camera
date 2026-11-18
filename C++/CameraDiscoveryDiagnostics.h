@@ -30,9 +30,16 @@ struct NetworkInterface {
     std::string address;
 };
 
+/** @brief The interface query result and the addresses it produced. */
+struct InterfaceSnapshot {
+    bool available = true;
+    std::vector<NetworkInterface> interfaces;
+};
+
 /**
  * @brief Supplies the pylon state observed at discovery time.
- * @note The camera module wraps CTlFactory here; tests supply a fixed fake.
+ * @note The camera module wraps CTlFactory and the OS interface query here;
+ *       tests supply a fixed fake.
  */
 class Environment {
 public:
@@ -40,21 +47,24 @@ public:
     virtual std::string pylonVersion() const = 0;
     /** @brief Queries once; an unavailable result means the query itself failed. */
     virtual TransportLayerSnapshot transportLayers() const = 0;
-    virtual std::vector<NetworkInterface> localInterfaces() const = 0;
+    virtual InterfaceSnapshot localInterfaces() const = 0;
 };
 
 /** @brief Appends the local interface suffix shared by every zero-device path. */
-inline void appendLocalInterfaces(std::string& message,
-    const std::vector<NetworkInterface>& interfaces)
+inline void appendLocalInterfaces(std::string& message, const InterfaceSnapshot& snapshot)
 {
     message += "; local IPv4 interfaces: ";
-    if (interfaces.empty()) {
+    if (!snapshot.available) {
+        message += "unavailable";
+        return;
+    }
+    if (snapshot.interfaces.empty()) {
         message += "none";
         return;
     }
-    for (std::size_t i = 0; i < interfaces.size(); ++i) {
+    for (std::size_t i = 0; i < snapshot.interfaces.size(); ++i) {
         if (i != 0U) message += ", ";
-        message += interfaces[i].name + "=" + interfaces[i].address;
+        message += snapshot.interfaces[i].name + "=" + snapshot.interfaces[i].address;
     }
 }
 
@@ -65,7 +75,7 @@ inline void appendLocalInterfaces(std::string& message,
  */
 inline std::string emptyDiscoveryMessage(const Environment& environment)
 {
-    const std::vector<NetworkInterface> interfaces = environment.localInterfaces();
+    const InterfaceSnapshot interfaces = environment.localInterfaces();
     std::string message = "pylon initialized but enumerated 0 devices; pylon version: "
         + environment.pylonVersion() + "; loaded transport layers: ";
     const TransportLayerSnapshot snapshot = environment.transportLayers();

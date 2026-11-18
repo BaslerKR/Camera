@@ -13,18 +13,19 @@ public:
     FakeBackend(std::string version,
         std::vector<CameraDiscoveryDiagnostics::TransportLayer> layers,
         bool available = true,
-        std::vector<CameraDiscoveryDiagnostics::NetworkInterface> interfaces = {})
+        std::vector<CameraDiscoveryDiagnostics::NetworkInterface> interfaces = {},
+        bool interfacesAvailable = true)
         : _version(std::move(version)), _layers(std::move(layers)), _available(available),
-          _interfaces(std::move(interfaces)) {}
+          _interfaces(std::move(interfaces)), _interfacesAvailable(interfacesAvailable) {}
 
     std::string pylonVersion() const override { return _version; }
     CameraDiscoveryDiagnostics::TransportLayerSnapshot transportLayers() const override
     {
         return {_available, _layers};
     }
-    std::vector<CameraDiscoveryDiagnostics::NetworkInterface> localInterfaces() const override
+    CameraDiscoveryDiagnostics::InterfaceSnapshot localInterfaces() const override
     {
-        return _interfaces;
+        return {_interfacesAvailable, _interfaces};
     }
 
 private:
@@ -32,6 +33,7 @@ private:
     std::vector<CameraDiscoveryDiagnostics::TransportLayer> _layers;
     bool _available;
     std::vector<CameraDiscoveryDiagnostics::NetworkInterface> _interfaces;
+    bool _interfacesAvailable;
 };
 
 /** @brief Fails inside the query, as the production CTlFactory wrapper can. */
@@ -46,9 +48,9 @@ public:
             return {false, {}};
         }
     }
-    std::vector<CameraDiscoveryDiagnostics::NetworkInterface> localInterfaces() const override
+    CameraDiscoveryDiagnostics::InterfaceSnapshot localInterfaces() const override
     {
-        return {};
+        return {true, {}};
     }
 };
 
@@ -117,5 +119,11 @@ int main()
         CameraDiscoveryDiagnostics::emptyDiscoveryMessage(failedWithInterfaces);
     assert(contains(failedWithInterfacesMessage, "loaded transport layers: unavailable"));
     assert(contains(failedWithInterfacesMessage, "local IPv4 interfaces: en7=192.168.0.146"));
+
+    const FakeBackend failedInterfaceQuery("12.5.2.1565", {{"GigE", ""}}, true, {}, false);
+    const std::string failedInterfaceMessage =
+        CameraDiscoveryDiagnostics::emptyDiscoveryMessage(failedInterfaceQuery);
+    assert(contains(failedInterfaceMessage, "local IPv4 interfaces: unavailable"));
+    assert(!contains(failedInterfaceMessage, "local IPv4 interfaces: none"));
     return 0;
 }
