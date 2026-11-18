@@ -43,22 +43,40 @@ public:
     virtual std::vector<NetworkInterface> localInterfaces() const = 0;
 };
 
+/** @brief Appends the local interface suffix shared by every zero-device path. */
+inline void appendLocalInterfaces(std::string& message,
+    const std::vector<NetworkInterface>& interfaces)
+{
+    message += "; local IPv4 interfaces: ";
+    if (interfaces.empty()) {
+        message += "none";
+        return;
+    }
+    for (std::size_t i = 0; i < interfaces.size(); ++i) {
+        if (i != 0U) message += ", ";
+        message += interfaces[i].name + "=" + interfaces[i].address;
+    }
+}
+
 /**
  * @brief Composes the zero-device diagnostic for the existing discovery log.
- * @param environment The pylon version and loaded transport layers to report.
- * @return One line naming the version and every loaded transport layer.
+ * @param environment The pylon version, transport layers and interfaces to report.
+ * @return One line naming the version, loaded layers and local IPv4 interfaces.
  */
 inline std::string emptyDiscoveryMessage(const Environment& environment)
 {
+    const std::vector<NetworkInterface> interfaces = environment.localInterfaces();
     std::string message = "pylon initialized but enumerated 0 devices; pylon version: "
         + environment.pylonVersion() + "; loaded transport layers: ";
     const TransportLayerSnapshot snapshot = environment.transportLayers();
     if (!snapshot.available) {
         message += "unavailable";
+        appendLocalInterfaces(message, interfaces);
         return message;
     }
     if (snapshot.layers.empty()) {
         message += "none";
+        appendLocalInterfaces(message, interfaces);
         return message;
     }
     for (std::size_t i = 0; i < snapshot.layers.size(); ++i) {
@@ -66,16 +84,7 @@ inline std::string emptyDiscoveryMessage(const Environment& environment)
         message += snapshot.layers[i].name;
         if (!snapshot.layers[i].version.empty()) message += " (" + snapshot.layers[i].version + ")";
     }
-    message += "; local IPv4 interfaces: ";
-    const std::vector<NetworkInterface> interfaces = environment.localInterfaces();
-    if (interfaces.empty()) {
-        message += "none";
-        return message;
-    }
-    for (std::size_t i = 0; i < interfaces.size(); ++i) {
-        if (i != 0U) message += ", ";
-        message += interfaces[i].name + "=" + interfaces[i].address;
-    }
+    appendLocalInterfaces(message, interfaces);
     return message;
 }
 

@@ -104,5 +104,18 @@ int main()
     const FakeBackend noInterfaces("12.5.2.1565", {{"GigE", ""}});
     const std::string noNetworkMessage = CameraDiscoveryDiagnostics::emptyDiscoveryMessage(noInterfaces);
     assert(contains(noNetworkMessage, "local IPv4 interfaces: none"));
+
+    const std::vector<CameraDiscoveryDiagnostics::NetworkInterface> interfaces{{"en7", "192.168.0.146"}};
+    const FakeBackend emptyWithInterfaces("12.5.2.1565", {}, true, interfaces);
+    const std::string emptyWithInterfacesMessage =
+        CameraDiscoveryDiagnostics::emptyDiscoveryMessage(emptyWithInterfaces);
+    assert(contains(emptyWithInterfacesMessage, "loaded transport layers: none"));
+    assert(contains(emptyWithInterfacesMessage, "local IPv4 interfaces: en7=192.168.0.146"));
+
+    const FakeBackend failedWithInterfaces("12.5.2.1565", {}, false, interfaces);
+    const std::string failedWithInterfacesMessage =
+        CameraDiscoveryDiagnostics::emptyDiscoveryMessage(failedWithInterfaces);
+    assert(contains(failedWithInterfacesMessage, "loaded transport layers: unavailable"));
+    assert(contains(failedWithInterfacesMessage, "local IPv4 interfaces: en7=192.168.0.146"));
     return 0;
 }
