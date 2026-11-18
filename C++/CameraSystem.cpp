@@ -6,9 +6,15 @@
 #include <stdexcept>
 #include <thread>
 
+#if defined(__APPLE__) || defined(__linux__)
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#endif
+
 namespace {
 
-/** @brief Reads the pylon version and loaded transport layers for the empty-list diagnostic. */
+/** @brief Reads the pylon version, loaded transport layers and local IPv4 interfaces for the empty-list diagnostic. */
 class PylonDiscoveryEnvironment final : public CameraDiscoveryDiagnostics::Environment {
 public:
     explicit PylonDiscoveryEnvironment(CTlFactory& factory) : _factory(factory) {}
@@ -32,6 +38,30 @@ public:
         } catch (const GenericException&) {
             snapshot.available = false;
         }
+        return snapshot;
+    }
+
+    CameraDiscoveryDiagnostics::InterfaceSnapshot localInterfaces() const override
+    {
+        CameraDiscoveryDiagnostics::InterfaceSnapshot snapshot;
+#if defined(__APPLE__) || defined(__linux__)
+        ifaddrs* addresses = nullptr;
+        if (getifaddrs(&addresses) != 0) {
+            snapshot.available = false;
+            return snapshot;
+        }
+        struct IfaddrsGuard {
+            ifaddrs* list;
+            ~IfaddrsGuard() { freeifaddrs(list); }
+        } guard{addresses};
+        for (ifaddrs* current = guard.list; current != nullptr; current = current->ifa_next) {
+            if (!current->ifa_addr || current->ifa_addr->sa_family != AF_INET) continue;
+            char address[INET_ADDRSTRLEN];
+            const auto* ipv4 = reinterpret_cast<const sockaddr_in*>(current->ifa_addr);
+            if (!inet_ntop(AF_INET, &ipv4->sin_addr, address, sizeof(address))) continue;
+            snapshot.interfaces.push_back({current->ifa_name, address});
+        }
+#endif
         return snapshot;
     }
 

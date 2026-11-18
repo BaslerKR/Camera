@@ -24,9 +24,22 @@ struct TransportLayerSnapshot {
     std::vector<TransportLayer> layers;
 };
 
+/** @brief One local IPv4 interface, used to spot a camera on another subnet. */
+struct NetworkInterface {
+    std::string name;
+    std::string address;
+};
+
+/** @brief The interface query result and the addresses it produced. */
+struct InterfaceSnapshot {
+    bool available = true;
+    std::vector<NetworkInterface> interfaces;
+};
+
 /**
  * @brief Supplies the pylon state observed at discovery time.
- * @note The camera module wraps CTlFactory here; tests supply a fixed fake.
+ * @note The camera module wraps CTlFactory and the OS interface query here;
+ *       tests supply a fixed fake.
  */
 class Environment {
 public:
@@ -34,24 +47,46 @@ public:
     virtual std::string pylonVersion() const = 0;
     /** @brief Queries once; an unavailable result means the query itself failed. */
     virtual TransportLayerSnapshot transportLayers() const = 0;
+    virtual InterfaceSnapshot localInterfaces() const = 0;
 };
+
+/** @brief Appends the local interface suffix shared by every zero-device path. */
+inline void appendLocalInterfaces(std::string& message, const InterfaceSnapshot& snapshot)
+{
+    message += "; local IPv4 interfaces: ";
+    if (!snapshot.available) {
+        message += "unavailable";
+        return;
+    }
+    if (snapshot.interfaces.empty()) {
+        message += "none";
+        return;
+    }
+    for (std::size_t i = 0; i < snapshot.interfaces.size(); ++i) {
+        if (i != 0U) message += ", ";
+        message += snapshot.interfaces[i].name + "=" + snapshot.interfaces[i].address;
+    }
+}
 
 /**
  * @brief Composes the zero-device diagnostic for the existing discovery log.
- * @param environment The pylon version and loaded transport layers to report.
- * @return One line naming the version and every loaded transport layer.
+ * @param environment The pylon version, transport layers and interfaces to report.
+ * @return One line naming the version, loaded layers and local IPv4 interfaces.
  */
 inline std::string emptyDiscoveryMessage(const Environment& environment)
 {
+    const InterfaceSnapshot interfaces = environment.localInterfaces();
     std::string message = "pylon initialized but enumerated 0 devices; pylon version: "
         + environment.pylonVersion() + "; loaded transport layers: ";
     const TransportLayerSnapshot snapshot = environment.transportLayers();
     if (!snapshot.available) {
         message += "unavailable";
+        appendLocalInterfaces(message, interfaces);
         return message;
     }
     if (snapshot.layers.empty()) {
         message += "none";
+        appendLocalInterfaces(message, interfaces);
         return message;
     }
     for (std::size_t i = 0; i < snapshot.layers.size(); ++i) {
@@ -59,6 +94,7 @@ inline std::string emptyDiscoveryMessage(const Environment& environment)
         message += snapshot.layers[i].name;
         if (!snapshot.layers[i].version.empty()) message += " (" + snapshot.layers[i].version + ")";
     }
+    appendLocalInterfaces(message, interfaces);
     return message;
 }
 
