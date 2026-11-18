@@ -591,6 +591,51 @@ private slots:
         QCOMPARE(targets.size(), std::size_t(1));
         QCOMPARE(targets.front().id, targetId);
     }
+    void emptyDelayedEnumerationCompletesWithoutObserverFailureAfterBudget() {
+        std::promise<void> delayedEnumerationStarted;
+        auto delayedStarted = delayedEnumerationStarted.get_future();
+        std::promise<void> releaseEnumeration;
+        auto release = releaseEnumeration.get_future().share();
+        std::atomic<bool> enumerationReleased{false};
+        const auto releaseScan = [&] {
+            if (!enumerationReleased.exchange(true)) releaseEnumeration.set_value();
+        };
+        std::atomic<int> enumerationCalls{0};
+        CameraSystem system([&](DeviceInfoList_t&) {
+            const int call = enumerationCalls.fetch_add(1);
+            if (call == 0) return;
+            if (call == 1) {
+                delayedEnumerationStarted.set_value();
+                release.wait();
+            }
+        });
+        ScanReleaseGuard releaseGuard{releaseScan};
+        auto* camera = system.addCamera(); QVERIFY(camera);
+        system.startInitialDiscovery(std::chrono::milliseconds{50});
+        if (delayedStarted.wait_for(std::chrono::seconds{2}) != std::future_status::ready) {
+            releaseScan();
+            QFAIL("Startup discovery did not reach the delayed empty transport enumeration.");
+        }
+
+        auto targetsFuture = std::async(std::launch::async, [&] {
+            return camera->deviceCatalogAfterInitialDiscovery(std::chrono::milliseconds{50});
+        });
+        const bool stayedPendingAfterBudget = targetsFuture.wait_for(std::chrono::milliseconds{150})
+            == std::future_status::timeout;
+        releaseScan();
+        QVERIFY(targetsFuture.wait_for(std::chrono::seconds{2}) == std::future_status::ready);
+
+        std::vector<CameraDeviceDescriptor> targets;
+        QString error;
+        try {
+            targets = targetsFuture.get();
+        } catch (const std::exception& exception) {
+            error = QString::fromLocal8Bit(exception.what());
+        }
+        QVERIFY2(stayedPendingAfterBudget, "The target read timed out while EnumerateDevices was still in flight.");
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QVERIFY(targets.empty());
+    }
     void workerPreflightReturnsSnapshotThenUserTargetsWait() {
         std::promise<void> delayedEnumerationStarted;
         auto delayedStarted = delayedEnumerationStarted.get_future();

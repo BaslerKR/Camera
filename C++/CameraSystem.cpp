@@ -290,21 +290,31 @@ void CameraSystem::runInitialDiscovery(std::chrono::milliseconds discoveryWindow
         } catch (...) {
             error = "Unknown exception during Camera startup discovery.";
         }
+        bool finished = false;
+        bool stopRequested = false;
+        std::chrono::milliseconds remaining{};
         {
             std::lock_guard<std::mutex> lock(_mutex);
             _initialDiscoveryEnumerationInProgress = false;
+            stopRequested = _stopInitialDiscoveryRequested.load(std::memory_order_acquire);
+            const bool foundTargets = !_devices.empty();
+            const auto timeRemaining = deadline - std::chrono::steady_clock::now();
+            const bool windowElapsed = timeRemaining <= std::chrono::steady_clock::duration::zero();
+            finished = !error.empty() || foundTargets || stopRequested || windowElapsed;
+            if (finished) {
+                _initialDiscoveryError = error;
+                _initialDiscoveryRunning = false;
+            } else {
+                remaining = std::chrono::duration_cast<std::chrono::milliseconds>(timeRemaining);
+                if (remaining <= std::chrono::milliseconds::zero()) {
+                    remaining = std::chrono::milliseconds{1};
+                }
+            }
         }
         _initialDiscoveryCondition.notify_all();
-        if (!error.empty()) break;
+        cancelled = cancelled || stopRequested;
+        if (!error.empty() || finished) break;
 
-        {
-            std::lock_guard<std::mutex> lock(_mutex);
-            if (!_devices.empty()) break;
-        }
-
-        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-            deadline - std::chrono::steady_clock::now());
-        if (remaining <= std::chrono::milliseconds::zero()) break;
         std::unique_lock<std::mutex> stopLock(_discoveryStopMutex);
         _discoveryStopCondition.wait_for(stopLock, std::min(remaining, retryInterval), [this] {
             return _stopInitialDiscoveryRequested.load(std::memory_order_acquire);
