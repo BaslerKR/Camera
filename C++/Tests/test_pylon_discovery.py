@@ -135,7 +135,7 @@ def main():
             preload = (package("preloaded") if layout in
                        ("preloaded", "preloaded-framework", "preloaded-unlocatable") else "")
             if layout == "preloaded-framework":
-                imported = sdk / "Versions/A/Libraries/libpylonbase.8.0.0.dylib"
+                imported = (sdk / "Versions/A/Libraries/libpylonbase.8.0.0.dylib").as_posix()
                 preload += ('add_library(pylon::PylonBase SHARED IMPORTED)\n'
                             f'set_property(TARGET pylon::PylonBase PROPERTY IMPORTED_LOCATION "{imported}")\n')
             (source / "CMakeLists.txt").write_text(
@@ -157,43 +157,43 @@ def main():
                 'set(CMAKE_INSTALL_NAME_TOOL "${CMAKE_COMMAND}")\n')
             env = {k: v for k, v in os.environ.items()
                    if k.upper() not in ("PYLON_ROOT", "PYLON_DEV_DIR", "PYLON_DIR", "CMAKE_PREFIX_PATH", "CMAKE_MODULE_PATH", "PROGRAMFILES")}
-            env["ProgramFiles"] = str(root / "unused-program-files")
-            command = ["cmake", "-S", str(source), "-B", str(root / "build"),
-                       "-G", generator, f"-DCMAKE_TOOLCHAIN_FILE={toolchain}",
+            env["ProgramFiles"] = (root / "unused-program-files").as_posix()
+            command = ["cmake", "-S", source.as_posix(), "-B", (root / "build").as_posix(),
+                       "-G", generator, f"-DCMAKE_TOOLCHAIN_FILE={toolchain.as_posix()}",
                        "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF",
                        "-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF",
                        "-DCMAKE_FIND_USE_CMAKE_SYSTEM_PATH=OFF",
                        "-DCMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH=OFF"]
             # Supply the build tool explicitly because system-environment searching is disabled.
-            command.append(f"-DCMAKE_MAKE_PROGRAM={make_program}")
+            command.append(f"-DCMAKE_MAKE_PROGRAM={Path(make_program).as_posix()}")
             if name == "windows-pylon12-overrides":
                 command += [f"-DpylonBase={expected_base}", f"-DGenApi={expected_genapi}"]
             if name == "windows-explicit-finder":
-                env["ProgramFiles"] = str(root / "program-files")
-                command.append(f"-DCMAKE_MODULE_PATH={sdk / 'lib/cmake'}")
+                env["ProgramFiles"] = (root / "program-files").as_posix()
+                command.append(f"-DCMAKE_MODULE_PATH={(sdk / 'lib/cmake').as_posix()}")
             if hint != "default":
                 command.extend(["-DCMAKE_IGNORE_PREFIX_PATH=/opt/pylon",
                                 "-DCMAKE_IGNORE_PATH=/opt/pylon/lib/cmake"])
             if hint == "root":
-                env["PYLON_ROOT"] = (str(root / "other.framework")
-                                     if name == "macos-preloaded-hint-conflict" else str(sdk))
+                env["PYLON_ROOT"] = ((root / "other.framework").as_posix()
+                                     if name == "macos-preloaded-hint-conflict" else sdk.as_posix())
             elif hint == "dir":
                 dir_hint = (sdk / "Versions/A/Resources/CMake"
                             if name == "macos-framework-realpath" else
                             sdk / "Resources/CMake" if system == "Darwin" else
                             sdk / "share/pylon/cmake")
-                command.append(f"-Dpylon_DIR={dir_hint}")
+                command.append(f"-Dpylon_DIR={dir_hint.as_posix()}")
             elif hint == "cmake":
-                command.append(f"-Dpylon_cmake={sdk / 'Resources/CMake'}")
+                command.append(f"-Dpylon_cmake={(sdk / 'Resources/CMake').as_posix()}")
             elif hint == "rootvar":
-                command.append(f"-Dpylon_ROOT={sdk}")
+                command.append(f"-Dpylon_ROOT={sdk.as_posix()}")
             elif hint == "conflict":
-                env["PYLON_ROOT"] = str(root / "other.framework")
-                command.append(f"-Dpylon_DIR={sdk / 'Resources/CMake'}")
+                env["PYLON_ROOT"] = (root / "other.framework").as_posix()
+                command.append(f"-Dpylon_DIR={(sdk / 'Resources/CMake').as_posix()}")
             elif hint == "prefix":
-                command.append(f"-DCMAKE_PREFIX_PATH={sdk}")
+                command.append(f"-DCMAKE_PREFIX_PATH={sdk.as_posix()}")
             else:
-                command.extend([f"-DCMAKE_FIND_ROOT_PATH={root / 'sysroot'}",
+                command.extend([f"-DCMAKE_FIND_ROOT_PATH={(root / 'sysroot').as_posix()}",
                                 "-DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY"])
             result = subprocess.run(command, env=env, capture_output=True, text=True)
             log = result.stdout + result.stderr
