@@ -259,6 +259,11 @@ std::vector<CameraDeviceDescriptor> CameraSystem::deviceCatalogAfterInitialDisco
     return deviceCatalogLocked();
 }
 
+void CameraSystem::wakeInitialDiscoveryWaiters()
+{
+    _initialDiscoveryCondition.notify_all();
+}
+
 void CameraSystem::runInitialDiscovery(std::chrono::milliseconds discoveryWindow)
 {
     const auto deadline = std::chrono::steady_clock::now() + discoveryWindow;
