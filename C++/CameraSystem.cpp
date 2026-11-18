@@ -267,7 +267,8 @@ void CameraSystem::wakeInitialDiscoveryWaiters()
 void CameraSystem::runInitialDiscovery(std::chrono::milliseconds discoveryWindow)
 {
     const auto deadline = std::chrono::steady_clock::now() + discoveryWindow;
-    const auto retryInterval = std::chrono::milliseconds{1000};
+    const auto retryInterval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+        std::chrono::seconds{1});
     std::size_t attempts = 0;
     std::string error;
     bool cancelled = false;
@@ -277,8 +278,8 @@ void CameraSystem::runInitialDiscovery(std::chrono::milliseconds discoveryWindow
             break;
         }
         const auto attemptWindowRemaining = deadline - std::chrono::steady_clock::now();
-        // Do not let millisecond sleep rounding start another SDK enumeration past the deadline.
-        if (attempts > 0 && attemptWindowRemaining <= std::chrono::milliseconds{1}) break;
+        // Do not start another SDK enumeration after the startup discovery deadline.
+        if (attempts > 0 && attemptWindowRemaining <= std::chrono::steady_clock::duration::zero()) break;
         {
             std::lock_guard<std::mutex> lock(_mutex);
             _initialDiscoveryEnumerationInProgress = true;
@@ -295,7 +296,7 @@ void CameraSystem::runInitialDiscovery(std::chrono::milliseconds discoveryWindow
         }
         bool finished = false;
         bool stopRequested = false;
-        std::chrono::milliseconds remaining{};
+        std::chrono::steady_clock::duration remaining{};
         {
             std::lock_guard<std::mutex> lock(_mutex);
             _initialDiscoveryEnumerationInProgress = false;
@@ -308,10 +309,7 @@ void CameraSystem::runInitialDiscovery(std::chrono::milliseconds discoveryWindow
                 _initialDiscoveryError = error;
                 _initialDiscoveryRunning = false;
             } else {
-                remaining = std::chrono::duration_cast<std::chrono::milliseconds>(timeRemaining);
-                if (remaining <= std::chrono::milliseconds::zero()) {
-                    remaining = std::chrono::milliseconds{1};
-                }
+                remaining = timeRemaining;
             }
         }
         _initialDiscoveryCondition.notify_all();
