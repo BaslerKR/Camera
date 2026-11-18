@@ -611,8 +611,8 @@ private slots:
         });
         ScanReleaseGuard releaseGuard{releaseScan};
         auto* camera = system.addCamera(); QVERIFY(camera);
-        system.startInitialDiscovery(std::chrono::milliseconds{50});
-        if (delayedStarted.wait_for(std::chrono::seconds{2}) != std::future_status::ready) {
+        system.startInitialDiscovery(std::chrono::seconds{3});
+        if (delayedStarted.wait_for(std::chrono::seconds{4}) != std::future_status::ready) {
             releaseScan();
             QFAIL("Startup discovery did not reach the delayed empty transport enumeration.");
         }
@@ -623,7 +623,7 @@ private slots:
         const bool stayedPendingAfterBudget = targetsFuture.wait_for(std::chrono::milliseconds{150})
             == std::future_status::timeout;
         releaseScan();
-        QVERIFY(targetsFuture.wait_for(std::chrono::seconds{2}) == std::future_status::ready);
+        QVERIFY(targetsFuture.wait_for(std::chrono::seconds{4}) == std::future_status::ready);
 
         std::vector<CameraDeviceDescriptor> targets;
         QString error;
@@ -635,6 +635,41 @@ private slots:
         QVERIFY2(stayedPendingAfterBudget, "The target read timed out while EnumerateDevices was still in flight.");
         QVERIFY2(error.isEmpty(), qPrintable(error));
         QVERIFY(targets.empty());
+    }
+    void startupDiscoveryDoesNotEnumerateAgainAfterItsWindowExpires() {
+        std::promise<void> firstEnumerationStarted;
+        auto firstStarted = firstEnumerationStarted.get_future();
+        std::promise<void> releaseEnumeration;
+        auto release = releaseEnumeration.get_future().share();
+        std::atomic<bool> enumerationReleased{false};
+        const auto releaseScan = [&] {
+            if (!enumerationReleased.exchange(true)) releaseEnumeration.set_value();
+        };
+        std::atomic<int> enumerationCalls{0};
+        CameraSystem system([&](DeviceInfoList_t&) {
+            const int call = enumerationCalls.fetch_add(1);
+            if (call == 0) {
+                firstEnumerationStarted.set_value();
+                release.wait();
+            }
+        });
+        ScanReleaseGuard releaseGuard{releaseScan};
+        auto* camera = system.addCamera(); QVERIFY(camera);
+        system.startInitialDiscovery(std::chrono::milliseconds{500});
+        if (firstStarted.wait_for(std::chrono::seconds{2}) != std::future_status::ready) {
+            releaseScan();
+            QFAIL("Startup discovery did not reach the first fake transport enumeration.");
+        }
+
+        auto targetsFuture = std::async(std::launch::async, [&] {
+            return camera->deviceCatalogAfterInitialDiscovery(std::chrono::seconds{2});
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds{400});
+        releaseScan();
+        QVERIFY(targetsFuture.wait_for(std::chrono::seconds{2}) == std::future_status::ready);
+        const auto targets = targetsFuture.get();
+        QVERIFY(targets.empty());
+        QCOMPARE(enumerationCalls.load(), 1);
     }
     void workerPreflightReturnsSnapshotThenUserTargetsWait() {
         std::promise<void> delayedEnumerationStarted;

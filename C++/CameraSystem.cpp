@@ -276,6 +276,9 @@ void CameraSystem::runInitialDiscovery(std::chrono::milliseconds discoveryWindow
             cancelled = true;
             break;
         }
+        const auto attemptWindowRemaining = deadline - std::chrono::steady_clock::now();
+        // Do not let millisecond sleep rounding start another SDK enumeration past the deadline.
+        if (attempts > 0 && attemptWindowRemaining <= std::chrono::milliseconds{1}) break;
         {
             std::lock_guard<std::mutex> lock(_mutex);
             _initialDiscoveryEnumerationInProgress = true;
