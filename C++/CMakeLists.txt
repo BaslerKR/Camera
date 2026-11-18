@@ -442,7 +442,6 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
         "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Source"
         "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Plugin"
-        "${PlaygroundPluginSDK_WIDGET_INCLUDE_DIR}"
     )
     target_link_libraries(CameraPlugin PRIVATE
         Playground::DeviceRuntimeContract
@@ -492,7 +491,7 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
         get_target_property(camera_package_file CameraPlugin PLAYGROUND_PLUGIN_PACKAGE)
         playground_sdk_package_plugin(CameraPlugin
             PACKAGE_FILE "${camera_package_file}"
-            ICON "${PlaygroundPluginSDK_ICON_DIR}/camera-48.png")
+            ICON "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Package/icon.png")
     endif()
     message(STATUS "[Camera] CameraPlugin enabled.")
 endif()

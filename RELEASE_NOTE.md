@@ -2,6 +2,8 @@
 
 - Select one complete macOS pylon SDK framework from `/Library/Frameworks`, an already-provided pylon target, or any explicit CMake/environment hint, require both headers and `pylon-targets.cmake` in that tree, resolve bundle-internal paths to the framework root, and stage the same framework at runtime; an unresolved or conflicting hint now fails configure with the path instead of silently falling back. Zero-device discovery logs the pylon version and loaded transport layers, marking the layer list unavailable when its enumeration fails.
 
+- Ship the package icon from this repository (`C++/Utility/PlaygroundAdapter/Package/icon.png`) instead of the SDK-installed Resources brand asset. Include `DeviceRuntime/Contract/DevicePluginSession.h` from the contract include root; the SDK no longer installs a `PlaygroundWidget` header path or vendor icons.
+
 - Drop the device widget ABI and the QVariantMap discovery hand-back. `IDevicePluginSession` no longer implements `createDockWidgets()`, and `discoverDevices()`/`createSession()` no longer pass discovery data through a `QVariantMap`; discovery and session creation now take only an error message.
 
 - Build against the widget-free device runtime SDK: the contract target is `Playground::DeviceRuntimeContract`, headers live under `DeviceRuntime/Contract`, and the interface is `IDeviceRuntime`. The plugin object derives directly from `QObject`/`IDeviceRuntime`, so the package needs neither the widget-side template nor Qt Widgets headers.
