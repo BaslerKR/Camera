@@ -492,7 +492,7 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
         add_test(NAME camera_parameter_control_test COMMAND camera_parameter_control_test)
         set_tests_properties(camera_parameter_control_test PROPERTIES
             ENVIRONMENT "PYLON_CAMEMU=1;QT_QPA_PLATFORM=offscreen"
-            TIMEOUT 300
+            TIMEOUT 360
         )
     endif()
     include("${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Package/RuntimeStaging.cmake")

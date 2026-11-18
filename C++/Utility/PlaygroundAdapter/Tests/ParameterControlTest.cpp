@@ -8,6 +8,7 @@
 #include <QEventLoop>
 #include <algorithm>
 #include <condition_variable>
+#include <functional>
 #include <future>
 #include <chrono>
 #include <map>
@@ -19,6 +20,11 @@
 #include <thread>
 
 namespace {
+
+struct ScanReleaseGuard {
+    std::function<void()> release;
+    ~ScanReleaseGuard() { if (release) release(); }
+};
 
 /** @brief One host-side claim handle whose release updates a test registry. */
 class TestClaimHandle final : public IDevicePluginResourceClaim {
@@ -346,7 +352,7 @@ private slots:
         if (emulatorDisplayName.empty()) QSKIP("The pylon camera emulator is not installed.");
 
         CameraSystem system;
-        // CameraPlugin::discoverDevices populates this shared catalog before the worker reads targets.
+        // This test directly refreshes its CameraSystem, then checks cached reads and explicit refresh.
         const auto startupCatalog = system.deviceCatalog(true);
         std::string expectedEmulatorId;
         for (const auto& item : startupCatalog) {
@@ -461,6 +467,180 @@ private slots:
         QCOMPARE(targets.targets.size(), std::size_t(1));
         QCOMPARE(targets.targets.front().targetId, targetId);
         QCOMPARE(targets.targets.front().displayName, std::string("Basler GigE (first request delayed)"));
+    }
+    void closingControllerCancelsWaitingTargetRead() {
+        std::promise<void> delayedEnumerationStarted;
+        auto delayedStarted = delayedEnumerationStarted.get_future();
+        std::promise<void> releaseEnumeration;
+        auto release = releaseEnumeration.get_future().share();
+        std::atomic<bool> enumerationReleased{false};
+        const auto releaseScan = [&] {
+            if (!enumerationReleased.exchange(true)) releaseEnumeration.set_value();
+        };
+        const std::string targetId = "BaslerGigE#12345678#192.0.2.50:3956";
+        std::atomic<int> enumerationCalls{0};
+        CameraSystem system([&](DeviceInfoList_t& devices) {
+            const int call = enumerationCalls.fetch_add(1);
+            if (call == 0) return;
+            if (call == 1) {
+                delayedEnumerationStarted.set_value();
+                release.wait();
+            }
+            Pylon::CDeviceInfo device;
+            device.SetDeviceClass("BaslerGigE");
+            device.SetSerialNumber("12345678");
+            device.SetFriendlyName("Basler GigE (close cancels target wait)");
+            device.SetFullName(targetId.c_str());
+            devices.push_back(device);
+        });
+        ScanReleaseGuard releaseGuard{releaseScan};
+        auto* camera = system.addCamera(); QVERIFY(camera);
+        auto controller = std::make_unique<CameraSourceController>(camera, nullptr, nullptr, nullptr,
+            CameraSourceController::InitialTargetsPolicy::WaitForInitialDiscovery);
+        auto* connection = qobject_cast<IDeviceConnectionControl*>(controller.get()); QVERIFY(connection);
+        system.startInitialDiscovery(std::chrono::seconds{3});
+        if (delayedStarted.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+            releaseScan();
+            QFAIL("Startup discovery did not reach the delayed fake transport enumeration.");
+        }
+
+        auto targetsPromise = std::make_shared<std::promise<DeviceConnectionTargets>>();
+        auto targetsFuture = targetsPromise->get_future();
+        const auto admission = connection->requestConnectionTargets(
+            [targetsPromise](DeviceConnectionTargets targets) {
+                targetsPromise->set_value(std::move(targets));
+            });
+        if (admission.error != DeviceConnectionError::None) {
+            releaseScan();
+            QCOMPARE(admission.error, DeviceConnectionError::None);
+            return;
+        }
+        const bool wasWaiting = targetsFuture.wait_for(std::chrono::milliseconds{100})
+            == std::future_status::timeout;
+
+        std::promise<void> controllerClosedPromise;
+        auto controllerClosed = controllerClosedPromise.get_future().share();
+        std::atomic<bool> scanReleasedToUnblockClose{false};
+        std::thread closeWatchdog([&] {
+            if (controllerClosed.wait_for(std::chrono::milliseconds{500}) != std::future_status::ready) {
+                scanReleasedToUnblockClose.store(true);
+                releaseScan();
+            }
+        });
+        controller.reset();
+        controllerClosedPromise.set_value();
+        closeWatchdog.join();
+        releaseScan();
+
+        QVERIFY(wasWaiting);
+        QVERIFY(!scanReleasedToUnblockClose.load());
+        QVERIFY(targetsFuture.wait_for(std::chrono::milliseconds{0}) == std::future_status::ready);
+        const auto targets = targetsFuture.get();
+        QCOMPARE(targets.result.error, DeviceConnectionError::Unavailable);
+        QVERIFY(targets.targets.empty());
+    }
+    void targetObservationWaitsForEnumerationAlreadyInFlightPastBudget() {
+        std::promise<void> delayedEnumerationStarted;
+        auto delayedStarted = delayedEnumerationStarted.get_future();
+        std::promise<void> releaseEnumeration;
+        auto release = releaseEnumeration.get_future().share();
+        std::atomic<bool> enumerationReleased{false};
+        const auto releaseScan = [&] {
+            if (!enumerationReleased.exchange(true)) releaseEnumeration.set_value();
+        };
+        const std::string targetId = "BaslerGigE#12345678#192.0.2.50:3956";
+        std::atomic<int> enumerationCalls{0};
+        CameraSystem system([&](DeviceInfoList_t& devices) {
+            const int call = enumerationCalls.fetch_add(1);
+            if (call == 0) return;
+            if (call == 1) {
+                delayedEnumerationStarted.set_value();
+                release.wait();
+            }
+            Pylon::CDeviceInfo device;
+            device.SetDeviceClass("BaslerGigE");
+            device.SetSerialNumber("12345678");
+            device.SetFriendlyName("Basler GigE (enumeration exceeds wait budget)");
+            device.SetFullName(targetId.c_str());
+            devices.push_back(device);
+        });
+        ScanReleaseGuard releaseGuard{releaseScan};
+        auto* camera = system.addCamera(); QVERIFY(camera);
+        system.startInitialDiscovery(std::chrono::seconds{3});
+        if (delayedStarted.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+            releaseScan();
+            QFAIL("Startup discovery did not reach the delayed fake transport enumeration.");
+        }
+
+        auto targetsFuture = std::async(std::launch::async, [&] {
+            return camera->deviceCatalogAfterInitialDiscovery(std::chrono::milliseconds{50});
+        });
+        const bool stayedPendingAfterBudget = targetsFuture.wait_for(std::chrono::milliseconds{150})
+            == std::future_status::timeout;
+        releaseScan();
+        QVERIFY(targetsFuture.wait_for(std::chrono::seconds{2}) == std::future_status::ready);
+        std::vector<CameraDeviceDescriptor> targets;
+        QString error;
+        try {
+            targets = targetsFuture.get();
+        } catch (const std::exception& exception) {
+            error = QString::fromLocal8Bit(exception.what());
+        }
+        QVERIFY2(stayedPendingAfterBudget, "The target read timed out while EnumerateDevices was still in flight.");
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(targets.size(), std::size_t(1));
+        QCOMPARE(targets.front().id, targetId);
+    }
+    void targetedResolutionWaitsForDelayedStartupDiscovery() {
+        std::promise<void> delayedEnumerationStarted;
+        auto delayedStarted = delayedEnumerationStarted.get_future();
+        std::promise<void> releaseEnumeration;
+        auto release = releaseEnumeration.get_future().share();
+        std::atomic<bool> enumerationReleased{false};
+        const auto releaseScan = [&] {
+            if (!enumerationReleased.exchange(true)) releaseEnumeration.set_value();
+        };
+        const std::string targetId = "BaslerGigE#12345678#192.0.2.50:3956";
+        std::atomic<int> enumerationCalls{0};
+        CameraSystem system([&](DeviceInfoList_t& devices) {
+            const int call = enumerationCalls.fetch_add(1);
+            if (call == 0) return;
+            if (call == 1) {
+                delayedEnumerationStarted.set_value();
+                release.wait();
+            }
+            Pylon::CDeviceInfo device;
+            device.SetDeviceClass("BaslerGigE");
+            device.SetSerialNumber("12345678");
+            device.SetFriendlyName("Basler GigE (target resolution waits)");
+            device.SetFullName(targetId.c_str());
+            devices.push_back(device);
+        });
+        ScanReleaseGuard releaseGuard{releaseScan};
+        system.startInitialDiscovery(std::chrono::seconds{3});
+        if (delayedStarted.wait_for(std::chrono::seconds{2}) != std::future_status::ready) {
+            releaseScan();
+            QFAIL("Startup discovery did not reach the delayed fake transport enumeration.");
+        }
+
+        auto targetsFuture = std::async(std::launch::async, [&] {
+            return system.deviceCatalogForTargetResolution(std::chrono::seconds{65});
+        });
+        const bool didNotResolveTheEmptyPreflight = targetsFuture.wait_for(std::chrono::milliseconds{100})
+            == std::future_status::timeout;
+        releaseScan();
+        QVERIFY(targetsFuture.wait_for(std::chrono::seconds{2}) == std::future_status::ready);
+        std::vector<CameraDeviceDescriptor> targets;
+        QString error;
+        try {
+            targets = targetsFuture.get();
+        } catch (const std::exception& exception) {
+            error = QString::fromLocal8Bit(exception.what());
+        }
+        QVERIFY2(didNotResolveTheEmptyPreflight, "Target resolution returned an empty startup snapshot before enumeration finished.");
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(targets.size(), std::size_t(1));
+        QCOMPARE(targets.front().id, targetId);
     }
     void workerPreflightReturnsSnapshotThenUserTargetsWait() {
         std::promise<void> delayedEnumerationStarted;

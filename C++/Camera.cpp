@@ -396,10 +396,12 @@ bool Camera::closeLocked(){
 std::vector<CameraDeviceDescriptor> Camera::deviceCatalog(bool refresh) const { return _system->deviceCatalog(refresh); }
 
 std::vector<CameraDeviceDescriptor> Camera::deviceCatalogAfterInitialDiscovery(
-    std::chrono::milliseconds waitLimit) const
+    std::chrono::milliseconds waitLimit, const std::function<bool()>& cancellationRequested) const
 {
-    return _system->deviceCatalogAfterInitialDiscovery(waitLimit);
+    return _system->deviceCatalogAfterInitialDiscovery(waitLimit, cancellationRequested);
 }
+
+void Camera::wakeInitialDiscoveryWaiters() const { _system->wakeInitialDiscoveryWaiters(); }
 
 std::string Camera::deviceSerialNumber(const std::string& deviceId) const {
     for (const auto& target : _system->deviceCatalog(false)) {

@@ -1028,7 +1028,9 @@ DeviceConnectionResult CameraSourceController::catalogWork(bool refresh, Targets
         try {
             QStringList labels;
             const auto catalog = waitForInitialDiscovery && !refresh
-                ? _camera->deviceCatalogAfterInitialDiscovery(std::chrono::seconds{65})
+                ? _camera->deviceCatalogAfterInitialDiscovery(std::chrono::seconds{65}, [this] {
+                    return _parameterClosing.load(std::memory_order_acquire);
+                })
                 : _camera->deviceCatalog(refresh);
             for (const auto& item : catalog) {
                 copied.targets.push_back({item.id, item.displayName, {}});
@@ -1036,9 +1038,13 @@ DeviceConnectionResult CameraSourceController::catalogWork(bool refresh, Targets
             }
             if (refresh || waitForInitialDiscovery) emit deviceCatalogChanged(labels);
         } catch (const std::exception& error) {
-            copied = {{DeviceConnectionError::BackendFailure, error.what()}, {}};
+            copied = _parameterClosing.load(std::memory_order_acquire)
+                ? DeviceConnectionTargets{{DeviceConnectionError::Unavailable, "Camera controller is closing."}, {}}
+                : DeviceConnectionTargets{{DeviceConnectionError::BackendFailure, error.what()}, {}};
         } catch (...) {
-            copied = {{DeviceConnectionError::BackendFailure, "The camera discovery authority failed."}, {}};
+            copied = _parameterClosing.load(std::memory_order_acquire)
+                ? DeviceConnectionTargets{{DeviceConnectionError::Unavailable, "Camera controller is closing."}, {}}
+                : DeviceConnectionTargets{{DeviceConnectionError::BackendFailure, "The camera discovery authority failed."}, {}};
         }
         try { completion(std::move(copied)); } catch (...) {}
     });

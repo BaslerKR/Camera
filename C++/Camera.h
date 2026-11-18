@@ -93,7 +93,9 @@ public:
     std::vector<CameraDeviceDescriptor> deviceCatalog(bool refresh) const;
     /** @brief Waits for a running startup scan before copying its first published targets. */
     std::vector<CameraDeviceDescriptor> deviceCatalogAfterInitialDiscovery(
-        std::chrono::milliseconds waitLimit) const;
+        std::chrono::milliseconds waitLimit, const std::function<bool()>& cancellationRequested = {}) const;
+    /** @brief Wakes a target observer when this session's controller is closing. */
+    void wakeInitialDiscoveryWaiters() const;
     /** @brief Copies the device serial for one exact target, or an empty string when absent. */
     std::string deviceSerialNumber(const std::string& deviceId) const;
     /** @brief Copies logical connection state and its reconnect generation. */

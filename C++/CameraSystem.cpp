@@ -232,21 +232,51 @@ void CameraSystem::startInitialDiscovery(std::chrono::milliseconds discoveryWind
 }
 
 std::vector<CameraDeviceDescriptor> CameraSystem::deviceCatalogAfterInitialDiscovery(
-    std::chrono::milliseconds waitLimit)
+    std::chrono::milliseconds waitLimit, const std::function<bool()>& cancellationRequested)
 {
     std::unique_lock<std::mutex> lock(_mutex);
-    if (_initialDiscoveryRunning) {
-        const bool ready = _initialDiscoveryCondition.wait_for(lock, waitLimit, [this] {
-            return !_devices.empty() || !_initialDiscoveryRunning;
-        });
-        if (!ready) {
+    const auto deadline = std::chrono::steady_clock::now() + waitLimit;
+    while (_initialDiscoveryRunning && _devices.empty()) {
+        if (cancellationRequested && cancellationRequested()) {
+            throw std::runtime_error("Camera startup target observation was cancelled.");
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline && !_initialDiscoveryEnumerationInProgress) {
             throw std::runtime_error("Camera startup discovery is still running; target observation timed out.");
         }
+        const auto nextWait = now < deadline
+            ? std::min(std::chrono::milliseconds{50},
+                std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now))
+            : std::chrono::milliseconds{50};
+        _initialDiscoveryCondition.wait_for(lock, nextWait);
+    }
+    if (cancellationRequested && cancellationRequested()) {
+        throw std::runtime_error("Camera startup target observation was cancelled.");
     }
     if (!_initialDiscoveryError.empty()) {
         throw std::runtime_error(_initialDiscoveryError);
     }
     return deviceCatalogLocked();
+}
+
+std::vector<CameraDeviceDescriptor> CameraSystem::deviceCatalogForTargetResolution(
+    std::chrono::milliseconds waitLimit, const std::function<bool()>& cancellationRequested)
+{
+    if (initialDiscoveryRunning()) {
+        return deviceCatalogAfterInitialDiscovery(waitLimit, cancellationRequested);
+    }
+    return deviceCatalog(false);
+}
+
+bool CameraSystem::initialDiscoveryRunning() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _initialDiscoveryRunning;
+}
+
+void CameraSystem::wakeInitialDiscoveryWaiters()
+{
+    _initialDiscoveryCondition.notify_all();
 }
 
 void CameraSystem::runInitialDiscovery(std::chrono::milliseconds discoveryWindow)
@@ -261,19 +291,26 @@ void CameraSystem::runInitialDiscovery(std::chrono::milliseconds discoveryWindow
             cancelled = true;
             break;
         }
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            _initialDiscoveryEnumerationInProgress = true;
+        }
         try {
             updateCameraListImpl(false);
             ++attempts;
         } catch (const GenericException& exception) {
             error = exception.GetDescription();
-            break;
         } catch (const std::exception& exception) {
             error = exception.what();
-            break;
         } catch (...) {
             error = "Unknown exception during Camera startup discovery.";
-            break;
         }
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            _initialDiscoveryEnumerationInProgress = false;
+        }
+        _initialDiscoveryCondition.notify_all();
+        if (!error.empty()) break;
 
         {
             std::lock_guard<std::mutex> lock(_mutex);
@@ -303,6 +340,7 @@ void CameraSystem::runInitialDiscovery(std::chrono::milliseconds discoveryWindow
         syslog("Completed initial Camera discovery after " + to_string(attempts)
             + " attempt(s) with " + to_string(targets.size()) + " Camera(s).");
         if (targets.empty() && !cancelled && !_deviceEnumerator && _tlFactory) {
+            std::lock_guard<std::mutex> enumerationLock(_enumerationMutex);
             reportEmptyDiscovery(*_tlFactory);
         }
         for (const auto& target : targets) syslog("-- " + target.displayName);

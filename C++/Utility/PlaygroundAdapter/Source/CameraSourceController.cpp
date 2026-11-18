@@ -36,7 +36,8 @@ void CameraSourceController::releaseClaim() {
 }
 
 CameraSourceController::~CameraSourceController() {
-    _parameterClosing = true;
+    _parameterClosing.store(true, std::memory_order_release);
+    if (_camera) _camera->wakeInitialDiscoveryWaiters();
     if (_camera && _nodeCallbackId != 0) {
         _camera->deregisterNodeUpdatedCallback(_nodeCallbackId);
         _nodeCallbackId = 0;
