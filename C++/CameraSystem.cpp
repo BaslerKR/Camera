@@ -4,6 +4,12 @@
 #include <algorithm>
 #include <stdexcept>
 
+#if defined(__APPLE__) || defined(__linux__)
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#endif
+
 namespace {
 
 /** @brief Reads the pylon version and loaded transport layers for the empty-list diagnostic. */
@@ -31,6 +37,24 @@ public:
             snapshot.available = false;
         }
         return snapshot;
+    }
+
+    std::vector<CameraDiscoveryDiagnostics::NetworkInterface> localInterfaces() const override
+    {
+        std::vector<CameraDiscoveryDiagnostics::NetworkInterface> interfaces;
+#if defined(__APPLE__) || defined(__linux__)
+        ifaddrs* addresses = nullptr;
+        if (getifaddrs(&addresses) != 0) return interfaces;
+        for (ifaddrs* current = addresses; current != nullptr; current = current->ifa_next) {
+            if (!current->ifa_addr || current->ifa_addr->sa_family != AF_INET) continue;
+            char address[INET_ADDRSTRLEN];
+            const auto* ipv4 = reinterpret_cast<const sockaddr_in*>(current->ifa_addr);
+            if (!inet_ntop(AF_INET, &ipv4->sin_addr, address, sizeof(address))) continue;
+            interfaces.push_back({current->ifa_name, address});
+        }
+        freeifaddrs(addresses);
+#endif
+        return interfaces;
     }
 
 private:

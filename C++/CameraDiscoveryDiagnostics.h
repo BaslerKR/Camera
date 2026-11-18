@@ -24,6 +24,12 @@ struct TransportLayerSnapshot {
     std::vector<TransportLayer> layers;
 };
 
+/** @brief One local IPv4 interface, used to spot a camera on another subnet. */
+struct NetworkInterface {
+    std::string name;
+    std::string address;
+};
+
 /**
  * @brief Supplies the pylon state observed at discovery time.
  * @note The camera module wraps CTlFactory here; tests supply a fixed fake.
@@ -34,6 +40,7 @@ public:
     virtual std::string pylonVersion() const = 0;
     /** @brief Queries once; an unavailable result means the query itself failed. */
     virtual TransportLayerSnapshot transportLayers() const = 0;
+    virtual std::vector<NetworkInterface> localInterfaces() const = 0;
 };
 
 /**
@@ -58,6 +65,16 @@ inline std::string emptyDiscoveryMessage(const Environment& environment)
         if (i != 0U) message += ", ";
         message += snapshot.layers[i].name;
         if (!snapshot.layers[i].version.empty()) message += " (" + snapshot.layers[i].version + ")";
+    }
+    message += "; local IPv4 interfaces: ";
+    const std::vector<NetworkInterface> interfaces = environment.localInterfaces();
+    if (interfaces.empty()) {
+        message += "none";
+        return message;
+    }
+    for (std::size_t i = 0; i < interfaces.size(); ++i) {
+        if (i != 0U) message += ", ";
+        message += interfaces[i].name + "=" + interfaces[i].address;
     }
     return message;
 }

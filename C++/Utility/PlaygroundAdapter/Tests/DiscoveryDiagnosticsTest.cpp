@@ -12,19 +12,26 @@ class FakeBackend final : public CameraDiscoveryDiagnostics::Environment {
 public:
     FakeBackend(std::string version,
         std::vector<CameraDiscoveryDiagnostics::TransportLayer> layers,
-        bool available = true)
-        : _version(std::move(version)), _layers(std::move(layers)), _available(available) {}
+        bool available = true,
+        std::vector<CameraDiscoveryDiagnostics::NetworkInterface> interfaces = {})
+        : _version(std::move(version)), _layers(std::move(layers)), _available(available),
+          _interfaces(std::move(interfaces)) {}
 
     std::string pylonVersion() const override { return _version; }
     CameraDiscoveryDiagnostics::TransportLayerSnapshot transportLayers() const override
     {
         return {_available, _layers};
     }
+    std::vector<CameraDiscoveryDiagnostics::NetworkInterface> localInterfaces() const override
+    {
+        return _interfaces;
+    }
 
 private:
     std::string _version;
     std::vector<CameraDiscoveryDiagnostics::TransportLayer> _layers;
     bool _available;
+    std::vector<CameraDiscoveryDiagnostics::NetworkInterface> _interfaces;
 };
 
 /** @brief Fails inside the query, as the production CTlFactory wrapper can. */
@@ -38,6 +45,10 @@ public:
         } catch (const std::runtime_error&) {
             return {false, {}};
         }
+    }
+    std::vector<CameraDiscoveryDiagnostics::NetworkInterface> localInterfaces() const override
+    {
+        return {};
     }
 };
 
@@ -84,5 +95,14 @@ int main()
     const std::string thrownMessage = CameraDiscoveryDiagnostics::emptyDiscoveryMessage(throwing);
     assert(contains(thrownMessage, "loaded transport layers: unavailable"));
     assert(!contains(thrownMessage, "loaded transport layers: none"));
+
+    const FakeBackend subnetMismatch("12.5.2.1565", {{"GigE", ""}}, true,
+        {{"en7", "192.168.0.146"}, {"lo0", "127.0.0.1"}});
+    const std::string networkMessage = CameraDiscoveryDiagnostics::emptyDiscoveryMessage(subnetMismatch);
+    assert(contains(networkMessage, "local IPv4 interfaces: en7=192.168.0.146, lo0=127.0.0.1"));
+
+    const FakeBackend noInterfaces("12.5.2.1565", {{"GigE", ""}});
+    const std::string noNetworkMessage = CameraDiscoveryDiagnostics::emptyDiscoveryMessage(noInterfaces);
+    assert(contains(noNetworkMessage, "local IPv4 interfaces: none"));
     return 0;
 }
