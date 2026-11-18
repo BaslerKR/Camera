@@ -37,7 +37,6 @@ void CameraSystem::updateCameraListLocked()
 {
     _devices.clear();
     auto cnt = _tlFactory->EnumerateDevices(_devices);
-    _catalogInitialized = true;
     syslog("Updated the camera list: " + to_string(cnt) + " Camera(s) found.");
     for(std::size_t i = 0; i < _devices.size(); ++i){
         syslog("-- " + std::string(_devices.at(i).GetFriendlyName()));
@@ -92,7 +91,7 @@ std::vector<string> CameraSystem::getCachedCameraList() const {
 
 std::vector<CameraDeviceDescriptor> CameraSystem::deviceCatalog(bool refresh) {
     std::lock_guard<std::mutex> lock(_mutex);
-    if (refresh || !_catalogInitialized) updateCameraListLocked();
+    if (refresh) updateCameraListLocked();
     std::vector<CameraDeviceDescriptor> result;
     for (const auto& device : _devices) {
         result.push_back({device.GetFullName().c_str(), device.GetFriendlyName().c_str(),

@@ -88,7 +88,7 @@ public:
     bool isOpened() const;
     void close();
     std::string getConnectedCameraName() const;
-    /** @brief Copies targets, initializing an empty catalog or refreshing it when requested. */
+    /** @brief Copies the cached targets, or refreshes the catalog when requested. */
     std::vector<CameraDeviceDescriptor> deviceCatalog(bool refresh) const;
     /** @brief Copies the device serial for one exact target, or an empty string when absent. */
     std::string deviceSerialNumber(const std::string& deviceId) const;

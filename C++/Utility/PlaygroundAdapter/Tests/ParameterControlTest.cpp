@@ -337,26 +337,74 @@ private slots:
         _system = std::make_unique<CameraSystem>();
     }
     void cleanupTestCase() { _system.reset(); }
-    void firstConnectionTargetsRequestDiscoversEmulator() {
+    void firstConnectionTargetsRequestUsesWorkerDiscoveryCatalog() {
+        std::string emulatorDisplayName;
+        {
+            CameraSystem probe;
+            emulatorDisplayName = findEmulator(probe);
+        }
+        if (emulatorDisplayName.empty()) QSKIP("The pylon camera emulator is not installed.");
+
         CameraSystem system;
+        // CameraPlugin::discoverDevices populates this shared catalog before the worker reads targets.
+        const auto startupCatalog = system.deviceCatalog(true);
+        std::string expectedEmulatorId;
+        for (const auto& item : startupCatalog) {
+            if (item.displayName == emulatorDisplayName) {
+                expectedEmulatorId = item.id;
+                break;
+            }
+        }
+        QVERIFY(!expectedEmulatorId.empty());
+
         auto* camera = system.addCamera(); QVERIFY(camera);
         CameraSourceController controller(camera);
         auto* connection = qobject_cast<IDeviceConnectionControl*>(&controller); QVERIFY(connection);
 
-        auto promise = std::make_shared<std::promise<DeviceConnectionTargets>>();
-        auto targets = promise->get_future();
-        QCOMPARE(connection->requestConnectionTargets([promise](DeviceConnectionTargets value) {
-            promise->set_value(std::move(value));
-        }).error, DeviceConnectionError::None);
-        QVERIFY(targets.wait_for(std::chrono::seconds(30)) == std::future_status::ready);
-        QCoreApplication::processEvents();
-        const auto catalog = targets.get();
-        QCOMPARE(catalog.result.error, DeviceConnectionError::None);
+        const auto readTargets = [&](bool refresh, DeviceConnectionTargets* result) {
+            auto promise = std::make_shared<std::promise<DeviceConnectionTargets>>();
+            auto future = promise->get_future();
+            const auto completion = [promise](DeviceConnectionTargets value) {
+                promise->set_value(std::move(value));
+            };
+            const auto admitted = refresh
+                ? connection->requestDiscover(completion)
+                : connection->requestConnectionTargets(completion);
+            if (admitted.error != DeviceConnectionError::None
+                || future.wait_for(std::chrono::seconds(30)) != std::future_status::ready) return false;
+            QCoreApplication::processEvents();
+            *result = future.get();
+            return true;
+        };
+        const auto targetIds = [](const DeviceConnectionTargets& targets) {
+            std::vector<std::string> ids;
+            for (const auto& target : targets.targets) ids.push_back(target.targetId);
+            std::sort(ids.begin(), ids.end());
+            return ids;
+        };
+        std::vector<std::string> startupIds;
+        for (const auto& item : startupCatalog) startupIds.push_back(item.id);
+        std::sort(startupIds.begin(), startupIds.end());
 
-        const bool hasEmulator = std::any_of(catalog.targets.begin(), catalog.targets.end(),
-            [](const auto& target) { return target.displayName.find("Emulation") != std::string::npos; });
-        if (!hasEmulator) QSKIP("The pylon camera emulator is not installed.");
-        QVERIFY(hasEmulator);
+        DeviceConnectionTargets first;
+        QVERIFY(readTargets(false, &first));
+        QCOMPARE(first.result.error, DeviceConnectionError::None);
+        QVERIFY(std::find_if(first.targets.begin(), first.targets.end(), [&](const auto& target) {
+            return target.targetId == expectedEmulatorId;
+        }) != first.targets.end());
+        QVERIFY(targetIds(first) == startupIds);
+
+        DeviceConnectionTargets cached;
+        QVERIFY(readTargets(false, &cached));
+        QCOMPARE(cached.result.error, DeviceConnectionError::None);
+        QVERIFY(targetIds(cached) == startupIds);
+
+        DeviceConnectionTargets refreshed;
+        QVERIFY(readTargets(true, &refreshed));
+        QCOMPARE(refreshed.result.error, DeviceConnectionError::None);
+        QVERIFY(std::find_if(refreshed.targets.begin(), refreshed.targets.end(), [&](const auto& target) {
+            return target.targetId == expectedEmulatorId;
+        }) != refreshed.targets.end());
     }
     void connectionCapabilityRejectsMalformedCallsAndCompletesExactlyOnce() {
         auto* camera = _system->addCamera(); QVERIFY(camera);

@@ -137,11 +137,15 @@ public:
                 if (errorMessage) *errorMessage = QStringLiteral("Camera plugin is shutting down.");
                 return false;
             }
-            // An empty list is a valid startup state. The camera control owns
-            // the subsequent hardware rescan through its Refresh action.
+            // Populate the shared catalog before the worker reads targets; target observation
+            // itself remains a cache copy, and device.discover owns later refreshes.
+            (void)system->deviceCatalog(true);
             return true;
         } catch (const std::exception& error) {
             if (errorMessage) *errorMessage = QString::fromLocal8Bit(error.what());
+            return false;
+        } catch (...) {
+            if (errorMessage) *errorMessage = QStringLiteral("Camera discovery failed unexpectedly.");
             return false;
         }
     }

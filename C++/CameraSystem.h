@@ -26,7 +26,7 @@ public:
     void updateCameraList();
     std::vector<std::string> getCameraList();
     std::vector<std::string> getCachedCameraList() const;
-    /** @brief Copies exact transport identities under the existing discovery/cache lock. */
+    /** @brief Copies cached identities, optionally refreshing them through the discovery authority. */
     std::vector<CameraDeviceDescriptor> deviceCatalog(bool refresh);
     bool isAccessible(const std::string &camera);
 
@@ -44,8 +44,6 @@ private:
 
     CTlFactory *_tlFactory = nullptr;
     DeviceInfoList_t _devices;
-    /** @brief Tracks whether the device inventory has ever been populated. */
-    bool _catalogInitialized = false;
     std::vector<Camera*> _cameraList;
     std::size_t _nextCameraNumber = 0;
     mutable std::mutex _mutex;

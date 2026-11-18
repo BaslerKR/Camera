@@ -1,6 +1,6 @@
 ## Unreleased
 
-- Discover cameras when a new Camera session first shows its connection list, so users no longer need a separate discovery action before connecting.
+- Populate the Camera worker's shared target catalog during initial discovery, so its first connection list is available without a separate `device.discover` call; later sessions reuse that catalog until it is refreshed.
 
 - Drop the device widget ABI and the QVariantMap discovery hand-back. `IDevicePluginSession` no longer implements `createDockWidgets()`, and `discoverDevices()`/`createSession()` no longer pass discovery data through a `QVariantMap`; discovery and session creation now take only an error message.
 
