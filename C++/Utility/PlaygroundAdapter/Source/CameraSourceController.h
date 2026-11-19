@@ -32,6 +32,8 @@ public:
     using ChangeListener = IDeviceParameterControl::ChangeListener;
     using TargetsCompletion = IDeviceConnectionControl::TargetsCompletion;
     enum class InitialTargetsPolicy { Cached, WaitForInitialDiscovery, WorkerPreflightThenWait };
+    /** @brief Maps a discovery-session preflight and a target-resolution ask to the first-read policy. */
+    static InitialTargetsPolicy resolveInitialTargetsPolicy(bool discoverySessionPending, bool targetResolution);
     CameraSourceController(Camera* camera, IDevicePluginResourceClaims* claims = nullptr,
         std::shared_ptr<IDevicePluginResourceClaim>* claim = nullptr,
         QObject* parent = nullptr, InitialTargetsPolicy initialTargetsPolicy = InitialTargetsPolicy::Cached);

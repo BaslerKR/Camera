@@ -1017,6 +1017,16 @@ DeviceConnectionResult CameraSourceController::scheduleConnectionWork(std::funct
     return {connectionError(admitted.error), admitted.message};
 }
 
+CameraSourceController::InitialTargetsPolicy CameraSourceController::resolveInitialTargetsPolicy(
+    bool discoverySessionPending, bool targetResolution)
+{
+    // A target resolution ask must never resolve an absent id from the prompt preflight snapshot
+    // while the startup scan is still running.
+    return (discoverySessionPending && !targetResolution)
+        ? InitialTargetsPolicy::WorkerPreflightThenWait
+        : InitialTargetsPolicy::WaitForInitialDiscovery;
+}
+
 DeviceConnectionResult CameraSourceController::catalogWork(bool refresh, TargetsCompletion completion,
     bool waitForInitialDiscovery) {
     Q_ASSERT(QThread::currentThread() == thread());

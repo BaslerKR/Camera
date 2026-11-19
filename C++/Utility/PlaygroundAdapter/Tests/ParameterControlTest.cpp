@@ -343,6 +343,13 @@ private slots:
         _system = std::make_unique<CameraSystem>();
     }
     void cleanupTestCase() { _system.reset(); }
+    void targetResolutionSessionOptionSelectsTerminalWait() {
+        using Policy = CameraSourceController::InitialTargetsPolicy;
+        QCOMPARE(CameraSourceController::resolveInitialTargetsPolicy(false, false), Policy::WaitForInitialDiscovery);
+        QCOMPARE(CameraSourceController::resolveInitialTargetsPolicy(true, false), Policy::WorkerPreflightThenWait);
+        QCOMPARE(CameraSourceController::resolveInitialTargetsPolicy(true, true), Policy::WaitForInitialDiscovery);
+        QCOMPARE(CameraSourceController::resolveInitialTargetsPolicy(false, true), Policy::WaitForInitialDiscovery);
+    }
     void targetResolutionReportsDeadlineAsTimeout() {
         // The scan stays running between its fast, empty enumerations. A caller budget that
         // expires in that gap is a genuine deadline and must be reported as TimedOut.

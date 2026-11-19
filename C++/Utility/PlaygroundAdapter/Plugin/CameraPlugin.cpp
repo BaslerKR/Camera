@@ -176,13 +176,10 @@ public:
                 firstTargetsRequestIsWorkerSnapshot = _discoverySessionPending;
                 _discoverySessionPending = false;
             }
-            // A target resolution ask carries the wait policy explicitly: it must not resolve an
-            // absent id from the prompt preflight snapshot while the startup scan is still running.
             const bool resolveAgainstTerminalCatalog = sessionOptions.value(
                 QStringLiteral("targetResolution")).toBool();
-            const auto initialTargetsPolicy = (firstTargetsRequestIsWorkerSnapshot && !resolveAgainstTerminalCatalog)
-                ? CameraSourceController::InitialTargetsPolicy::WorkerPreflightThenWait
-                : CameraSourceController::InitialTargetsPolicy::WaitForInitialDiscovery;
+            const auto initialTargetsPolicy = CameraSourceController::resolveInitialTargetsPolicy(
+                firstTargetsRequestIsWorkerSnapshot, resolveAgainstTerminalCatalog);
             Camera* camera = system->addCamera();
             if (!camera) {
                 if (errorMessage) *errorMessage = QStringLiteral("No Basler camera was detected.");
