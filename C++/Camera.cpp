@@ -401,6 +401,12 @@ std::vector<CameraDeviceDescriptor> Camera::deviceCatalogAfterInitialDiscovery(
     return _system->deviceCatalogAfterInitialDiscovery(waitLimit, cancellationRequested);
 }
 
+CameraInitialDiscoveryAwait Camera::awaitInitialDiscoveryForTarget(
+    std::chrono::milliseconds waitLimit, const std::function<bool()>& cancellationRequested) const
+{
+    return _system->awaitInitialDiscoveryForTarget(waitLimit, cancellationRequested);
+}
+
 void Camera::wakeInitialDiscoveryWaiters() const { _system->wakeInitialDiscoveryWaiters(); }
 
 std::string Camera::deviceSerialNumber(const std::string& deviceId) const {

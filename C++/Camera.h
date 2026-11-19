@@ -48,6 +48,14 @@ struct CameraAcquisitionCapabilities {
 };
 /** @brief Copies a transport-owned target identity independently of feature widgets. */
 struct CameraDeviceDescriptor { std::string id; std::string displayName; std::string serial; };
+/** @brief Classifies one bounded wait for the terminal startup catalog. */
+enum class CameraInitialDiscoveryWait { Published, TimedOut, Cancelled, Failed };
+/** @brief Copies the outcome of one bounded terminal-catalog wait. */
+struct CameraInitialDiscoveryAwait {
+    std::vector<CameraDeviceDescriptor> catalog;
+    CameraInitialDiscoveryWait wait = CameraInitialDiscoveryWait::Published;
+    std::string error;
+};
 /** @brief Copies current logical connection identity without querying SDK features. */
 struct CameraConnectionState { bool connected = false; std::uint64_t generation = 0; std::string deviceId; std::string displayName; };
 /** @brief Distinguishes refused lifecycle admission from actual SDK failure. */
@@ -93,6 +101,9 @@ public:
     std::vector<CameraDeviceDescriptor> deviceCatalog(bool refresh) const;
     /** @brief Waits for a running startup scan before copying its first published targets. */
     std::vector<CameraDeviceDescriptor> deviceCatalogAfterInitialDiscovery(
+        std::chrono::milliseconds waitLimit, const std::function<bool()>& cancellationRequested = {}) const;
+    /** @brief Waits for the terminal startup catalog and reports a typed result, timeout included. */
+    CameraInitialDiscoveryAwait awaitInitialDiscoveryForTarget(
         std::chrono::milliseconds waitLimit, const std::function<bool()>& cancellationRequested = {}) const;
     /** @brief Wakes a target observer when this session's controller is closing. */
     void wakeInitialDiscoveryWaiters() const;

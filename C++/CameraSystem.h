@@ -41,6 +41,9 @@ public:
     /** @brief Waits for a running initial scan, then copies its published target catalog. */
     std::vector<CameraDeviceDescriptor> deviceCatalogAfterInitialDiscovery(
         std::chrono::milliseconds waitLimit, const std::function<bool()>& cancellationRequested = {});
+    /** @brief Waits for the terminal startup catalog and reports a typed result, timeout included. */
+    CameraInitialDiscoveryAwait awaitInitialDiscoveryForTarget(
+        std::chrono::milliseconds waitLimit, const std::function<bool()>& cancellationRequested = {});
     /** @brief Wakes first-target observers when their owning session is closing. */
     void wakeInitialDiscoveryWaiters();
     bool isAccessible(const std::string &camera);

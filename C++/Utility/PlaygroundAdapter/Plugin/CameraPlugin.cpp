@@ -164,7 +164,6 @@ public:
     std::unique_ptr<IDevicePluginSession> createSession(
         const QVariantMap& sessionOptions, QString* errorMessage) override
     {
-        Q_UNUSED(sessionOptions)
         try {
             const auto system = cameraSystem();
             if (!system) {
@@ -177,7 +176,11 @@ public:
                 firstTargetsRequestIsWorkerSnapshot = _discoverySessionPending;
                 _discoverySessionPending = false;
             }
-            const auto initialTargetsPolicy = firstTargetsRequestIsWorkerSnapshot
+            // A target resolution ask carries the wait policy explicitly: it must not resolve an
+            // absent id from the prompt preflight snapshot while the startup scan is still running.
+            const bool resolveAgainstTerminalCatalog = sessionOptions.value(
+                QStringLiteral("targetResolution")).toBool();
+            const auto initialTargetsPolicy = (firstTargetsRequestIsWorkerSnapshot && !resolveAgainstTerminalCatalog)
                 ? CameraSourceController::InitialTargetsPolicy::WorkerPreflightThenWait
                 : CameraSourceController::InitialTargetsPolicy::WaitForInitialDiscovery;
             Camera* camera = system->addCamera();

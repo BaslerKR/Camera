@@ -231,18 +231,20 @@ void CameraSystem::startInitialDiscovery(std::chrono::milliseconds discoveryWind
     }
 }
 
-std::vector<CameraDeviceDescriptor> CameraSystem::deviceCatalogAfterInitialDiscovery(
+CameraInitialDiscoveryAwait CameraSystem::awaitInitialDiscoveryForTarget(
     std::chrono::milliseconds waitLimit, const std::function<bool()>& cancellationRequested)
 {
     std::unique_lock<std::mutex> lock(_mutex);
     const auto deadline = std::chrono::steady_clock::now() + waitLimit;
     while (_initialDiscoveryRunning && _devices.empty()) {
         if (cancellationRequested && cancellationRequested()) {
-            throw std::runtime_error("Camera startup target observation was cancelled.");
+            return {{}, CameraInitialDiscoveryWait::Cancelled,
+                "Camera startup target observation was cancelled."};
         }
         const auto now = std::chrono::steady_clock::now();
         if (now >= deadline && !_initialDiscoveryEnumerationInProgress) {
-            throw std::runtime_error("Camera startup discovery is still running; target observation timed out.");
+            return {{}, CameraInitialDiscoveryWait::TimedOut,
+                "Camera startup discovery is still running; target observation timed out."};
         }
         const auto nextWait = now < deadline
             ? std::min(std::chrono::milliseconds{50},
@@ -251,12 +253,23 @@ std::vector<CameraDeviceDescriptor> CameraSystem::deviceCatalogAfterInitialDisco
         _initialDiscoveryCondition.wait_for(lock, nextWait);
     }
     if (cancellationRequested && cancellationRequested()) {
-        throw std::runtime_error("Camera startup target observation was cancelled.");
+        return {{}, CameraInitialDiscoveryWait::Cancelled,
+            "Camera startup target observation was cancelled."};
     }
     if (!_initialDiscoveryError.empty()) {
-        throw std::runtime_error(_initialDiscoveryError);
+        return {{}, CameraInitialDiscoveryWait::Failed, _initialDiscoveryError};
     }
-    return deviceCatalogLocked();
+    return {deviceCatalogLocked(), CameraInitialDiscoveryWait::Published, {}};
+}
+
+std::vector<CameraDeviceDescriptor> CameraSystem::deviceCatalogAfterInitialDiscovery(
+    std::chrono::milliseconds waitLimit, const std::function<bool()>& cancellationRequested)
+{
+    auto awaited = awaitInitialDiscoveryForTarget(waitLimit, cancellationRequested);
+    if (awaited.wait != CameraInitialDiscoveryWait::Published) {
+        throw std::runtime_error(awaited.error);
+    }
+    return awaited.catalog;
 }
 
 void CameraSystem::wakeInitialDiscoveryWaiters()

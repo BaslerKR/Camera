@@ -343,6 +343,27 @@ private slots:
         _system = std::make_unique<CameraSystem>();
     }
     void cleanupTestCase() { _system.reset(); }
+    void targetResolutionReportsDeadlineAsTimeout() {
+        // The scan stays running between its fast, empty enumerations. A caller budget that
+        // expires in that gap is a genuine deadline and must be reported as TimedOut.
+        std::atomic<int> enumerationCalls{0};
+        CameraSystem system([&](DeviceInfoList_t&) { ++enumerationCalls; });
+        auto* camera = system.addCamera(); QVERIFY(camera);
+        system.startInitialDiscovery(std::chrono::seconds{30});
+        QTRY_VERIFY(enumerationCalls.load() >= 1);
+        QTest::qWait(20);
+        const auto awaited = camera->awaitInitialDiscoveryForTarget(std::chrono::milliseconds{50});
+        QCOMPARE(awaited.wait, CameraInitialDiscoveryWait::TimedOut);
+        QVERIFY(awaited.catalog.empty());
+    }
+    void terminalEmptyStartupCatalogIsPublishedNotTimeout() {
+        CameraSystem system([](DeviceInfoList_t&) {});
+        system.startInitialDiscovery(std::chrono::milliseconds{50});
+        auto* camera = system.addCamera(); QVERIFY(camera);
+        const auto awaited = camera->awaitInitialDiscoveryForTarget(std::chrono::seconds{2});
+        QCOMPARE(awaited.wait, CameraInitialDiscoveryWait::Published);
+        QVERIFY(awaited.catalog.empty());
+    }
     void firstConnectionTargetsRequestUsesWorkerDiscoveryCatalog() {
         std::string emulatorDisplayName;
         {

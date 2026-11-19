@@ -1025,18 +1025,38 @@ DeviceConnectionResult CameraSourceController::catalogWork(bool refresh, Targets
     const auto admitted = scheduleParameterWork([this, refresh, waitForInitialDiscovery,
         completion = std::move(completion)] {
         DeviceConnectionTargets copied;
+        if (waitForInitialDiscovery && !refresh) {
+            // One bounded wait for the terminal startup catalog, then one completion. A genuine
+            // deadline is a Timeout; an authoritative empty catalog stays a successful, empty
+            // result so the Host may resolve an absent id as NotFound.
+            const auto awaited = _camera->awaitInitialDiscoveryForTarget(std::chrono::seconds{65}, [this] {
+                return _parameterClosing.load(std::memory_order_acquire);
+            });
+            if (awaited.wait == CameraInitialDiscoveryWait::TimedOut) {
+                copied.result = {DeviceConnectionError::Timeout, awaited.error};
+            } else if (awaited.wait == CameraInitialDiscoveryWait::Cancelled) {
+                copied.result = {DeviceConnectionError::Unavailable, awaited.error};
+            } else if (awaited.wait == CameraInitialDiscoveryWait::Failed) {
+                copied.result = {DeviceConnectionError::BackendFailure, awaited.error};
+            } else {
+                QStringList labels;
+                for (const auto& item : awaited.catalog) {
+                    copied.targets.push_back({item.id, item.displayName, {}});
+                    labels.append(QString::fromStdString(item.displayName));
+                }
+                emit deviceCatalogChanged(labels);
+            }
+            try { completion(std::move(copied)); } catch (...) {}
+            return;
+        }
         try {
             QStringList labels;
-            const auto catalog = waitForInitialDiscovery && !refresh
-                ? _camera->deviceCatalogAfterInitialDiscovery(std::chrono::seconds{65}, [this] {
-                    return _parameterClosing.load(std::memory_order_acquire);
-                })
-                : _camera->deviceCatalog(refresh);
+            const auto catalog = _camera->deviceCatalog(refresh);
             for (const auto& item : catalog) {
                 copied.targets.push_back({item.id, item.displayName, {}});
                 labels.append(QString::fromStdString(item.displayName));
             }
-            if (refresh || waitForInitialDiscovery) emit deviceCatalogChanged(labels);
+            if (refresh) emit deviceCatalogChanged(labels);
         } catch (const std::exception& error) {
             copied = _parameterClosing.load(std::memory_order_acquire)
                 ? DeviceConnectionTargets{{DeviceConnectionError::Unavailable, "Camera controller is closing."}, {}}
