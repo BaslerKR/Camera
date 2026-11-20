@@ -1,5 +1,9 @@
 ## Unreleased
 
+- Restore the retired feature tree's presentation through the existing descriptor visibility metadata without narrowing the API inventory. Nodes that the retired user tree never displayed — features outside an available category, Events Generation, and write-only non-Command features — are now reported as `hidden` by both `parameters()` and the change snapshot, so the host can omit them while `parameters.list`/read/write/execute and all identifiers stay unchanged. Structurally user-facing features keep their observed value, read-only values and Command buttons, including Commands that stay disabled while not writable. The SDK tests mirror the category-reachability rule and assert inventory/snapshot visibility parity.
+
+- Start the shared target scan when the first session is created on a worker without a prepared discovery session.
+
 - A target-id open that arrives before the startup scan publishes its catalog now resolves against the terminal catalog instead of a prompt preflight snapshot. A discovery session opened for target resolution waits once for the bounded startup scan, then reports a typed outcome: a published catalog, an authoritative empty catalog, a genuine deadline (`Timeout`), cancellation or an explicit failure. Fake-backend tests cover the typed deadline and the terminal empty catalog.
 
 - Start a bounded background pylon scan during worker discovery and publish completed enumerations into the shared target catalog. A session's first `device.targets` request waits for startup enumeration when needed, so slower GigE targets appear without `device.discover`; closing a controller cancels its target observation without stopping the process-shared scan. Fake-backend tests cover delayed enumeration, catalog publication, cancellation, and an empty delayed scan completing after the observation budget.

@@ -148,6 +148,7 @@ struct ExpectedTree {
     DeviceParameterRepresentation representation = DeviceParameterRepresentation::Automatic;
     std::vector<DeviceParameterSelectorRelation> relations;
     bool producerShared = false;
+    bool userFacing = false;
 };
 
 ExpectedTree expectedTree(GenApi::INode* node, const DeviceParameterKind kind)
@@ -184,6 +185,27 @@ ExpectedTree expectedTree(GenApi::INode* node, const DeviceParameterKind kind)
     case GenApi::Guru: expected.visibility = DeviceParameterVisibility::Expert; break;
     case GenApi::Invisible: expected.visibility = DeviceParameterVisibility::Hidden; break;
     default: expected.visibility = DeviceParameterVisibility::Primary; break;
+    }
+    // Independent mirror of the retired widget's tree eligibility. It decides only the
+    // presentation level; the API inventory still contains every supported node.
+    expected.userFacing = GenApi::IsAvailable(node)
+        && !(node->GetAccessMode() == GenApi::WO && kind != DeviceParameterKind::Command);
+    if (expected.userFacing) {
+        GenApi::NodeList_t parents;
+        node->GetParents(parents);
+        expected.userFacing = false;
+        for (auto* parent : parents) {
+            if (parent->GetPrincipalInterfaceType() != GenApi::intfICategory) continue;
+            if (std::string(parent->GetName().c_str()) == "Root") continue;
+            if (!GenApi::IsAvailable(parent)) continue;
+            GenApi::NodeList_t grandparents;
+            parent->GetParents(grandparents);
+            if (!grandparents.empty()
+                && std::string(grandparents.front()->GetDisplayName().c_str()) == "Events Generation")
+                continue;
+            expected.userFacing = true;
+            break;
+        }
     }
     if (kind == DeviceParameterKind::Enumeration) {
         expected.representation = DeviceParameterRepresentation::Choice;
@@ -1285,7 +1307,10 @@ private slots:
                 const auto found = expected.find(descriptor.target.name);
                 QVERIFY2(found != expected.end(), descriptor.target.name.c_str());
                 QCOMPARE(descriptor.categoryPath, found->second.categoryPath);
-                QVERIFY(descriptor.visibility == found->second.visibility);
+                const auto presentation = found->second.userFacing
+                ? found->second.visibility : DeviceParameterVisibility::Hidden;
+            QVERIFY2(descriptor.visibility == presentation,
+                (descriptor.target.name + " visibility").c_str());
                 QVERIFY(descriptor.representation == found->second.representation);
                 QCOMPARE(descriptor.selectorRelations, found->second.relations);
                 QCOMPARE(descriptor.producerShared, found->second.producerShared);
@@ -1329,6 +1354,15 @@ private slots:
             QCOMPARE(snapshot->sequence, std::uint64_t(1));
             QCOMPARE(snapshot->descriptors.size(), inventory.size());
             QCOMPARE(snapshot->subscriptionId, std::string("watch-1"));
+            for (const auto& observed : snapshot->descriptors) {
+                const auto listed = std::find_if(inventory.begin(), inventory.end(),
+                    [&observed](const DeviceParameterDescriptor& item) {
+                        return item.target.name == observed.target.name;
+                    });
+                QVERIFY(listed != inventory.end());
+                QVERIFY2(listed->visibility == observed.visibility,
+                    (observed.target.name + " snapshot visibility").c_str());
+            }
 
             std::optional<WritableCandidate> written;
             for (const auto& descriptor : inventory) {

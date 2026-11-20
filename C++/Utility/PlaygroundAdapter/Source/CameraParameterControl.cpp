@@ -110,6 +110,36 @@ DeviceParameterVisibility visibilityOf(GenApi::INode* node) {
     default: return DeviceParameterVisibility::Primary;
     }
 }
+/**
+ * @brief Mirrors the retired user widget's feature-tree eligibility with descriptor metadata.
+ * @note The API inventory is unchanged: every supported node is still observed and sold.
+ *       Only the presentation level distinguishes nodes the retired tree displayed from
+ *       internal nodes, Events Generation, and write-only non-Command features. No feature
+ *       name, value or numeric pattern is inspected.
+ */
+bool userFacingFeature(GenApi::INode* node) {
+    const auto type = node->GetPrincipalInterfaceType();
+    if (type != GenApi::intfIInteger && type != GenApi::intfIFloat
+        && type != GenApi::intfIBoolean && type != GenApi::intfIString
+        && type != GenApi::intfIEnumeration && type != GenApi::intfICommand)
+        return false;
+    if (!GenApi::IsAvailable(node)) return false;
+    if (node->GetAccessMode() == GenApi::WO && type != GenApi::intfICommand) return false;
+    GenApi::NodeList_t parents;
+    node->GetParents(parents);
+    for (auto* parent : parents) {
+        if (parent->GetPrincipalInterfaceType() != GenApi::intfICategory) continue;
+        if (std::string(parent->GetName().c_str()) == "Root") continue;
+        if (!GenApi::IsAvailable(parent)) continue;
+        GenApi::NodeList_t grandparents;
+        parent->GetParents(grandparents);
+        if (!grandparents.empty()
+            && std::string(grandparents.front()->GetDisplayName().c_str()) == "Events Generation")
+            continue;
+        return true;
+    }
+    return false;
+}
 /** @brief Derives the editor hint from the GenApi value representation. */
 DeviceParameterRepresentation representationOf(GenApi::INode* node, DeviceParameterKind kind) {
     if (kind == DeviceParameterKind::Enumeration) return DeviceParameterRepresentation::Choice;
@@ -225,6 +255,7 @@ DeviceParameterDescriptor CameraSourceController::observeParameter(GenApi::INode
         state.categoryPath = tree.categoryPath;
         state.producerShared = tree.producerShared;
         state.visibility = visibilityOf(node);
+        if (!userFacingFeature(node)) state.visibility = DeviceParameterVisibility::Hidden;
         state.representation = representationOf(node, state.kind);
         state.selectorRelations = selectorRelations(node);
         std::set<std::string> seen;

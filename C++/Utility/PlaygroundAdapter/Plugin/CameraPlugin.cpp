@@ -142,7 +142,7 @@ public:
             }
             // Keep the package preflight prompt while a bounded startup scan publishes the
             // catalog used by the session's first target observation.
-            system->startInitialDiscovery(std::chrono::seconds{60});
+            system->startInitialDiscovery(StartupDiscoveryWindow);
             {
                 std::lock_guard<std::mutex> lock(_systemMutex);
                 if (_shuttingDown) {
@@ -170,6 +170,9 @@ public:
                 if (errorMessage) *errorMessage = QStringLiteral("Camera plugin is shutting down.");
                 return {};
             }
+            // A fresh worker can create a session without a prepared discovery session.
+            // The process-shared scan starts only once.
+            system->startInitialDiscovery(StartupDiscoveryWindow);
             bool firstTargetsRequestIsWorkerSnapshot = false;
             {
                 std::lock_guard<std::mutex> lock(_systemMutex);
@@ -211,6 +214,8 @@ public:
     }
 
 private:
+    static constexpr auto StartupDiscoveryWindow = std::chrono::seconds{60};
+
     std::shared_ptr<CameraSystem> cameraSystem()
     {
         std::lock_guard<std::mutex> lock(_systemMutex);
