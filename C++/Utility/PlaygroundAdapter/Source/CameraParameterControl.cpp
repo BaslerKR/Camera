@@ -123,7 +123,9 @@ bool userFacingFeature(GenApi::INode* node) {
         && type != GenApi::intfIBoolean && type != GenApi::intfIString
         && type != GenApi::intfIEnumeration && type != GenApi::intfICommand)
         return false;
-    if (!GenApi::IsAvailable(node)) return false;
+    // Availability is a capability state, not a visibility state: `state.available` already
+    // carries it, and the shared rule keeps an unavailable control visible and disabled. Hiding
+    // here would make a selector-gated feature vanish and reappear as the selector changed.
     if (node->GetAccessMode() == GenApi::WO && type != GenApi::intfICommand) return false;
     GenApi::NodeList_t parents;
     node->GetParents(parents);

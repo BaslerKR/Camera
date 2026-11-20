@@ -187,9 +187,11 @@ ExpectedTree expectedTree(GenApi::INode* node, const DeviceParameterKind kind)
     default: expected.visibility = DeviceParameterVisibility::Primary; break;
     }
     // Independent mirror of the retired widget's tree eligibility. It decides only the
-    // presentation level; the API inventory still contains every supported node.
-    expected.userFacing = GenApi::IsAvailable(node)
-        && !(node->GetAccessMode() == GenApi::WO && kind != DeviceParameterKind::Command);
+    // presentation level; the API inventory still contains every supported node. Availability is
+    // deliberately not part of eligibility: an unavailable user-facing node stays visible and is
+    // rendered disabled, so this mirror must not fold IsAvailable into the hidden decision.
+    expected.userFacing =
+        !(node->GetAccessMode() == GenApi::WO && kind != DeviceParameterKind::Command);
     if (expected.userFacing) {
         GenApi::NodeList_t parents;
         node->GetParents(parents);
@@ -1308,9 +1310,9 @@ private slots:
                 QVERIFY2(found != expected.end(), descriptor.target.name.c_str());
                 QCOMPARE(descriptor.categoryPath, found->second.categoryPath);
                 const auto presentation = found->second.userFacing
-                ? found->second.visibility : DeviceParameterVisibility::Hidden;
-            QVERIFY2(descriptor.visibility == presentation,
-                (descriptor.target.name + " visibility").c_str());
+                    ? found->second.visibility : DeviceParameterVisibility::Hidden;
+                QVERIFY2(descriptor.visibility == presentation,
+                    (descriptor.target.name + " visibility").c_str());
                 QVERIFY(descriptor.representation == found->second.representation);
                 QCOMPARE(descriptor.selectorRelations, found->second.relations);
                 QCOMPARE(descriptor.producerShared, found->second.producerShared);
