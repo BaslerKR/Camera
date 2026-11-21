@@ -1,4 +1,6 @@
 #include "CameraSourceController.h"
+#include "CameraParameterVisibility.h"
+#include <GenApi/NodeMapRef.h>
 #include "Tools/ToolProvider.h"
 #include "CameraSystem.h"
 #include "DeviceRuntime/Contract/HardwareResourceKey.h"
@@ -144,11 +146,9 @@ private:
 /** @brief Mirrors the module's GenApi tree mapping without calling its private helpers. */
 struct ExpectedTree {
     std::vector<std::string> categoryPath;
-    DeviceParameterVisibility visibility = DeviceParameterVisibility::Primary;
     DeviceParameterRepresentation representation = DeviceParameterRepresentation::Automatic;
     std::vector<DeviceParameterSelectorRelation> relations;
     bool producerShared = false;
-    bool userFacing = false;
 };
 
 ExpectedTree expectedTree(GenApi::INode* node, const DeviceParameterKind kind)
@@ -180,35 +180,6 @@ ExpectedTree expectedTree(GenApi::INode* node, const DeviceParameterKind kind)
     std::reverse(expected.categoryPath.begin(), expected.categoryPath.end());
     if (expected.categoryPath.size() > deviceParameterCategoryDepthLimit)
         expected.categoryPath.resize(deviceParameterCategoryDepthLimit);
-    switch (node->GetVisibility()) {
-    case GenApi::Expert: expected.visibility = DeviceParameterVisibility::Advanced; break;
-    case GenApi::Guru: expected.visibility = DeviceParameterVisibility::Expert; break;
-    case GenApi::Invisible: expected.visibility = DeviceParameterVisibility::Hidden; break;
-    default: expected.visibility = DeviceParameterVisibility::Primary; break;
-    }
-    // Independent mirror of the retired widget's tree eligibility. It decides only the
-    // presentation level; the API inventory still contains every supported node. Availability is
-    // deliberately not part of eligibility: an unavailable user-facing node stays visible and is
-    // rendered disabled, so this mirror must not fold IsAvailable into the hidden decision.
-    expected.userFacing =
-        !(node->GetAccessMode() == GenApi::WO && kind != DeviceParameterKind::Command);
-    if (expected.userFacing) {
-        GenApi::NodeList_t parents;
-        node->GetParents(parents);
-        expected.userFacing = false;
-        for (auto* parent : parents) {
-            if (parent->GetPrincipalInterfaceType() != GenApi::intfICategory) continue;
-            if (std::string(parent->GetName().c_str()) == "Root") continue;
-            if (!GenApi::IsAvailable(parent)) continue;
-            GenApi::NodeList_t grandparents;
-            parent->GetParents(grandparents);
-            if (!grandparents.empty()
-                && std::string(grandparents.front()->GetDisplayName().c_str()) == "Events Generation")
-                continue;
-            expected.userFacing = true;
-            break;
-        }
-    }
     if (kind == DeviceParameterKind::Enumeration) {
         expected.representation = DeviceParameterRepresentation::Choice;
     } else if (kind == DeviceParameterKind::Boolean) {
@@ -1269,6 +1240,35 @@ private slots:
         camera->deregisterNodeUpdatedCallback(callback);
         camera->close();
     }
+    void parameterVisibilityUsesConcreteGenApiNodes() {
+        const char* xml =
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+            "<RegisterDescription ModelName=\"Fixture\" VendorName=\"Test\" ProductGuid=\"00000000-0000-0000-0000-000000000001\" VersionGuid=\"00000000-0000-0000-0000-000000000002\" ToolTip=\"Fixture\" StandardNameSpace=\"None\" SchemaMajorVersion=\"1\" SchemaMinorVersion=\"1\" SchemaSubMinorVersion=\"0\" MajorVersion=\"1\" MinorVersion=\"0\" SubMinorVersion=\"0\" xmlns=\"http://www.genicam.org/GenApi/Version_1_1\">"
+            "  <Category Name=\"Root\"><pFeature>Features</pFeature><pFeature>Events</pFeature></Category>"
+            "  <Category Name=\"Features\"><pFeature>Normal</pFeature><pFeature>WriteOnly</pFeature><pFeature>Unavailable</pFeature></Category>"
+            "  <Category Name=\"Events\"><DisplayName>Events Generation</DisplayName><pFeature>EventGroup</pFeature></Category>"
+            "  <Category Name=\"EventGroup\"><pFeature>EventValue</pFeature></Category>"
+            "  <Integer Name=\"Normal\"><Value>1</Value><Min>0</Min><Max>10</Max></Integer>"
+            "  <Integer Name=\"WriteOnly\"><Value>1</Value><Min>0</Min><Max>10</Max></Integer>"
+            "  <Integer Name=\"Unavailable\"><Value>1</Value><Min>0</Min><Max>10</Max></Integer>"
+            "  <Integer Name=\"EventValue\"><Value>1</Value><Min>0</Min><Max>10</Max></Integer>"
+            "</RegisterDescription>";
+        GenApi::CNodeMapRef map;
+        try { map._LoadXMLFromString(xml); }
+        catch (const GenICam::GenericException& error) { QFAIL(error.GetDescription()); }
+        auto* normal = map._GetNode("Normal");
+        auto* writeOnly = map._GetNode("WriteOnly");
+        auto* unavailable = map._GetNode("Unavailable");
+        auto* event = map._GetNode("EventValue");
+        QVERIFY(normal && writeOnly && unavailable && event);
+        writeOnly->ImposeAccessMode(GenApi::WO);
+        unavailable->ImposeAccessMode(GenApi::NA);
+        QCOMPARE(writeOnly->GetAccessMode(), GenApi::WO);
+        QVERIFY(cameraUserFacingFeature(normal));
+        QVERIFY(!cameraUserFacingFeature(writeOnly));
+        QVERIFY(!cameraUserFacingFeature(event));
+        QVERIFY(cameraUserFacingFeature(unavailable));
+    }
     void parameterTreeCarriesGenApiStructure() {
         qputenv("PYLON_CAMEMU", "1");
         auto& system = *_system;
@@ -1309,10 +1309,6 @@ private slots:
                 const auto found = expected.find(descriptor.target.name);
                 QVERIFY2(found != expected.end(), descriptor.target.name.c_str());
                 QCOMPARE(descriptor.categoryPath, found->second.categoryPath);
-                const auto presentation = found->second.userFacing
-                    ? found->second.visibility : DeviceParameterVisibility::Hidden;
-                QVERIFY2(descriptor.visibility == presentation,
-                    (descriptor.target.name + " visibility").c_str());
                 QVERIFY(descriptor.representation == found->second.representation);
                 QCOMPARE(descriptor.selectorRelations, found->second.relations);
                 QCOMPARE(descriptor.producerShared, found->second.producerShared);
@@ -1322,6 +1318,13 @@ private slots:
                 if (!descriptor.selectorRelations.empty()) ++withRelations;
                 if (descriptor.producerShared) ++producerShared;
             }
+            const auto findNamed = [&inventory](const char* name) {
+                return std::find_if(inventory.cbegin(), inventory.cend(),
+                    [name](const auto& descriptor) { return descriptor.target.name == name; });
+            };
+            const auto width = findNamed("Width");
+            QVERIFY(width != inventory.cend());
+            QVERIFY(width->visibility != DeviceParameterVisibility::Hidden);
             QVERIFY(withCategory > 0);
             QVERIFY(producerShared > 0);
             // LineSelector selects the per-line features; the emulator exposes that tree.

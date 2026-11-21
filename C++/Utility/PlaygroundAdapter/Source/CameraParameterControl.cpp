@@ -1,4 +1,5 @@
 #include "CameraSourceController.h"
+#include "CameraParameterVisibility.h"
 #include <QThread>
 #include <algorithm>
 #include <chrono>
@@ -117,7 +118,9 @@ DeviceParameterVisibility visibilityOf(GenApi::INode* node) {
  *       internal nodes, Events Generation, and write-only non-Command features. No feature
  *       name, value or numeric pattern is inspected.
  */
-bool userFacingFeature(GenApi::INode* node) {
+} // namespace
+
+bool cameraUserFacingFeature(GenApi::INode* node) {
     const auto type = node->GetPrincipalInterfaceType();
     if (type != GenApi::intfIInteger && type != GenApi::intfIFloat
         && type != GenApi::intfIBoolean && type != GenApi::intfIString
@@ -142,6 +145,7 @@ bool userFacingFeature(GenApi::INode* node) {
     }
     return false;
 }
+namespace {
 /** @brief Derives the editor hint from the GenApi value representation. */
 DeviceParameterRepresentation representationOf(GenApi::INode* node, DeviceParameterKind kind) {
     if (kind == DeviceParameterKind::Enumeration) return DeviceParameterRepresentation::Choice;
@@ -257,7 +261,7 @@ DeviceParameterDescriptor CameraSourceController::observeParameter(GenApi::INode
         state.categoryPath = tree.categoryPath;
         state.producerShared = tree.producerShared;
         state.visibility = visibilityOf(node);
-        if (!userFacingFeature(node)) state.visibility = DeviceParameterVisibility::Hidden;
+        if (!cameraUserFacingFeature(node)) state.visibility = DeviceParameterVisibility::Hidden;
         state.representation = representationOf(node, state.kind);
         state.selectorRelations = selectorRelations(node);
         std::set<std::string> seen;
