@@ -145,6 +145,7 @@ private:
 
 /** @brief Mirrors the module's GenApi tree mapping without calling its private helpers. */
 struct ExpectedTree {
+    DeviceParameterVisibility visibility = DeviceParameterVisibility::Hidden;
     std::vector<std::string> categoryPath;
     DeviceParameterRepresentation representation = DeviceParameterRepresentation::Automatic;
     std::vector<DeviceParameterSelectorRelation> relations;
@@ -180,6 +181,14 @@ ExpectedTree expectedTree(GenApi::INode* node, const DeviceParameterKind kind)
     std::reverse(expected.categoryPath.begin(), expected.categoryPath.end());
     if (expected.categoryPath.size() > deviceParameterCategoryDepthLimit)
         expected.categoryPath.resize(deviceParameterCategoryDepthLimit);
+    if (cameraUserFacingFeature(node)) {
+        switch (node->GetVisibility()) {
+        case GenApi::Expert: expected.visibility = DeviceParameterVisibility::Advanced; break;
+        case GenApi::Guru: expected.visibility = DeviceParameterVisibility::Expert; break;
+        case GenApi::Invisible: expected.visibility = DeviceParameterVisibility::Hidden; break;
+        default: expected.visibility = DeviceParameterVisibility::Primary; break;
+        }
+    }
     if (kind == DeviceParameterKind::Enumeration) {
         expected.representation = DeviceParameterRepresentation::Choice;
     } else if (kind == DeviceParameterKind::Boolean) {
@@ -1278,6 +1287,16 @@ private slots:
         {
             CameraSourceController controller(camera);
             QVERIFY(camera->open(emulator));
+            // The emulator has no Guru user-facing feature by default. Give one concrete
+            // feature that level so inventory exercises the Guru-to-Expert mapping too.
+            bool guruWidth = false;
+            QVERIFY(camera->accessFeatures([&](GenApi::INodeMap& map, std::uint64_t) {
+                auto* width = map.GetNode("Width");
+                if (!width) return;
+                width->ImposeVisibility(GenApi::Guru);
+                guruWidth = width->GetVisibility() == GenApi::Guru;
+            }));
+            QVERIFY(guruWidth);
             std::vector<DeviceParameterDescriptor> inventory;
             const auto listed = controller.parameters(&inventory);
             QVERIFY2(listed.error == DeviceParameterError::None, listed.message.c_str());
@@ -1304,11 +1323,17 @@ private slots:
                     expected.emplace(node->GetName().c_str(), expectedTree(node, kind));
                 }
             }));
-            std::size_t withCategory = 0, withRelations = 0, producerShared = 0;
+            std::size_t withCategory = 0, withRelations = 0, producerShared = 0, hidden = 0;
+            std::size_t advanced = 0, expert = 0;
             for (const auto& descriptor : inventory) {
                 const auto found = expected.find(descriptor.target.name);
                 QVERIFY2(found != expected.end(), descriptor.target.name.c_str());
                 QCOMPARE(descriptor.categoryPath, found->second.categoryPath);
+                QVERIFY2(descriptor.visibility == found->second.visibility,
+                    (descriptor.target.name + " inventory visibility").c_str());
+                if (descriptor.visibility == DeviceParameterVisibility::Hidden) ++hidden;
+                if (descriptor.visibility == DeviceParameterVisibility::Advanced) ++advanced;
+                if (descriptor.visibility == DeviceParameterVisibility::Expert) ++expert;
                 QVERIFY(descriptor.representation == found->second.representation);
                 QCOMPARE(descriptor.selectorRelations, found->second.relations);
                 QCOMPARE(descriptor.producerShared, found->second.producerShared);
@@ -1324,7 +1349,10 @@ private slots:
             };
             const auto width = findNamed("Width");
             QVERIFY(width != inventory.cend());
-            QVERIFY(width->visibility != DeviceParameterVisibility::Hidden);
+            QCOMPARE(width->visibility, DeviceParameterVisibility::Expert);
+            QVERIFY(hidden > 0);
+            QVERIFY(advanced > 0);
+            QVERIFY(expert > 0);
             QVERIFY(withCategory > 0);
             QVERIFY(producerShared > 0);
             // LineSelector selects the per-line features; the emulator exposes that tree.
