@@ -2,6 +2,7 @@
 
 #include "BlazeGraphicsFrameAdapter.h"
 #include "Camera.h"
+#include "PylonAssemblyRejection.h"
 #include "PylonScene3DProfile.h"
 #include "engine/GraphicsFrame.h"
 #include "engine/GraphicsImageWriter.h"
@@ -21,12 +22,16 @@ public:
     [[nodiscard]] std::optional<GraphicsFrame> convertGraphicsFrame(
         const Pylon::CPylonDataContainer& container,
         const GraphicsFrameRequest& request,
-        const PylonScene3DProfile& profile) const;
+        const PylonScene3DProfile& profile,
+        std::uint64_t frameSequence = 0U,
+        std::optional<PylonImageRejection>* imageRejection = nullptr,
+        std::optional<PylonRangeRejection>* rangeRejection = nullptr) const;
 
     /** Converts one owned 2D pylon image into the canonical GraphicsImage. */
     [[nodiscard]] GraphicsImage convertGraphicsImage(
         const Pylon::CPylonImage& image,
-        std::uint64_t frameSequence = 0U) const;
+        std::uint64_t frameSequence = 0U,
+        std::optional<PylonImageRejection>* rejection = nullptr) const;
 
 private:
     BlazeGraphicsFrameAdapter _blazeAdapter;

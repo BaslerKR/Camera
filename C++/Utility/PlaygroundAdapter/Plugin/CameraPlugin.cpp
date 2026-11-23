@@ -1,4 +1,5 @@
 #include "DeviceRuntime/Contract/DevicePluginSession.h"
+#include "DeviceRuntime/Contract/DeviceImageDiagnostics.h"
 
 #include "Camera.h"
 #include "CameraSystem.h"
@@ -63,10 +64,13 @@ public:
         std::shared_ptr<CameraSystem> system,
         Camera* camera,
         IDevicePluginResourceClaims* claims,
-        CameraSourceController::InitialTargetsPolicy initialTargetsPolicy)
+        CameraSourceController::InitialTargetsPolicy initialTargetsPolicy,
+        DeviceImageRejectionSink imageRejectionSink,
+        DeviceRangeRejectionSink rangeRejectionSink)
         : _system(std::move(system)), _camera(camera),
           _controller(std::make_unique<CameraSourceController>(
-              _camera, claims, &_claim, nullptr, initialTargetsPolicy))
+              _camera, claims, &_claim, nullptr, initialTargetsPolicy,
+              imageRejectionSink, rangeRejectionSink))
     {
         std::weak_ptr<CameraPluginTitleState> titleState = _titleState;
         Camera* const cameraForCallback = _camera;
@@ -121,10 +125,12 @@ private:
 };
 
 class CameraPlugin final : public QObject, public IDeviceRuntime,
-    public IDevicePluginResourceClaimsReceiver {
+    public IDevicePluginResourceClaimsReceiver, public IDeviceImageDiagnostics,
+    public IDeviceRangeDiagnostics {
     Q_OBJECT
     Q_PLUGIN_METADATA(IID PlaygroundDeviceRuntime_iid)
-    Q_INTERFACES(IDeviceRuntime IDevicePluginResourceClaimsReceiver)
+    Q_INTERFACES(IDeviceRuntime IDevicePluginResourceClaimsReceiver
+                 IDeviceImageDiagnostics IDeviceRangeDiagnostics)
 
 public:
     DevicePluginDescriptor descriptor() const override
@@ -189,7 +195,8 @@ public:
                 return {};
             }
             return std::make_unique<CameraPluginSession>(system, camera,
-                _claims.load(std::memory_order_acquire), initialTargetsPolicy);
+                _claims.load(std::memory_order_acquire), initialTargetsPolicy,
+                _imageRejectionSink, _rangeRejectionSink);
         } catch (const std::exception& error) {
             if (errorMessage) *errorMessage = QString::fromLocal8Bit(error.what());
             return {};
@@ -199,6 +206,18 @@ public:
     void setResourceClaims(IDevicePluginResourceClaims* claims) override
     {
         _claims.store(claims, std::memory_order_release);
+    }
+
+    /** @brief Receives the image sink on the runtime owner thread before sessions exist. */
+    void setImageRejectionSink(DeviceImageRejectionSink sink) noexcept override
+    {
+        _imageRejectionSink = sink;
+    }
+
+    /** @brief Receives the range sink on the runtime owner thread before sessions exist. */
+    void setRangeRejectionSink(DeviceRangeRejectionSink sink) noexcept override
+    {
+        _rangeRejectionSink = sink;
     }
 
     void shutdown() override
@@ -230,6 +249,8 @@ private:
     std::shared_ptr<CameraSystem> _system;
     bool _discoverySessionPending = false;
     std::atomic<IDevicePluginResourceClaims*> _claims{nullptr};
+    DeviceImageRejectionSink _imageRejectionSink = nullptr;
+    DeviceRangeRejectionSink _rangeRejectionSink = nullptr;
     bool _shuttingDown = false;
 };
 

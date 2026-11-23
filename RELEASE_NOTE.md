@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Report observed 2D write and organized-range assembly failures through the optional `IDeviceImageDiagnostics` and `IDeviceRangeDiagnostics` sinks. The Qt-free adapter records the actual failed rule with bounded layout numbers and the SDK input sequence; Live emits the first and every 100th failure per reason while Single emits every failure. Conversion fallbacks, retained intensity/confidence channels and preview behavior are unchanged.
+
 - Verify feature-tree visibility against concrete GenApi nodes for event, write-only, ordinary, and temporarily unavailable features.
 
 - Declare device panel presentation in package session metadata.

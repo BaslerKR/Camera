@@ -364,6 +364,7 @@ if(CAMERA_BUILD_PLAYGROUND_ADAPTER)
     add_library(CameraPlaygroundAdapter STATIC
         Utility/PlaygroundAdapter/BlazeGraphicsFrameAdapter.h
         Utility/PlaygroundAdapter/BlazeGraphicsFrameAdapter.cpp
+        Utility/PlaygroundAdapter/PylonAssemblyRejection.h
         Utility/PlaygroundAdapter/PylonGraphicsFrameAdapter.h
         Utility/PlaygroundAdapter/PylonGraphicsFrameAdapter.cpp
         Utility/PlaygroundAdapter/PylonGraphicsFrameStream.h
@@ -493,6 +494,32 @@ if(CAMERA_BUILD_PLAYGROUND_PLUGIN)
         set_tests_properties(camera_parameter_control_test PROPERTIES
             ENVIRONMENT "PYLON_CAMEMU=1;QT_QPA_PLATFORM=offscreen"
             TIMEOUT 360
+        )
+
+        # Device-free sampling and host-enum mapping checks for assembly evidence.
+        add_executable(camera_rejection_sampling_test
+            Utility/PlaygroundAdapter/Tests/RejectionSamplingTest.cpp
+            Utility/PlaygroundAdapter/Source/CameraSourceController.cpp
+            Utility/PlaygroundAdapter/Source/CameraParameterControl.cpp
+        )
+        playground_sdk_add_runtime_contract(camera_rejection_sampling_test)
+        set_target_properties(camera_rejection_sampling_test PROPERTIES AUTOMOC ON)
+        target_compile_features(camera_rejection_sampling_test PRIVATE cxx_std_17)
+        target_include_directories(camera_rejection_sampling_test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter"
+            "${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Source"
+        )
+        target_link_libraries(camera_rejection_sampling_test PRIVATE
+            Playground::DeviceRuntimeContract
+            Camera::PlaygroundAdapter
+            Qt6::Core
+            Qt6::Concurrent
+            Qt6::Test
+        )
+        add_test(NAME camera_rejection_sampling_test COMMAND camera_rejection_sampling_test)
+        set_tests_properties(camera_rejection_sampling_test PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         )
     endif()
     include("${CMAKE_CURRENT_SOURCE_DIR}/Utility/PlaygroundAdapter/Package/RuntimeStaging.cmake")

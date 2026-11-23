@@ -10,6 +10,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <optional>
 
 int main()
 {
@@ -61,6 +62,33 @@ int main()
     adapter.setFrameStorage([](std::size_t) { return std::shared_ptr<std::uint8_t>(); });
     assert(!adapter.convertGraphicsImage(source, 44U).isValid());
     adapter.setFrameStorage({});
+
+    // 2D rejections carry the SDK input sequence and bounded layout values only.
+    {
+        std::optional<PylonImageRejection> rejection;
+        assert(!adapter.convertGraphicsImage(Pylon::CPylonImage{}, 71U, &rejection).isValid());
+        assert(rejection.has_value());
+        assert(rejection->reason == PylonImageRejection::Reason::MissingBytes);
+        assert(rejection->frameSequence == 71U);
+        assert(rejection->conversion == PylonImageRejection::Conversion::None);
+
+        adapter.setFrameStorage([](std::size_t) { return std::shared_ptr<std::uint8_t>(); });
+        rejection.reset();
+        assert(!adapter.convertGraphicsImage(source, 72U, &rejection).isValid());
+        assert(rejection.has_value());
+        assert(rejection->reason == PylonImageRejection::Reason::StorageRefused);
+        assert(rejection->frameSequence == 72U);
+        assert(rejection->width == 2U && rejection->height == 2U);
+        assert(rejection->pixelFormat == static_cast<std::uint64_t>(Pylon::PixelType_Mono8));
+        assert(rejection->minimumRowBytes == 2U);
+        assert(rejection->readableBytes == source.GetImageSize());
+        assert(rejection->requiredBytes >= 2U);
+        adapter.setFrameStorage({});
+
+        rejection.reset();
+        const GraphicsImage retained = adapter.convertGraphicsImage(source, 73U, &rejection);
+        assert(retained.isValid() && !rejection.has_value());
+    }
 
     // The pylon converter path keeps its bytes and shifts Mono16 back by the source bit depth.
     Pylon::CPylonImage mono12 = Pylon::CPylonImage::Create(Pylon::PixelType_Mono12, 2U, 2U);
@@ -205,8 +233,34 @@ int main()
         assert(rangeOnly->ranges.size() == 1U);
         assert(rangeOnly->ranges.front().payload.rgb.empty());
 
+        // Range evidence names the real failed rule, keeps the SDK sequence, and
+        // stays empty when a valid range (and its intensity) is retained.
+        std::optional<PylonRangeRejection> rejection;
+        const auto retainedRange = blaze.convertSource(source, {}, 82U, &rejection);
+        assert(retainedRange.has_value() && !rejection.has_value());
+
+        BlazeRangeSource missing;
+        missing.width = 2;
+        missing.height = 2;
+        rejection.reset();
+        assert(!blaze.convertSource(missing, {}, 83U, &rejection).has_value());
+        assert(rejection.has_value());
+        assert(rejection->reason == PylonRangeRejection::Reason::MissingData);
+        assert(rejection->frameSequence == 83U);
+        assert(rejection->width == 2U && rejection->height == 2U);
+
         blaze.setFrameStorage([](const std::size_t) { return std::shared_ptr<std::uint8_t>(); });
+        rejection.reset();
+        assert(!blaze.convertSource(source, {}, 84U, &rejection).has_value());
+        assert(rejection.has_value());
+        assert(rejection->reason == PylonRangeRejection::Reason::StorageRefused);
+        assert(rejection->frameSequence == 84U);
+        assert(rejection->requestedStorageBytes > 0U);
+        assert(!rejection->frameRetained && !rejection->imageRetained && !rejection->rangeRetained);
+
+        rejection.reset();
         assert(!blaze.convertSource(source, {}).has_value());
+        assert(!rejection.has_value());
     }
     return 0;
 }

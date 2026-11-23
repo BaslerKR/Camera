@@ -1233,6 +1233,7 @@ DeviceConnectionResult CameraSourceController::requestSingle(std::string connect
         if (!state.connected) return {DeviceConnectionError::Disconnected, "The camera is disconnected."};
         if (connectionIdFor(state) != connectionId) return {DeviceConnectionError::Conflict, "The connection changed; observe it again."};
         if (_isGrabbing.load()) return {DeviceConnectionError::Busy, "Stop Live before a single grab."};
+        beginRejectionRun(true);
         auto wait = std::make_shared<SingleGrabWait>();
         const auto started = _camera->startAcquisition(CameraAcquisitionAction::Single,
             [wait](const std::size_t delivered) {
@@ -1270,6 +1271,7 @@ DeviceConnectionResult CameraSourceController::requestLiveStart(std::string conn
         if (!state.connected) return {DeviceConnectionError::Disconnected, "The camera is disconnected."};
         if (connectionIdFor(state) != connectionId) return {DeviceConnectionError::Conflict, "The connection changed; observe it again."};
         if (_isGrabbing.load()) return {DeviceConnectionError::Conflict, "Live acquisition is already running."};
+        beginRejectionRun(false);
         const auto started = _camera->startAcquisition(CameraAcquisitionAction::Live);
         reportAcquisitionStart(started, "live");
         if (!started.started)

@@ -2,6 +2,7 @@
 
 #include "graphics/data/GraphicsRangeFrameWriter.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -259,6 +260,88 @@ void writeScalarComponent(const BlazeScalarSource& component,
     return view;
 }
 
+/** @brief Exact destination size of a rejected writer layout, or zero when unavailable. */
+[[nodiscard]] std::uint64_t requestedRangeBytes(const GraphicsRangeFrameLayout& layout) noexcept
+{
+    using Detail = GraphicsRangeFrameWriterDetail;
+    if (layout.width <= 0 || layout.height <= 0)
+    {
+        return 0U;
+    }
+    const auto width = static_cast<std::size_t>(layout.width);
+    const auto height = static_cast<std::size_t>(layout.height);
+    if (height > (std::numeric_limits<std::size_t>::max)() / width)
+    {
+        return 0U;
+    }
+    const std::size_t count = width * height;
+    if (count > static_cast<std::size_t>((std::numeric_limits<int>::max)())
+        || !Detail::fits(0U, count, 3U))
+    {
+        return 0U;
+    }
+    const std::size_t rgbCount = count * 3U;
+    Detail::Span span;
+    std::size_t end = Detail::fits(0U, count, sizeof(float))
+        ? count * sizeof(float) : (std::numeric_limits<std::size_t>::max)();
+    if (end == (std::numeric_limits<std::size_t>::max)())
+    {
+        return 0U;
+    }
+    const auto append = [&](const std::size_t alignment, const std::size_t bytes,
+                            const std::size_t samples) {
+        return Detail::append(end, alignment, bytes, samples, span);
+    };
+    bool fits = append(alignof(float), sizeof(float), layout.channels.x ? count : 0U);
+    fits = fits && append(alignof(float), sizeof(float), layout.channels.y ? count : 0U);
+    fits = fits && append(alignof(std::uint8_t), 1U, layout.channels.validMask ? count : 0U);
+    fits = fits && append(alignof(std::uint8_t), 1U, layout.channels.intensityValidMask ? count : 0U);
+    fits = fits && append(alignof(std::uint8_t), 1U, layout.channels.confidenceValidMask ? count : 0U);
+    fits = fits && append(alignof(float), sizeof(float), layout.channels.intensity ? count : 0U);
+    fits = fits && append(alignof(float), sizeof(float), layout.channels.confidence ? count : 0U);
+    fits = fits && append(alignof(std::uint16_t), sizeof(std::uint16_t), layout.channels.rangeRaw ? count : 0U);
+    fits = fits && append(alignof(std::uint16_t), sizeof(std::uint16_t), layout.channels.intensityRaw ? count : 0U);
+    fits = fits && append(alignof(std::uint16_t), sizeof(std::uint16_t), layout.channels.confidenceRaw ? count : 0U);
+    fits = fits && append(alignof(std::uint8_t), 1U, layout.channels.rgb ? rgbCount : 0U);
+    return fits && end != 0U ? static_cast<std::uint64_t>(end) : 0U;
+}
+
+[[nodiscard]] PylonRangeRejection rangeEvidence(
+    const BlazeRangeSource& source,
+    const std::uint64_t frameSequence,
+    const PylonRangeRejection::Reason reason,
+    const std::uint64_t minimumRowBytes = 0U,
+    const std::uint64_t effectiveStride = 0U,
+    const std::uint64_t requestedStorageBytes = 0U)
+{
+    PylonRangeRejection evidence;
+    evidence.reason = reason;
+    evidence.width = source.width > 0 ? static_cast<std::uint32_t>(source.width) : 0U;
+    evidence.height = source.height > 0 ? static_cast<std::uint32_t>(source.height) : 0U;
+    evidence.frameSequence = frameSequence;
+    evidence.pixelFormat = static_cast<std::uint64_t>(source.rangePixelType);
+    evidence.reportedStride = static_cast<std::uint64_t>(source.coordinateStride);
+    evidence.effectiveStride = effectiveStride;
+    evidence.minimumRowBytes = minimumRowBytes;
+    const auto requiredStride = std::max(effectiveStride, minimumRowBytes);
+    if (requiredStride != 0U && evidence.height != 0U
+        && evidence.height <= (std::numeric_limits<std::uint64_t>::max)() / requiredStride)
+    {
+        evidence.requiredBytes = requiredStride * evidence.height;
+    }
+    evidence.requestedStorageBytes = requestedStorageBytes;
+    return evidence;
+}
+
+void recordRangeRejection(std::optional<PylonRangeRejection>* rejection,
+                          const PylonRangeRejection& evidence)
+{
+    if (rejection && !*rejection)
+    {
+        *rejection = evidence;
+    }
+}
+
 [[nodiscard]] bool hasInvalidPoint(
     const BlazeRangeSource& source,
     const std::size_t width,
@@ -282,17 +365,30 @@ void writeScalarComponent(const BlazeScalarSource& component,
 std::optional<GraphicsFrame> buildBlazeFrame(
     const BlazeRangeSource& source,
     const BlazeFrameOptions& options,
-    const GraphicsImageStorage& storage)
+    const GraphicsImageStorage& storage,
+    const std::uint64_t frameSequence,
+    std::optional<PylonRangeRejection>* rejection)
 {
     const bool wantsRangeFrame = hasGraphicsFrameComponent(options.components, GraphicsFrameComponent::Range);
     const bool wantsPointCloud = hasGraphicsFrameComponent(options.components, GraphicsFrameComponent::PointCloud);
     if (!wantsRangeFrame && !wantsPointCloud)
     {
+        // Not a failed rule: the request never asked for range data.
         return std::nullopt;
     }
+    const auto minimumRowBytes = source.width > 0
+        && static_cast<std::uint64_t>(source.width)
+            <= (std::numeric_limits<std::uint64_t>::max)() / sizeof(Coord3DPoint)
+        ? static_cast<std::uint64_t>(source.width) * sizeof(Coord3DPoint) : 0U;
     if (source.coordinates == nullptr || source.coordinateStride == 0U
         || source.width <= 0 || source.height <= 0)
     {
+        const auto reason = source.coordinates == nullptr
+            ? PylonRangeRejection::Reason::MissingData
+            : (source.width <= 0 || source.height <= 0
+                ? PylonRangeRejection::Reason::InvalidDimensions
+                : PylonRangeRejection::Reason::InvalidLayout);
+        recordRangeRejection(rejection, rangeEvidence(source, frameSequence, reason, minimumRowBytes));
         return std::nullopt;
     }
 
@@ -323,6 +419,23 @@ std::optional<GraphicsFrame> buildBlazeFrame(
     GraphicsRangeFrameWriter writer(layout, storage);
     if (!writer.isValid())
     {
+        using Reason = PylonRangeRejection::Reason;
+        Reason reason = Reason::InvalidLayout;
+        switch (writer.failure())
+        {
+        case GraphicsRangeFrameWriterFailure::InvalidDimensions:
+            reason = Reason::InvalidDimensions; break;
+        case GraphicsRangeFrameWriterFailure::SizeLimitExceeded:
+            reason = Reason::SizeLimitExceeded; break;
+        case GraphicsRangeFrameWriterFailure::StorageRefused:
+            reason = Reason::StorageRefused; break;
+        case GraphicsRangeFrameWriterFailure::MisalignedStorage:
+            reason = Reason::StorageMisaligned; break;
+        case GraphicsRangeFrameWriterFailure::None:
+            break;
+        }
+        recordRangeRejection(rejection, rangeEvidence(source, frameSequence, reason,
+            minimumRowBytes, source.coordinateStride, requestedRangeBytes(layout)));
         return std::nullopt;
     }
 
@@ -419,6 +532,8 @@ std::optional<GraphicsFrame> buildBlazeFrame(
 
     if (!scene.isValid())
     {
+        recordRangeRejection(rejection, rangeEvidence(
+            source, frameSequence, PylonRangeRejection::Reason::InvalidLayout, minimumRowBytes));
         return std::nullopt;
     }
 
@@ -435,42 +550,80 @@ void BlazeGraphicsFrameAdapter::setFrameStorage(GraphicsImageStorage storage)
 
 std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertSource(
     const BlazeRangeSource& source,
-    const GraphicsFrameRequest& request) const
+    const GraphicsFrameRequest& request,
+    const std::uint64_t frameSequence,
+    std::optional<PylonRangeRejection>* rejection) const
 {
     GraphicsImageStorage storage;
     {
         std::lock_guard<std::mutex> lock(_storageMutex);
         storage = _storage;
     }
-    return buildBlazeFrame(source, blazeFrameOptionsFromRequest(request), storage);
+    return buildBlazeFrame(source, blazeFrameOptionsFromRequest(request), storage,
+                           frameSequence, rejection);
 }
 
 std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertGraphicsFrame(
     const Pylon::CPylonDataContainer& container,
     const GraphicsFrameRequest& request) const
 {
+    return convertGraphicsFrame(container, request, 0U, nullptr);
+}
+
+std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertGraphicsFrame(
+    const Pylon::CPylonDataContainer& container,
+    const GraphicsFrameRequest& request,
+    const std::uint64_t frameSequence,
+    std::optional<PylonRangeRejection>* rejection) const
+{
     const auto range = findComponentByType(container, Pylon::ComponentType_Range);
     if (!range.IsValid() || range.GetPixelType() != Pylon::PixelType_Coord3D_ABC32f)
     {
+        BlazeRangeSource missing;
+        missing.rangePixelType = range.IsValid()
+            ? range.GetPixelType() : Pylon::PixelType_Coord3D_ABC32f;
+        missing.width = range.IsValid() ? static_cast<int>(range.GetWidth()) : 0;
+        missing.height = range.IsValid() ? static_cast<int>(range.GetHeight()) : 0;
+        recordRangeRejection(rejection, rangeEvidence(missing, frameSequence,
+            range.IsValid() ? PylonRangeRejection::Reason::UnsupportedFormat
+                            : PylonRangeRejection::Reason::MissingRange));
         return std::nullopt;
     }
 
     const std::size_t width = static_cast<std::size_t>(range.GetWidth());
     const std::size_t height = static_cast<std::size_t>(range.GetHeight());
+    const auto* src = static_cast<const std::uint8_t*>(range.GetData());
+    std::size_t reportedStride = 0U;
+    const bool strideReported = range.GetStride(reportedStride);
+    const auto componentEvidence = [&](const PylonRangeRejection::Reason reason,
+                                       const std::uint64_t minimum = 0U,
+                                       const std::uint64_t effective = 0U) {
+        BlazeRangeSource missing;
+        missing.coordinateStride = strideReported ? reportedStride : 0U;
+        missing.rangePixelType = range.GetPixelType();
+        missing.width = static_cast<int>(width);
+        missing.height = static_cast<int>(height);
+        recordRangeRejection(rejection, rangeEvidence(missing, frameSequence, reason,
+            minimum, effective));
+    };
     if (width == 0U || height == 0U)
     {
+        componentEvidence(PylonRangeRejection::Reason::InvalidDimensions);
         return std::nullopt;
     }
 
-    const auto* src = static_cast<const std::uint8_t*>(range.GetData());
     if (src == nullptr)
     {
+        componentEvidence(PylonRangeRejection::Reason::MissingData);
         return std::nullopt;
     }
 
     std::size_t stride = 0;
     if (!componentStride(range, sizeof(Coord3DPoint), stride))
     {
+        componentEvidence(PylonRangeRejection::Reason::InvalidLayout,
+                          width <= (std::numeric_limits<std::size_t>::max)() / sizeof(Coord3DPoint)
+                              ? width * sizeof(Coord3DPoint) : 0U);
         return std::nullopt;
     }
 
@@ -479,6 +632,7 @@ std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertGraphicsFrame(
     source.coordinateStride = stride;
     source.width = static_cast<int>(width);
     source.height = static_cast<int>(height);
+    source.rangePixelType = range.GetPixelType();
     if (const auto intensity = scalarComponentSource(
             findComponentByType(container, Pylon::ComponentType_Intensity), width, height))
     {
@@ -492,7 +646,7 @@ std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertGraphicsFrame(
         source.hasConfidence = true;
     }
 
-    auto scene = convertSource(source, request);
+    auto scene = convertSource(source, request, frameSequence, rejection);
     if (scene.has_value())
     {
         scene->metadata.sourceName = "Basler blaze";

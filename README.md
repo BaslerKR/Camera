@@ -35,6 +35,8 @@ The optional Playground adapter is disabled by default. Enable `CAMERA_BUILD_PLA
 
 The optional Playground device plugin is a separate MODULE. Enable `CAMERA_BUILD_PLAYGROUND_PLUGIN` only when `Playground::DeviceRuntimeContract` and the adapter are available; the plugin links Qt Core and Concurrent only. It does not belong in the adapter static library. Package identity lives in `Utility/PlaygroundAdapter/Package/Package.cmake` as quoted `set(PLAYGROUND_PLUGIN_* ...)` assignments; the MODULE must set `PLAYGROUND_PLUGIN_PACKAGE` and include `DeviceRuntime/Contract/DeviceRuntime.h`. The host emits `plugin.json` from that identity plus `DeviceRuntime.h`.
 
+With a runtime that exposes the optional `IDeviceImageDiagnostics` and `IDeviceRangeDiagnostics`, `CameraPlugin` installs the best-effort sinks before creating a session. The Qt-free adapter records the first failed 2D write rule through `writeGraphicsImageWithFailure()` and the first failed blaze, Stereo mini, or Stereo ace range rule as bounded numeric evidence with the SDK input sequence. `PylonGraphicsFrameStream` forwards neutral evidence to `CameraSourceController`, which maps it to the host enums and emits the first and every 100th failure of each reason per Live run, while Single emits every failure. No pixel payload, calibration coefficient or SDK string crosses the sink, and successful conversion adds no lock or formatting work.
+
 ## SDK discovery validation
 
 Windows library defaults come from the selected `Findpylon.cmake` installation.

@@ -5,6 +5,7 @@
 
 #include <exception>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -26,7 +27,9 @@ namespace {
 class PylonGraphicsFrameStream::Impl final
 {
 public:
-    Impl(Camera* camera, GraphicsFrameCallback callback);
+    Impl(Camera* camera, GraphicsFrameCallback callback,
+         CameraImageRejectionCallback imageRejection,
+         CameraRangeRejectionCallback rangeRejection);
     ~Impl();
 
     Impl(const Impl&) = delete;
@@ -40,6 +43,8 @@ public:
 private:
     Camera* _camera = nullptr;
     GraphicsFrameCallback _callback;
+    CameraImageRejectionCallback _imageRejection;
+    CameraRangeRejectionCallback _rangeRejection;
     PylonGraphicsFrameAdapter _adapter;
     GraphicsFrameCallbackGate _callbackGate;
     Camera::CallbackId _grabCallbackId = 0;
@@ -48,8 +53,12 @@ private:
 
 PylonGraphicsFrameStream::Impl::Impl(
     Camera* camera,
-    GraphicsFrameCallback callback)
-    : _camera(camera), _callback(std::move(callback))
+    GraphicsFrameCallback callback,
+    CameraImageRejectionCallback imageRejection,
+    CameraRangeRejectionCallback rangeRejection)
+    : _camera(camera), _callback(std::move(callback)),
+      _imageRejection(std::move(imageRejection)),
+      _rangeRejection(std::move(rangeRejection))
 {
     if (!_camera || !_callback)
     {
@@ -63,8 +72,14 @@ PylonGraphicsFrameStream::Impl::Impl(
             if (!lease) return;
             try
             {
-                GraphicsImage graphicsImage = _adapter.convertGraphicsImage(image, sequence);
-                if (!graphicsImage.isValid()) return;
+                std::optional<PylonImageRejection> rejection;
+                GraphicsImage graphicsImage = _adapter.convertGraphicsImage(
+                    image, sequence, _imageRejection ? &rejection : nullptr);
+                if (!graphicsImage.isValid())
+                {
+                    if (_imageRejection && rejection) _imageRejection(*rejection);
+                    return;
+                }
 
                 GraphicsFrame frame;
                 frame.addImage("image", std::move(graphicsImage), "Image");
@@ -82,13 +97,22 @@ PylonGraphicsFrameStream::Impl::Impl(
         });
 
     _grab3DCallbackId = _camera->registerGrab3DCallback(
-        [this, callbackToken](const Pylon::CPylonDataContainer& container, const std::size_t) {
+        [this, callbackToken](const Pylon::CPylonDataContainer& container, const std::size_t sequence) {
             GraphicsFrameCallbackGate::Lease lease(callbackToken);
             if (!lease) return;
             try
             {
+                std::optional<PylonImageRejection> imageRejection;
+                std::optional<PylonRangeRejection> rangeRejection;
                 auto frame = _adapter.convertGraphicsFrame(
-                    container, cameraGraphicsFrameRequest(), _camera->scene3DProfile());
+                    container, cameraGraphicsFrameRequest(), _camera->scene3DProfile(),
+                    sequence, _imageRejection ? &imageRejection : nullptr,
+                    _rangeRejection ? &rangeRejection : nullptr);
+                // Ordered, best-effort evidence: 2D first, then the range rule.
+                // A fallback that produced an image is not an assembly rejection.
+                if (_imageRejection && imageRejection && (!frame || !frame->hasImage()))
+                    _imageRejection(*imageRejection);
+                if (_rangeRejection && rangeRejection) _rangeRejection(*rangeRejection);
                 if (frame.has_value()) _callback(std::move(*frame), 0U);
             }
             catch (const std::exception& error)
@@ -120,8 +144,11 @@ PylonGraphicsFrameStream::Impl::~Impl()
 
 PylonGraphicsFrameStream::PylonGraphicsFrameStream(
     Camera* camera,
-    GraphicsFrameCallback callback)
-    : _impl(std::make_unique<Impl>(camera, std::move(callback)))
+    GraphicsFrameCallback callback,
+    CameraImageRejectionCallback imageRejection,
+    CameraRangeRejectionCallback rangeRejection)
+    : _impl(std::make_unique<Impl>(camera, std::move(callback),
+                                   std::move(imageRejection), std::move(rangeRejection)))
 {
 }
 

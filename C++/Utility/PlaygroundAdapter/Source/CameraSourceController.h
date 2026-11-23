@@ -2,6 +2,7 @@
 #include "DeviceRuntime/Contract/AbstractSourceController.h"
 #include "Camera.h"
 #include "DeviceRuntime/Contract/DeviceConnectionControl.h"
+#include "DeviceRuntime/Contract/DeviceImageDiagnostics.h"
 #include "DeviceRuntime/Contract/DeviceRuntime.h"
 #include "DeviceRuntime/Contract/DeviceParameterControl.h"
 #include "DeviceRuntime/Contract/FrameStorage.h"
@@ -12,13 +13,17 @@
 #include <QSet>
 #include <QThread>
 #include <QLoggingCategory>
+#include <array>
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <set>
 #include <thread>
 
 class PylonGraphicsFrameStream;
+struct PylonImageRejection;
+struct PylonRangeRejection;
 
 Q_DECLARE_LOGGING_CATEGORY(cameraSourceDiagnosticLog)
 
@@ -36,7 +41,9 @@ public:
     static InitialTargetsPolicy resolveInitialTargetsPolicy(bool discoverySessionPending, bool targetResolution);
     CameraSourceController(Camera* camera, IDevicePluginResourceClaims* claims = nullptr,
         std::shared_ptr<IDevicePluginResourceClaim>* claim = nullptr,
-        QObject* parent = nullptr, InitialTargetsPolicy initialTargetsPolicy = InitialTargetsPolicy::Cached);
+        QObject* parent = nullptr, InitialTargetsPolicy initialTargetsPolicy = InitialTargetsPolicy::Cached,
+        DeviceImageRejectionSink imageRejectionSink = nullptr,
+        DeviceRangeRejectionSink rangeRejectionSink = nullptr);
     ~CameraSourceController() override;
 
     /** @brief Copies producer counters used by the device statusbar. */
@@ -98,6 +105,7 @@ signals:
     void deviceCatalogChanged(QStringList names);
 
 private:
+    friend class CameraRejectionSamplingTest;
     struct ParameterSubscription;
     /** @brief Owns accepted worker lifetime independently of the caller's wait. */
     DeviceParameterResult scheduleParameterWork(std::function<void()> work);
@@ -132,6 +140,12 @@ private:
     DeviceConnectionResult connectionOutcome(CameraConnectionOutcome outcome, const CameraConnectionState& state) const;
     /** @brief Records an applied mode change in the log and structured diagnostics. */
     void reportAcquisitionStart(const CameraAcquisitionStart& start, const char* action);
+    /** @brief Maps and samples one observed 2D assembly failure on the producer thread. */
+    void reportImageRejection(const PylonImageRejection& evidence);
+    /** @brief Maps and samples one observed range assembly failure on the producer thread. */
+    void reportRangeRejection(const PylonRangeRejection& evidence);
+    /** @brief Selects Single-always or Live first-and-every-100th sampling. */
+    void beginRejectionRun(bool single);
     /** @brief Matches the parameter target connection id, so one id addresses both capabilities. */
     std::string connectionIdFor(const CameraConnectionState& state) const;
     /** @brief Copies the source descriptors one connection snapshot owns. */
@@ -184,4 +198,11 @@ private:
 
     Camera::CallbackId _statusCallbackId = 0;
     std::unique_ptr<PylonGraphicsFrameStream> _graphicsStream;
+    const DeviceImageRejectionSink _imageRejectionSink = nullptr;
+    const DeviceRangeRejectionSink _rangeRejectionSink = nullptr;
+    std::array<std::atomic<std::uint64_t>,
+        static_cast<std::size_t>(DeviceImageRejection::NoImage) + 1U> _imageRejectionCounts{};
+    std::array<std::atomic<std::uint64_t>,
+        static_cast<std::size_t>(DeviceRangeRejection::StorageMisaligned) + 1U> _rangeRejectionCounts{};
+    std::atomic<bool> _rejectionRunSingle{false};
 };

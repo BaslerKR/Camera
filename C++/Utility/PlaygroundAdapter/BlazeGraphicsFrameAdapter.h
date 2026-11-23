@@ -5,6 +5,7 @@
  * @brief Basler blaze source adapter for neutral GraphicsFrame data.
  */
 
+#include "PylonAssemblyRejection.h"
 #include "engine/GraphicsFrameAdapter.h"
 #include "engine/GraphicsImageWriter.h"
 
@@ -37,6 +38,8 @@ struct BlazeRangeSource
     std::size_t coordinateStride = 0;
     int width = 0;
     int height = 0;
+    /** Producer pixel-format identifier reported alongside the range component. */
+    Pylon::EPixelType rangePixelType = Pylon::PixelType_Coord3D_ABC32f;
     BlazeScalarSource intensity;
     BlazeScalarSource confidence;
     bool hasIntensity = false;
@@ -58,7 +61,16 @@ public:
     /** Converts a neutral source view; the pylon adapter and tests share it. */
     [[nodiscard]] std::optional<GraphicsFrame> convertSource(
         const BlazeRangeSource& source,
-        const GraphicsFrameRequest& request) const;
+        const GraphicsFrameRequest& request,
+        std::uint64_t frameSequence = 0U,
+        std::optional<PylonRangeRejection>* rejection = nullptr) const;
+
+    /** Converts a container and optionally reports the first failed range rule. */
+    [[nodiscard]] std::optional<GraphicsFrame> convertGraphicsFrame(
+        const Pylon::CPylonDataContainer& container,
+        const GraphicsFrameRequest& request,
+        std::uint64_t frameSequence,
+        std::optional<PylonRangeRejection>* rejection) const;
 
 private:
     friend class GraphicsFrameAdapter<BlazeGraphicsFrameAdapter, Pylon::CPylonDataContainer>;

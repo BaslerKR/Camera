@@ -94,6 +94,145 @@ struct Coord3DPoint
     return false;
 }
 
+/** @brief Fixed layout values of a source, copied without vendor strings or payload. */
+struct ImageEvidenceContext
+{
+    std::uint64_t frameSequence = 0U;
+    std::uint64_t pixelFormat = 0U;
+    std::uint64_t reportedStride = 0U;
+    std::uint64_t readableBytes = 0U;
+    std::uint32_t width = 0U;
+    std::uint32_t height = 0U;
+};
+
+struct RangeEvidenceContext
+{
+    std::uint64_t frameSequence = 0U;
+    std::uint64_t pixelFormat = 0U;
+    std::uint64_t reportedStride = 0U;
+    std::uint64_t readableBytes = 0U;
+    std::uint32_t width = 0U;
+    std::uint32_t height = 0U;
+};
+
+[[nodiscard]] std::uint32_t boundedExtent(const std::uint64_t value) noexcept
+{
+    return static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(value, (std::numeric_limits<std::uint32_t>::max)()));
+}
+
+[[nodiscard]] std::uint64_t imageRequiredBytes(
+    const std::uint64_t effectiveStride,
+    const std::uint64_t minimumRowBytes,
+    const std::uint32_t height) noexcept
+{
+    const std::uint64_t stride = std::max(effectiveStride, minimumRowBytes);
+    return stride != 0U && height != 0U
+        && height <= (std::numeric_limits<std::uint64_t>::max)() / stride
+        ? stride * height : 0U;
+}
+
+[[nodiscard]] std::optional<PylonImageRejection::Reason> imageRejectionReason(
+    const GraphicsImageFailure failure) noexcept
+{
+    using Reason = PylonImageRejection::Reason;
+    switch (failure)
+    {
+    case GraphicsImageFailure::MissingBytes: return Reason::MissingBytes;
+    case GraphicsImageFailure::InvalidDimensions: return Reason::InvalidDimensions;
+    case GraphicsImageFailure::UnsupportedFormat: return Reason::UnsupportedFormat;
+    case GraphicsImageFailure::InvalidStride: return Reason::InvalidStride;
+    case GraphicsImageFailure::StrideBelowMinimum: return Reason::StrideBelowMinimum;
+    case GraphicsImageFailure::ExtentOverflow: return Reason::ExtentOverflow;
+    case GraphicsImageFailure::TruncatedBytes: return Reason::TruncatedBytes;
+    case GraphicsImageFailure::OddWidth: return Reason::OddWidth;
+    case GraphicsImageFailure::UnsupportedConversion: return Reason::UnsupportedConversion;
+    case GraphicsImageFailure::StorageRefused: return Reason::StorageRefused;
+    case GraphicsImageFailure::None:
+    case GraphicsImageFailure::ExcessBytes: return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] PylonImageRejection::Conversion writerConversion(
+    const GraphicsImageWriterOperation operation) noexcept
+{
+    using Conversion = PylonImageRejection::Conversion;
+    switch (operation)
+    {
+    case GraphicsImageWriterOperation::SwapByteOrder: return Conversion::SwapByteOrder;
+    case GraphicsImageWriterOperation::Copy:
+    case GraphicsImageWriterOperation::ShiftMono16:
+    case GraphicsImageWriterOperation::NarrowMono16To8: return Conversion::Copy;
+    }
+    return Conversion::Copy;
+}
+
+/** Records the first observed 2D failure; later fallback failures never replace it. */
+void recordImageRejection(
+    std::optional<PylonImageRejection>* rejection,
+    const ImageEvidenceContext& context,
+    const PylonImageRejection::Reason reason,
+    const PylonImageRejection::Conversion conversion = PylonImageRejection::Conversion::None,
+    const std::uint64_t effectiveStride = 0U,
+    const std::uint64_t minimumRowBytes = 0U,
+    const std::uint64_t requiredBytes = 0U)
+{
+    if (!rejection || *rejection) return;
+    PylonImageRejection evidence;
+    evidence.reason = reason;
+    evidence.conversion = conversion;
+    evidence.width = context.width;
+    evidence.height = context.height;
+    evidence.frameSequence = context.frameSequence;
+    evidence.pixelFormat = context.pixelFormat;
+    evidence.reportedStride = context.reportedStride;
+    evidence.readableBytes = context.readableBytes;
+    evidence.effectiveStride = effectiveStride;
+    evidence.minimumRowBytes = minimumRowBytes;
+    evidence.requiredBytes = requiredBytes;
+    *rejection = std::move(evidence);
+}
+
+/** Records the first observed range failure; retained flags are set by the stream owner. */
+void recordRangeRejection(
+    std::optional<PylonRangeRejection>* rejection,
+    const RangeEvidenceContext& context,
+    const PylonRangeRejection::Reason reason,
+    const std::uint64_t effectiveStride = 0U,
+    const std::uint64_t minimumRowBytes = 0U)
+{
+    if (!rejection || *rejection) return;
+    PylonRangeRejection evidence;
+    evidence.reason = reason;
+    evidence.width = context.width;
+    evidence.height = context.height;
+    evidence.frameSequence = context.frameSequence;
+    evidence.pixelFormat = context.pixelFormat;
+    evidence.reportedStride = context.reportedStride;
+    evidence.readableBytes = context.readableBytes;
+    evidence.effectiveStride = effectiveStride;
+    evidence.minimumRowBytes = minimumRowBytes;
+    evidence.requiredBytes = imageRequiredBytes(effectiveStride, minimumRowBytes, context.height);
+    *rejection = std::move(evidence);
+}
+
+[[nodiscard]] RangeEvidenceContext componentRangeContext(
+    const Pylon::CPylonDataComponent& component,
+    const std::uint64_t frameSequence)
+{
+    RangeEvidenceContext context;
+    context.frameSequence = frameSequence;
+    if (!component.IsValid()) return context;
+    context.pixelFormat = static_cast<std::uint64_t>(component.GetPixelType());
+    context.width = boundedExtent(component.GetWidth());
+    context.height = boundedExtent(component.GetHeight());
+    context.readableBytes = component.GetDataSize();
+    std::size_t stride = 0U;
+    if (component.GetStride(stride)) context.reportedStride = stride;
+    return context;
+}
+
 [[nodiscard]] GraphicsImage writeImage(
     const int width,
     const int height,
@@ -106,7 +245,9 @@ struct Coord3DPoint
     const std::uint8_t declaredMonoSourceBits,
     const std::uint64_t frameSequence,
     const GraphicsImageStorage& storage,
-    const GraphicsImageWriterOperation operation)
+    const GraphicsImageWriterOperation operation,
+    const ImageEvidenceContext& evidenceContext = {},
+    std::optional<PylonImageRejection>* rejection = nullptr)
 {
     GraphicsImageWriterSource writerSource;
     writerSource.data = static_cast<const std::uint8_t*>(source);
@@ -122,7 +263,23 @@ struct Coord3DPoint
     writerSource.operation = operation;
 
     // The one copy out of the SDK buffer. An empty storage result drops the frame.
-    return writeGraphicsImage(writerSource, storage);
+    // The failure code is read directly from the write that actually failed.
+    GraphicsImageFailure failure = GraphicsImageFailure::None;
+    GraphicsImage image = writeGraphicsImageWithFailure(
+        writerSource, storage, rejection ? &failure : nullptr);
+    if (!image.isValid() && rejection)
+    {
+        if (const auto reason = imageRejectionReason(failure))
+        {
+            const auto minimum = static_cast<std::uint64_t>(
+                GraphicsImageValidation::minimumRowBytes(pixelFormat, width));
+            const auto effective = stride > 0 ? static_cast<std::uint64_t>(stride) : minimum;
+            recordImageRejection(rejection, evidenceContext, *reason,
+                writerConversion(operation), effective, minimum,
+                imageRequiredBytes(effective, minimum, evidenceContext.height));
+        }
+    }
+    return image;
 }
 
 [[nodiscard]] GraphicsImagePixelFormat graphicsPixelFormat(
@@ -150,10 +307,23 @@ struct Coord3DPoint
 
 [[nodiscard]] GraphicsImage componentToGraphicsImage(
     const Pylon::CPylonDataComponent& component,
-    const std::uint64_t frameSequence = 0U)
+    const std::uint64_t frameSequence = 0U,
+    std::optional<PylonImageRejection>* rejection = nullptr)
 {
-    if (!component.IsValid() || component.GetData() == nullptr)
+    ImageEvidenceContext context;
+    context.frameSequence = frameSequence;
+    if (!component.IsValid())
     {
+        recordImageRejection(rejection, context, PylonImageRejection::Reason::MissingBytes);
+        return {};
+    }
+    context.pixelFormat = static_cast<std::uint64_t>(component.GetPixelType());
+    context.width = boundedExtent(component.GetWidth());
+    context.height = boundedExtent(component.GetHeight());
+    context.readableBytes = component.GetDataSize();
+    if (component.GetData() == nullptr)
+    {
+        recordImageRejection(rejection, context, PylonImageRejection::Reason::MissingBytes);
         return {};
     }
 
@@ -161,15 +331,29 @@ struct Coord3DPoint
     const int bitsPerPixel = GraphicsImageValidation::packedBitsPerPixel(pixelFormat);
     if (pixelFormat == GraphicsImagePixelFormat::Unknown || bitsPerPixel == 0)
     {
+        recordImageRejection(rejection, context, PylonImageRejection::Reason::UnsupportedFormat);
         return {};
     }
 
+    std::size_t reportedStride = 0U;
+    component.GetStride(reportedStride);
+    context.reportedStride = reportedStride;
     std::size_t stride = 0U;
     if (!componentStride(component, stride)
-        || stride > static_cast<std::size_t>((std::numeric_limits<int>::max)())
-        || component.GetWidth() > static_cast<std::size_t>((std::numeric_limits<int>::max)())
+        || stride > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
+    {
+        const auto minimum = component.GetWidth()
+            <= static_cast<std::size_t>((std::numeric_limits<int>::max)())
+            ? static_cast<std::uint64_t>(GraphicsImageValidation::minimumRowBytes(
+                pixelFormat, static_cast<int>(component.GetWidth()))) : 0U;
+        recordImageRejection(rejection, context, PylonImageRejection::Reason::InvalidStride,
+            PylonImageRejection::Conversion::None, reportedStride, minimum);
+        return {};
+    }
+    if (component.GetWidth() > static_cast<std::size_t>((std::numeric_limits<int>::max)())
         || component.GetHeight() > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
     {
+        recordImageRejection(rejection, context, PylonImageRejection::Reason::InvalidDimensions);
         return {};
     }
 
@@ -185,7 +369,9 @@ struct Coord3DPoint
         0U,
         frameSequence,
         {},
-        GraphicsImageWriterOperation::Copy);
+        GraphicsImageWriterOperation::Copy,
+        context,
+        rejection);
 }
 
 [[nodiscard]] bool pylonStride(const Pylon::CPylonImage& image, int& stride)
@@ -242,7 +428,9 @@ struct Coord3DPoint
     const int bitsPerPixel,
     const std::uint8_t declaredMonoSourceBits,
     const std::uint64_t frameSequence,
-    const GraphicsImageStorage& storage)
+    const GraphicsImageStorage& storage,
+    const ImageEvidenceContext& sourceContext,
+    std::optional<PylonImageRejection>* rejection)
 {
     Pylon::CPylonImage converted;
     Pylon::CImageFormatConverter converter;
@@ -250,9 +438,14 @@ struct Coord3DPoint
     converter.OutputPixelFormat = outputPixelType;
     converter.Convert(converted, pylonImage);
 
+    ImageEvidenceContext context = sourceContext;
+    context.readableBytes = converted.GetImageSize();
     int stride = 0;
     if (!pylonStride(converted, stride))
     {
+        std::size_t reported = 0U;
+        if (converted.GetStride(reported)) context.reportedStride = reported;
+        recordImageRejection(rejection, context, PylonImageRejection::Reason::InvalidStride);
         return {};
     }
     const bool shiftMono16 = outputPixelType == Pylon::PixelType_Mono16
@@ -272,18 +465,34 @@ struct Coord3DPoint
         storage,
         shiftMono16
             ? GraphicsImageWriterOperation::ShiftMono16
-            : GraphicsImageWriterOperation::Copy);
+            : GraphicsImageWriterOperation::Copy,
+        context,
+        rejection);
 }
 
 [[nodiscard]] GraphicsImage pylonImageToGraphicsImage(
     const Pylon::CPylonImage& pylonImage,
     const std::uint64_t frameSequence,
-    const GraphicsImageStorage& storage)
+    const GraphicsImageStorage& storage,
+    std::optional<PylonImageRejection>* rejection)
 {
-    if (pylonImage.GetWidth() == 0
-        || pylonImage.GetHeight() == 0
-        || pylonImage.GetBuffer() == nullptr)
+    ImageEvidenceContext context;
+    context.frameSequence = frameSequence;
+    context.pixelFormat = static_cast<std::uint64_t>(pylonImage.GetPixelType());
+    context.width = boundedExtent(pylonImage.GetWidth());
+    context.height = boundedExtent(pylonImage.GetHeight());
+    context.readableBytes = pylonImage.GetImageSize();
+    std::size_t reportedStride = 0U;
+    if (pylonImage.GetStride(reportedStride)) context.reportedStride = reportedStride;
+
+    if (pylonImage.GetBuffer() == nullptr || pylonImage.GetImageSize() == 0U)
     {
+        recordImageRejection(rejection, context, PylonImageRejection::Reason::MissingBytes);
+        return {};
+    }
+    if (pylonImage.GetWidth() == 0 || pylonImage.GetHeight() == 0)
+    {
+        recordImageRejection(rejection, context, PylonImageRejection::Reason::InvalidDimensions);
         return {};
     }
 
@@ -307,8 +516,14 @@ struct Coord3DPoint
                 0U,
                 frameSequence,
                 storage,
-                GraphicsImageWriterOperation::Copy);
+                GraphicsImageWriterOperation::Copy,
+                context,
+                rejection);
         }
+    }
+    else if (rejection && !*rejection)
+    {
+        recordImageRejection(rejection, context, PylonImageRejection::Reason::InvalidStride);
     }
 
     const auto pixelType = pylonImage.GetPixelType();
@@ -321,9 +536,14 @@ struct Coord3DPoint
             16,
             monoSourceBits(pixelType),
             frameSequence,
-            storage);
+            storage,
+            context,
+            rejection);
     }
 
+    // The conversion fallbacks keep their original order and outcomes. Only the
+    // last generic failure is remembered when no attempt reached an actual write.
+    bool conversionFailed = false;
     try {
         return convertViaPylon(
             pylonImage,
@@ -332,8 +552,11 @@ struct Coord3DPoint
             24,
             0U,
             frameSequence,
-            storage);
+            storage,
+            context,
+            rejection);
     } catch (const Pylon::GenericException&) {
+        conversionFailed = true;
     }
     try {
         return convertViaPylon(
@@ -343,8 +566,11 @@ struct Coord3DPoint
             16,
             0U,
             frameSequence,
-            storage);
+            storage,
+            context,
+            rejection);
     } catch (const Pylon::GenericException&) {
+        conversionFailed = true;
     }
     try {
         return convertViaPylon(
@@ -354,8 +580,21 @@ struct Coord3DPoint
             8,
             0U,
             frameSequence,
-            storage);
+            storage,
+            context,
+            rejection);
     } catch (const Pylon::GenericException&) {
+        conversionFailed = true;
+    }
+    if (conversionFailed)
+    {
+        recordImageRejection(rejection, context,
+            PylonImageRejection::Reason::UnsupportedConversion);
+    }
+    else if (rejection && !*rejection)
+    {
+        recordImageRejection(rejection, context,
+            PylonImageRejection::Reason::UnsupportedFormat);
     }
     return {};
 }
@@ -462,14 +701,16 @@ void copyPointCloudRgb(const Pylon::CPylonDataComponent& component, RangeFrame& 
 void appendColorImage(const Pylon::CPylonDataComponent& intensity,
                       const GraphicsFrameRequest& request,
                       const PylonScene3DProfile& profile,
-                      GraphicsFrame& scene)
+                      GraphicsFrame& scene,
+                      const std::uint64_t frameSequence = 0U,
+                      std::optional<PylonImageRejection>* rejection = nullptr)
 {
     if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Image))
     {
         return;
     }
 
-    GraphicsImage image = componentToGraphicsImage(intensity);
+    GraphicsImage image = componentToGraphicsImage(intensity, frameSequence, rejection);
     if (!image.isValid())
     {
         return;
@@ -496,7 +737,10 @@ void registerColorImageToRange(
     const Pylon::CPylonDataContainer& container,
     const GraphicsFrameRequest& request,
     const PylonScene3DProfile& profile,
-    const char* sourceName)
+    const char* sourceName,
+    const std::uint64_t frameSequence,
+    std::optional<PylonImageRejection>* imageRejection,
+    std::optional<PylonRangeRejection>* rangeRejection)
 {
     GraphicsFrame scene;
     scene.metadata.sourceName = sourceName;
@@ -507,27 +751,40 @@ void registerColorImageToRange(
     view.distanceScale = 1.15;
 
     const auto intensity = componentByType(container, Pylon::ComponentType_Intensity);
-    appendColorImage(intensity, request, profile, scene);
+    appendColorImage(intensity, request, profile, scene, frameSequence, imageRejection);
     if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range))
     {
         return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
     }
 
     const auto range = componentByType(container, Pylon::ComponentType_Range);
-    if (!range.IsValid() || range.GetData() == nullptr)
+    const auto rangeContext = componentRangeContext(range, frameSequence);
+    if (!range.IsValid())
     {
+        recordRangeRejection(rangeRejection, rangeContext,
+                             PylonRangeRejection::Reason::MissingRange);
+        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
+    }
+    if (range.GetData() == nullptr)
+    {
+        recordRangeRejection(rangeRejection, rangeContext,
+                             PylonRangeRejection::Reason::MissingData);
         return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
     }
 
     const auto pixelType = range.GetPixelType();
     if (pixelType != Pylon::PixelType_Coord3D_ABC32f && pixelType != Pylon::PixelType_Coord3D_C16)
     {
+        recordRangeRejection(rangeRejection, rangeContext,
+                             PylonRangeRejection::Reason::UnsupportedFormat);
         return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
     }
 
     std::size_t stride = 0U;
     if (!componentStride(range, stride))
     {
+        recordRangeRejection(rangeRejection, rangeContext,
+                             PylonRangeRejection::Reason::InvalidLayout);
         return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
     }
 
@@ -630,35 +887,66 @@ void registerColorImageToRange(
         scene.ranges.back().initialView = view;
         registerColorImageToRange(profile, scene);
     }
+    else
+    {
+        recordRangeRejection(rangeRejection, rangeContext,
+                             PylonRangeRejection::Reason::InvalidLayout);
+    }
     return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
 }
 
 [[nodiscard]] std::optional<GraphicsFrame> buildStereoAceScene(
     const Pylon::CPylonDataContainer& container,
     const GraphicsFrameRequest& request,
-    const PylonScene3DProfile& profile)
+    const PylonScene3DProfile& profile,
+    const std::uint64_t frameSequence,
+    std::optional<PylonImageRejection>* imageRejection,
+    std::optional<PylonRangeRejection>* rangeRejection)
 {
     GraphicsFrame scene;
     scene.metadata.sourceName = "Basler Stereo ace";
 
     const auto intensity = componentByType(container, Pylon::ComponentType_Intensity);
-    appendColorImage(intensity, request, profile, scene);
-    if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range)
-        || !profile.hasDisparityCalibration())
+    appendColorImage(intensity, request, profile, scene, frameSequence, imageRejection);
+    if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range))
     {
+        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
+    }
+    if (!profile.hasDisparityCalibration())
+    {
+        RangeEvidenceContext noRange;
+        noRange.frameSequence = frameSequence;
+        recordRangeRejection(rangeRejection, noRange,
+                             PylonRangeRejection::Reason::MissingCalibration);
         return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
     }
 
     const auto disparity = componentByType(container, Pylon::ComponentType_Disparity);
-    if (!disparity.IsValid() || disparity.GetPixelType() != Pylon::PixelType_Coord3D_C16
-        || disparity.GetData() == nullptr)
+    const auto disparityContext = componentRangeContext(disparity, frameSequence);
+    if (!disparity.IsValid())
     {
+        recordRangeRejection(rangeRejection, disparityContext,
+                             PylonRangeRejection::Reason::MissingRange);
+        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
+    }
+    if (disparity.GetPixelType() != Pylon::PixelType_Coord3D_C16)
+    {
+        recordRangeRejection(rangeRejection, disparityContext,
+                             PylonRangeRejection::Reason::UnsupportedFormat);
+        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
+    }
+    if (disparity.GetData() == nullptr)
+    {
+        recordRangeRejection(rangeRejection, disparityContext,
+                             PylonRangeRejection::Reason::MissingData);
         return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
     }
 
     std::size_t stride = 0U;
     if (!componentStride(disparity, stride))
     {
+        recordRangeRejection(rangeRejection, disparityContext,
+                             PylonRangeRejection::Reason::InvalidLayout);
         return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
     }
 
@@ -731,6 +1019,11 @@ void registerColorImageToRange(
         scene.addRange("range", std::move(frame), "Range", "primary");
         registerColorImageToRange(profile, scene);
     }
+    else
+    {
+        recordRangeRejection(rangeRejection, disparityContext,
+                             PylonRangeRejection::Reason::InvalidLayout);
+    }
     return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
 }
 
@@ -745,32 +1038,49 @@ void PylonGraphicsFrameAdapter::setFrameStorage(GraphicsImageStorage storage)
 
 GraphicsImage PylonGraphicsFrameAdapter::convertGraphicsImage(
     const Pylon::CPylonImage& image,
-    const std::uint64_t frameSequence) const
+    const std::uint64_t frameSequence,
+    std::optional<PylonImageRejection>* rejection) const
 {
     GraphicsImageStorage storage;
     {
         std::lock_guard<std::mutex> lock(_storageMutex);
         storage = _storage;
     }
-    return pylonImageToGraphicsImage(image, frameSequence, storage);
+    return pylonImageToGraphicsImage(image, frameSequence, storage, rejection);
 }
 
 std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsFrame(
     const Pylon::CPylonDataContainer& container,
     const GraphicsFrameRequest& request,
-    const PylonScene3DProfile& profile) const
+    const PylonScene3DProfile& profile,
+    const std::uint64_t frameSequence,
+    std::optional<PylonImageRejection>* imageRejection,
+    std::optional<PylonRangeRejection>* rangeRejection) const
 {
+    std::optional<GraphicsFrame> result;
     switch (profile.family)
     {
     case PylonScene3DProfile::DeviceFamily::Blaze:
-        return _blazeAdapter.convertFrame(container, request);
+        result = _blazeAdapter.convertGraphicsFrame(
+            container, request, frameSequence, rangeRejection);
+        break;
     case PylonScene3DProfile::DeviceFamily::StereoMini:
-        return buildDirectXyzScene(container, request, profile, "Basler Stereo mini");
+        result = buildDirectXyzScene(container, request, profile, "Basler Stereo mini",
+                                     frameSequence, imageRejection, rangeRejection);
+        break;
     case PylonScene3DProfile::DeviceFamily::StereoAce:
-        return buildStereoAceScene(container, request, profile);
+        result = buildStereoAceScene(container, request, profile, frameSequence,
+                                     imageRejection, rangeRejection);
+        break;
     case PylonScene3DProfile::DeviceFamily::Image2D:
         break;
     }
 
-    return std::nullopt;
+    if (rangeRejection && *rangeRejection)
+    {
+        (*rangeRejection)->frameRetained = result.has_value();
+        (*rangeRejection)->imageRetained = result && result->hasImage();
+        (*rangeRejection)->rangeRetained = result && result->hasRangeFrame();
+    }
+    return result;
 }
