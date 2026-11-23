@@ -108,6 +108,8 @@ private slots:
         controller.beginRejectionRun(true);
         PylonRangeRejection evidence;
         evidence.reason = PylonRangeRejection::Reason::StorageRefused;
+        evidence.partCount = 3U;
+        evidence.affectedPart = 2U;
         evidence.width = 320U;
         evidence.height = 240U;
         evidence.frameSequence = 77U;
@@ -124,8 +126,8 @@ private slots:
         const auto& refused = rangeObservations.front();
         QCOMPARE(refused.reason, DeviceRangeRejection::StorageRefused);
         QCOMPARE(refused.frameSequence, std::uint64_t{77});
-        QCOMPARE(refused.partCount, std::uint32_t{1});
-        QCOMPARE(refused.affectedPart, std::uint32_t{0});
+        QCOMPARE(refused.partCount, std::uint32_t{3});
+        QCOMPARE(refused.affectedPart, std::uint32_t{2});
         QCOMPARE(refused.requestedStorageBytes, std::uint64_t{4096});
         QCOMPARE(refused.frameRetained, false);
         const auto& retained = rangeObservations.back();
