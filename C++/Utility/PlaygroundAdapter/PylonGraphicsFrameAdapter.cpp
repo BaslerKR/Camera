@@ -544,9 +544,7 @@ void recordRangeRejection(
             rejection);
     }
 
-    // The conversion fallbacks keep their original order and outcomes. Only the
-    // last generic failure is remembered when no attempt reached an actual write.
-    bool conversionFailed = false;
+    // Keep the conversion order. The first recorded writer rule wins; all thrown attempts report a failed conversion.
     try {
         return convertViaPylon(
             pylonImage,
@@ -559,7 +557,6 @@ void recordRangeRejection(
             context,
             rejection);
     } catch (const Pylon::GenericException&) {
-        conversionFailed = true;
     }
     try {
         return convertViaPylon(
@@ -573,7 +570,6 @@ void recordRangeRejection(
             context,
             rejection);
     } catch (const Pylon::GenericException&) {
-        conversionFailed = true;
     }
     try {
         return convertViaPylon(
@@ -587,18 +583,8 @@ void recordRangeRejection(
             context,
             rejection);
     } catch (const Pylon::GenericException&) {
-        conversionFailed = true;
     }
-    if (conversionFailed)
-    {
-        recordImageRejection(rejection, context,
-            PylonImageRejection::Reason::UnsupportedConversion);
-    }
-    else if (rejection && !*rejection)
-    {
-        recordImageRejection(rejection, context,
-            PylonImageRejection::Reason::UnsupportedFormat);
-    }
+    recordImageRejection(rejection, context, PylonImageRejection::Reason::UnsupportedConversion);
     return {};
 }
 

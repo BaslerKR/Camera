@@ -82,7 +82,7 @@ int main()
         assert(rejection->pixelFormat == static_cast<std::uint64_t>(Pylon::PixelType_Mono8));
         assert(rejection->minimumRowBytes == 2U);
         assert(rejection->readableBytes == source.GetImageSize());
-        assert(rejection->requiredBytes >= 2U);
+        assert(rejection->requiredBytes == rejection->effectiveStride * 2U);
         adapter.setFrameStorage({});
 
         rejection.reset();
@@ -258,8 +258,19 @@ int main()
         assert(rejection->requestedStorageBytes > 0U);
         assert(!rejection->frameRetained && !rejection->imageRetained && !rejection->rangeRetained);
 
+        blaze.setFrameStorage({});
+        auto shortStride = source;
+        shortStride.coordinateStride = source.coordinateStride / 2U;
         rejection.reset();
-        assert(!blaze.convertSource(source, {}).has_value());
+        assert(!blaze.convertSource(shortStride, {}, 85U, &rejection).has_value());
+        assert(rejection && rejection->reason == PylonRangeRejection::Reason::StrideBelowMinimum);
+        assert(rejection->effectiveStride == shortStride.coordinateStride);
+        assert(rejection->minimumRowBytes == source.coordinateStride);
+
+        GraphicsFrameRequest unrequested;
+        unrequested.components = GraphicsFrameComponent::Image;
+        rejection.reset();
+        assert(!blaze.convertSource(source, unrequested, 86U, &rejection).has_value());
         assert(!rejection.has_value());
     }
     return 0;

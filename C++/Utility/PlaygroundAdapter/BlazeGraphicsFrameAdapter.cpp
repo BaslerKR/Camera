@@ -260,52 +260,6 @@ void writeScalarComponent(const BlazeScalarSource& component,
     return view;
 }
 
-/** @brief Exact destination size of a rejected writer layout, or zero when unavailable. */
-[[nodiscard]] std::uint64_t requestedRangeBytes(const GraphicsRangeFrameLayout& layout) noexcept
-{
-    using Detail = GraphicsRangeFrameWriterDetail;
-    if (layout.width <= 0 || layout.height <= 0)
-    {
-        return 0U;
-    }
-    const auto width = static_cast<std::size_t>(layout.width);
-    const auto height = static_cast<std::size_t>(layout.height);
-    if (height > (std::numeric_limits<std::size_t>::max)() / width)
-    {
-        return 0U;
-    }
-    const std::size_t count = width * height;
-    if (count > static_cast<std::size_t>((std::numeric_limits<int>::max)())
-        || !Detail::fits(0U, count, 3U))
-    {
-        return 0U;
-    }
-    const std::size_t rgbCount = count * 3U;
-    Detail::Span span;
-    std::size_t end = Detail::fits(0U, count, sizeof(float))
-        ? count * sizeof(float) : (std::numeric_limits<std::size_t>::max)();
-    if (end == (std::numeric_limits<std::size_t>::max)())
-    {
-        return 0U;
-    }
-    const auto append = [&](const std::size_t alignment, const std::size_t bytes,
-                            const std::size_t samples) {
-        return Detail::append(end, alignment, bytes, samples, span);
-    };
-    bool fits = append(alignof(float), sizeof(float), layout.channels.x ? count : 0U);
-    fits = fits && append(alignof(float), sizeof(float), layout.channels.y ? count : 0U);
-    fits = fits && append(alignof(std::uint8_t), 1U, layout.channels.validMask ? count : 0U);
-    fits = fits && append(alignof(std::uint8_t), 1U, layout.channels.intensityValidMask ? count : 0U);
-    fits = fits && append(alignof(std::uint8_t), 1U, layout.channels.confidenceValidMask ? count : 0U);
-    fits = fits && append(alignof(float), sizeof(float), layout.channels.intensity ? count : 0U);
-    fits = fits && append(alignof(float), sizeof(float), layout.channels.confidence ? count : 0U);
-    fits = fits && append(alignof(std::uint16_t), sizeof(std::uint16_t), layout.channels.rangeRaw ? count : 0U);
-    fits = fits && append(alignof(std::uint16_t), sizeof(std::uint16_t), layout.channels.intensityRaw ? count : 0U);
-    fits = fits && append(alignof(std::uint16_t), sizeof(std::uint16_t), layout.channels.confidenceRaw ? count : 0U);
-    fits = fits && append(alignof(std::uint8_t), 1U, layout.channels.rgb ? rgbCount : 0U);
-    return fits && end != 0U ? static_cast<std::uint64_t>(end) : 0U;
-}
-
 [[nodiscard]] PylonRangeRejection rangeEvidence(
     const BlazeRangeSource& source,
     const std::uint64_t frameSequence,
@@ -392,6 +346,13 @@ std::optional<GraphicsFrame> buildBlazeFrame(
         return std::nullopt;
     }
 
+    if (source.coordinateStride < minimumRowBytes)
+    {
+        recordRangeRejection(rejection, rangeEvidence(source, frameSequence,
+            PylonRangeRejection::Reason::StrideBelowMinimum, minimumRowBytes, source.coordinateStride));
+        return std::nullopt;
+    }
+
     const std::size_t width = static_cast<std::size_t>(source.width);
     const std::size_t height = static_cast<std::size_t>(source.height);
     const bool allValid = !hasInvalidPoint(source, width, height);
@@ -435,7 +396,7 @@ std::optional<GraphicsFrame> buildBlazeFrame(
             break;
         }
         recordRangeRejection(rejection, rangeEvidence(source, frameSequence, reason,
-            minimumRowBytes, source.coordinateStride, requestedRangeBytes(layout)));
+            minimumRowBytes, source.coordinateStride, writer.blockBytes()));
         return std::nullopt;
     }
 
