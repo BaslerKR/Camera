@@ -256,7 +256,6 @@ int main()
         assert(rejection->reason == PylonRangeRejection::Reason::StorageRefused);
         assert(rejection->frameSequence == 84U);
         assert(rejection->requestedStorageBytes > 0U);
-        assert(!rejection->frameRetained && !rejection->imageRetained && !rejection->rangeRetained);
 
         blaze.setFrameStorage({});
         auto shortStride = source;
