@@ -576,6 +576,9 @@ std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertGraphicsFrame(
     const std::uint64_t frameSequence,
     std::optional<PylonRangeRejection>* rejection) const
 {
+    if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range)
+        && !hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::PointCloud))
+        rejection = nullptr;
     const auto range = findComponentByType(container, Pylon::ComponentType_Range);
     if (!range.IsValid() || range.GetPixelType() != Pylon::PixelType_Coord3D_ABC32f)
     {

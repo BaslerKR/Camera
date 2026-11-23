@@ -170,10 +170,8 @@ void CameraSourceController::reportRangeRejection(const PylonRangeRejection& evi
     DeviceRangeRejectionObservation observation;
     observation.reason = reason;
     observation.sourceIndex = 0U;
-    observation.partCount = 1U;
-    observation.affectedPart = evidence.reason == PylonRangeRejection::Reason::MissingRange
-        || evidence.reason == PylonRangeRejection::Reason::MissingCalibration
-        ? DeviceRangeRejectionObservation::noPart : 0U;
+    observation.partCount = evidence.partCount;
+    observation.affectedPart = evidence.affectedPart;
     observation.width = evidence.width;
     observation.height = evidence.height;
     observation.frameRetained = evidence.frameRetained;

@@ -374,11 +374,16 @@ void recordRangeRejection(
         rejection);
 }
 
-[[nodiscard]] bool pylonStride(const Pylon::CPylonImage& image, int& stride)
+[[nodiscard]] bool pylonStride(const Pylon::CPylonImage& image, int& stride,
+                               std::uint64_t* reportedStride = nullptr)
 {
     std::size_t strideBytes = 0U;
-    if (!image.GetStride(strideBytes)
-        || strideBytes > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
+    if (!image.GetStride(strideBytes))
+    {
+        return false;
+    }
+    if (reportedStride) *reportedStride = strideBytes;
+    if (strideBytes > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
     {
         return false;
     }
@@ -439,12 +444,10 @@ void recordRangeRejection(
     converter.Convert(converted, pylonImage);
 
     ImageEvidenceContext context = sourceContext;
-    context.readableBytes = converted.GetImageSize();
+    if (rejection) context.readableBytes = converted.GetImageSize();
     int stride = 0;
     if (!pylonStride(converted, stride))
     {
-        std::size_t reported = 0U;
-        if (converted.GetStride(reported)) context.reportedStride = reported;
         recordImageRejection(rejection, context, PylonImageRejection::Reason::InvalidStride);
         return {};
     }
@@ -477,13 +480,13 @@ void recordRangeRejection(
     std::optional<PylonImageRejection>* rejection)
 {
     ImageEvidenceContext context;
-    context.frameSequence = frameSequence;
-    context.pixelFormat = static_cast<std::uint64_t>(pylonImage.GetPixelType());
-    context.width = boundedExtent(pylonImage.GetWidth());
-    context.height = boundedExtent(pylonImage.GetHeight());
-    context.readableBytes = pylonImage.GetImageSize();
-    std::size_t reportedStride = 0U;
-    if (pylonImage.GetStride(reportedStride)) context.reportedStride = reportedStride;
+    if (rejection) {
+        context.frameSequence = frameSequence;
+        context.pixelFormat = static_cast<std::uint64_t>(pylonImage.GetPixelType());
+        context.width = boundedExtent(pylonImage.GetWidth());
+        context.height = boundedExtent(pylonImage.GetHeight());
+        context.readableBytes = pylonImage.GetImageSize();
+    }
 
     if (pylonImage.GetBuffer() == nullptr || pylonImage.GetImageSize() == 0U)
     {
@@ -497,7 +500,7 @@ void recordRangeRejection(
     }
 
     int stride = 0;
-    if (pylonStride(pylonImage, stride))
+    if (pylonStride(pylonImage, stride, rejection ? &context.reportedStride : nullptr))
     {
         const auto pixelType = pylonImage.GetPixelType();
         const auto pixelFormat = graphicsPixelFormat(pixelType);
@@ -1078,9 +1081,23 @@ std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsFrame(
 
     if (rangeRejection && *rangeRejection)
     {
-        (*rangeRejection)->frameRetained = result.has_value();
-        (*rangeRejection)->imageRetained = result && result->hasImage();
-        (*rangeRejection)->rangeRetained = result && result->hasRangeFrame();
+        auto& evidence = **rangeRejection;
+        evidence.frameRetained = result.has_value();
+        evidence.imageRetained = result && result->hasImage();
+        evidence.rangeRetained = result && result->hasRangeFrame();
+        evidence.partCount = boundedExtent(container.GetDataComponentCount());
+        if (evidence.reason != PylonRangeRejection::Reason::MissingRange
+            && evidence.reason != PylonRangeRejection::Reason::MissingCalibration) {
+            const auto type = profile.family == PylonScene3DProfile::DeviceFamily::StereoAce
+                ? Pylon::ComponentType_Disparity : Pylon::ComponentType_Range;
+            for (std::uint32_t index = 0; index < evidence.partCount; ++index) {
+                const auto component = container.GetDataComponent(index);
+                if (component.IsValid() && component.GetComponentType() == type) {
+                    evidence.affectedPart = index;
+                    break;
+                }
+            }
+        }
     }
     return result;
 }

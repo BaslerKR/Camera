@@ -10,6 +10,7 @@
  */
 
 #include <cstdint>
+#include <limits>
 
 /** @brief First failed rule and layout observed while assembling a 2D image. */
 struct PylonImageRejection {
@@ -43,6 +44,8 @@ struct PylonRangeRejection {
     };
 
     Reason reason = Reason::MissingRange;
+    std::uint32_t partCount = 0;
+    std::uint32_t affectedPart = (std::numeric_limits<std::uint32_t>::max)();
     std::uint32_t width = 0;
     std::uint32_t height = 0;
     bool frameRetained = false;
