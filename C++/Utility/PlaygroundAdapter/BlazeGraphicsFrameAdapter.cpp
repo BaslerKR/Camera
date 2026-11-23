@@ -274,9 +274,10 @@ void writeScalarComponent(const BlazeScalarSource& component,
     evidence.height = source.height > 0 ? static_cast<std::uint32_t>(source.height) : 0U;
     evidence.frameSequence = frameSequence;
     evidence.pixelFormat = static_cast<std::uint64_t>(source.rangePixelType);
-    evidence.reportedStride = static_cast<std::uint64_t>(source.coordinateStride);
+    evidence.reportedStride = static_cast<std::uint64_t>(source.reportedCoordinateStride);
     evidence.effectiveStride = effectiveStride;
     evidence.minimumRowBytes = minimumRowBytes;
+    evidence.readableBytes = static_cast<std::uint64_t>(source.coordinateReadableBytes);
     const auto requiredStride = std::max(effectiveStride, minimumRowBytes);
     if (requiredStride != 0U && evidence.height != 0U
         && evidence.height <= (std::numeric_limits<std::uint64_t>::max)() / requiredStride)
@@ -541,35 +542,36 @@ std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertGraphicsFrame(
         && !hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::PointCloud))
         rejection = nullptr;
     const auto range = findComponentByType(container, Pylon::ComponentType_Range);
-    if (!range.IsValid() || range.GetPixelType() != Pylon::PixelType_Coord3D_ABC32f)
+    if (!range.IsValid())
     {
-        BlazeRangeSource missing;
-        missing.rangePixelType = range.IsValid()
-            ? range.GetPixelType() : Pylon::PixelType_Coord3D_ABC32f;
-        missing.width = range.IsValid() ? static_cast<int>(range.GetWidth()) : 0;
-        missing.height = range.IsValid() ? static_cast<int>(range.GetHeight()) : 0;
-        recordRangeRejection(rejection, rangeEvidence(missing, frameSequence,
-            range.IsValid() ? PylonRangeRejection::Reason::UnsupportedFormat
-                            : PylonRangeRejection::Reason::MissingRange));
+        recordRangeRejection(rejection, rangeEvidence({}, frameSequence,
+            PylonRangeRejection::Reason::MissingRange));
         return std::nullopt;
     }
 
     const std::size_t width = static_cast<std::size_t>(range.GetWidth());
     const std::size_t height = static_cast<std::size_t>(range.GetHeight());
     const auto* src = static_cast<const std::uint8_t*>(range.GetData());
+    const std::size_t readableBytes = src != nullptr ? range.GetDataSize() : 0U;
     std::size_t reportedStride = 0U;
-    const bool strideReported = range.GetStride(reportedStride);
+    if (!range.GetStride(reportedStride)) reportedStride = 0U;
+    BlazeRangeSource source;
+    source.coordinates = src;
+    source.reportedCoordinateStride = reportedStride;
+    source.coordinateReadableBytes = readableBytes;
+    source.width = static_cast<int>(width);
+    source.height = static_cast<int>(height);
+    source.rangePixelType = range.GetPixelType();
     const auto componentEvidence = [&](const PylonRangeRejection::Reason reason,
-                                       const std::uint64_t minimum = 0U,
-                                       const std::uint64_t effective = 0U) {
-        BlazeRangeSource missing;
-        missing.coordinateStride = strideReported ? reportedStride : 0U;
-        missing.rangePixelType = range.GetPixelType();
-        missing.width = static_cast<int>(width);
-        missing.height = static_cast<int>(height);
-        recordRangeRejection(rejection, rangeEvidence(missing, frameSequence, reason,
-            minimum, effective));
+                                       const std::uint64_t minimum = 0U) {
+        recordRangeRejection(rejection, rangeEvidence(source, frameSequence, reason, minimum));
     };
+    if (source.rangePixelType != Pylon::PixelType_Coord3D_ABC32f)
+    {
+        componentEvidence(PylonRangeRejection::Reason::UnsupportedFormat);
+        return std::nullopt;
+    }
+
     if (width == 0U || height == 0U)
     {
         componentEvidence(PylonRangeRejection::Reason::InvalidDimensions);
@@ -591,12 +593,7 @@ std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertGraphicsFrame(
         return std::nullopt;
     }
 
-    BlazeRangeSource source;
-    source.coordinates = src;
     source.coordinateStride = stride;
-    source.width = static_cast<int>(width);
-    source.height = static_cast<int>(height);
-    source.rangePixelType = range.GetPixelType();
     if (const auto intensity = scalarComponentSource(
             findComponentByType(container, Pylon::ComponentType_Intensity), width, height))
     {

@@ -161,6 +161,7 @@ int main()
         BlazeRangeSource source;
         source.coordinates = reinterpret_cast<const std::uint8_t*>(coordinates);
         source.coordinateStride = sizeof(float) * 3U * 2U;
+        source.coordinateReadableBytes = sizeof(coordinates);
         source.width = 2;
         source.height = 2;
         source.intensity.data = reinterpret_cast<const std::uint8_t*>(intensitySamples);
@@ -256,13 +257,18 @@ int main()
         assert(rejection->reason == PylonRangeRejection::Reason::StorageRefused);
         assert(rejection->frameSequence == 84U);
         assert(rejection->requestedStorageBytes > 0U);
+        assert(rejection->reportedStride == 0U && rejection->effectiveStride == source.coordinateStride);
+        assert(rejection->readableBytes == sizeof(coordinates));
+        assert(rejection->requiredBytes == sizeof(coordinates));
 
         blaze.setFrameStorage({});
         auto shortStride = source;
         shortStride.coordinateStride = source.coordinateStride / 2U;
+        shortStride.reportedCoordinateStride = shortStride.coordinateStride;
         rejection.reset();
         assert(!blaze.convertSource(shortStride, {}, 85U, &rejection).has_value());
         assert(rejection && rejection->reason == PylonRangeRejection::Reason::StrideBelowMinimum);
+        assert(rejection->reportedStride == shortStride.reportedCoordinateStride);
         assert(rejection->effectiveStride == shortStride.coordinateStride);
         assert(rejection->minimumRowBytes == source.coordinateStride);
 

@@ -44,6 +44,9 @@ struct BlazeRangeSource
     BlazeScalarSource confidence;
     bool hasIntensity = false;
     bool hasConfidence = false;
+    /** SDK-reported stride and readable extent. Zero denotes an unavailable value. */
+    std::size_t reportedCoordinateStride = 0;
+    std::size_t coordinateReadableBytes = 0;
 };
 
 class BlazeGraphicsFrameAdapter final

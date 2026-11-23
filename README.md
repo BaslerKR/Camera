@@ -84,7 +84,7 @@ Grab callbacks run on an acquisition thread. Do not update GUI objects directly 
 
 Long-running acquisition logs a sampled worker-progress record every ten seconds and warns when a frame callback takes at least 500 ms. These diagnostics distinguish SDK receive activity from consumer/presentation backpressure without changing ordered frame delivery.
 
-Multipart 3D buffers remain SDK-owned for the callback duration. Consumers that retain data after the callback must create their own validated representation.
+Multipart 3D buffers remain SDK-owned for the callback duration. Consumers that retain data after the callback must create their own validated representation. Blaze range diagnostics retain the SDK's readable byte count when available and distinguish the SDK-reported row stride from the stride chosen by the adapter.
 
 ## Validation
 
