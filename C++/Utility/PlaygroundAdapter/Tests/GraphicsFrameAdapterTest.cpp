@@ -70,7 +70,12 @@ int main()
     bytes[stride + 1U] = 4U;
 
     PylonGraphicsFrameAdapter adapter;
-    const GraphicsImage image = adapter.convertGraphicsImage(source, 42U);
+    GraphicsFrameBuilder imageBuilder;
+    const GraphicsImage image = adapter.convertGraphicsImage(source, imageBuilder, 42U);
+    imageBuilder.addImage("image", image, "Image");
+    auto publishedImage = std::move(imageBuilder).publish();
+    assert(publishedImage);
+    assert(image.pixels.allocation()->state() == GraphicsAllocationState::Published);
     assert(image.isValid());
     assert(image.width == 2);
     assert(image.height == 2);
@@ -86,12 +91,13 @@ int main()
     // Provided storage receives the direct-copy bytes without an adapter allocation.
     std::uint8_t providedBytes[16] = {};
     std::size_t providedSize = 0U;
-    adapter.setFrameStorage(testContext([&](const std::size_t requested) {
+    auto providedContext = testContext([&](const std::size_t requested) {
         providedSize = requested;
         assert(requested <= sizeof(providedBytes));
         return std::shared_ptr<std::uint8_t>(providedBytes, [](std::uint8_t*) {});
-    }));
-    const GraphicsImage stored = adapter.convertGraphicsImage(source, 43U);
+    });
+    GraphicsFrameBuilder storedBuilder(providedContext);
+    const GraphicsImage stored = adapter.convertGraphicsImage(source, storedBuilder, 43U);
     assert(stored.isValid());
     assert(stored.data() == providedBytes);
     assert(providedSize == source.GetImageSize());
@@ -101,22 +107,24 @@ int main()
     assert(providedBytes[stride + 1U] == 4U);
 
     // An empty storage result drops the frame instead of falling back to a copy.
-    adapter.setFrameStorage(testContext([](std::size_t) { return std::shared_ptr<std::uint8_t>(); }));
-    assert(!adapter.convertGraphicsImage(source, 44U).isValid());
+    auto refusedContext = testContext([](std::size_t) { return std::shared_ptr<std::uint8_t>(); });
+    GraphicsFrameBuilder refusedBuilder(refusedContext);
+    assert(!adapter.convertGraphicsImage(source, refusedBuilder, 44U).isValid());
     adapter.setFrameStorage(GraphicsFrameContext::local());
 
     // 2D rejections carry the SDK input sequence and bounded layout values only.
     {
+        GraphicsFrameBuilder rejectionBuilder;
         std::optional<PylonImageRejection> rejection;
-        assert(!adapter.convertGraphicsImage(Pylon::CPylonImage{}, 71U, &rejection).isValid());
+        assert(!adapter.convertGraphicsImage(Pylon::CPylonImage{}, rejectionBuilder, 71U, &rejection).isValid());
         assert(rejection.has_value());
         assert(rejection->reason == PylonImageRejection::Reason::MissingBytes);
         assert(rejection->frameSequence == 71U);
         assert(rejection->conversion == PylonImageRejection::Conversion::None);
 
-        adapter.setFrameStorage(testContext([](std::size_t) { return std::shared_ptr<std::uint8_t>(); }));
+        GraphicsFrameBuilder refusedRejectionBuilder(refusedContext);
         rejection.reset();
-        assert(!adapter.convertGraphicsImage(source, 72U, &rejection).isValid());
+        assert(!adapter.convertGraphicsImage(source, refusedRejectionBuilder, 72U, &rejection).isValid());
         assert(rejection.has_value());
         assert(rejection->reason == PylonImageRejection::Reason::StorageRefused);
         assert(rejection->frameSequence == 72U);
@@ -128,7 +136,7 @@ int main()
         adapter.setFrameStorage(GraphicsFrameContext::local());
 
         rejection.reset();
-        const GraphicsImage retained = adapter.convertGraphicsImage(source, 73U, &rejection);
+        const GraphicsImage retained = adapter.convertGraphicsImage(source, rejectionBuilder, 73U, &rejection);
         assert(retained.isValid() && !rejection.has_value());
     }
 
@@ -140,7 +148,8 @@ int main()
     auto* const mono12Bytes = static_cast<std::uint8_t*>(mono12.GetBuffer());
     std::memcpy(mono12Bytes, mono12Samples, 2U * sizeof(std::uint16_t));
     std::memcpy(mono12Bytes + mono12Stride, mono12Samples + 2, 2U * sizeof(std::uint16_t));
-    const GraphicsImage shifted = adapter.convertGraphicsImage(mono12, 7U);
+    GraphicsFrameBuilder shiftedBuilder;
+    const GraphicsImage shifted = adapter.convertGraphicsImage(mono12, shiftedBuilder, 7U);
     assert(shifted.isValid());
     assert(shifted.pixelFormat == GraphicsImagePixelFormat::Mono16);
     assert(shifted.declaredMonoSourceBits == 12U);
@@ -159,7 +168,8 @@ int main()
         20U, 21U, 22U, 23U,
         30U, 31U, 32U, 33U};
     std::memcpy(planar.GetBuffer(), planarBytes, sizeof(planarBytes));
-    const GraphicsImage bgr = adapter.convertGraphicsImage(planar, 9U);
+    GraphicsFrameBuilder bgrBuilder;
+    const GraphicsImage bgr = adapter.convertGraphicsImage(planar, bgrBuilder, 9U);
     assert(bgr.isValid());
     assert(bgr.width == 2);
     assert(bgr.height == 2);
@@ -176,7 +186,7 @@ int main()
     assert(bgr.data()[static_cast<std::size_t>(bgr.stride) + 2U] == 12U);
 
     const Pylon::CPylonImage empty;
-    assert(!adapter.convertGraphicsImage(empty).isValid());
+    assert(!adapter.convertGraphicsImage(empty, bgrBuilder).isValid());
 
     Pylon::CPylonDataContainer emptyContainer;
     PylonScene3DProfile profile;

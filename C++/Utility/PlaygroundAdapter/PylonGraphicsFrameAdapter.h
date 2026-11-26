@@ -30,6 +30,7 @@ public:
     /** Converts one owned 2D pylon image into the canonical GraphicsImage. */
     [[nodiscard]] GraphicsImage convertGraphicsImage(
         const Pylon::CPylonImage& image,
+        GraphicsFrameBuilder& builder,
         std::uint64_t frameSequence = 0U,
         std::optional<PylonImageRejection>* rejection = nullptr) const;
 

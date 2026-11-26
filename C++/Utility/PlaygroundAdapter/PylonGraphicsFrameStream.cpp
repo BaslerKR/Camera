@@ -37,6 +37,10 @@ public:
 
     void setFrameStorage(GraphicsFrameContext storage)
     {
+        {
+            std::lock_guard<std::mutex> lock(_storageMutex);
+            _storage = storage;
+        }
         _adapter.setFrameStorage(std::move(storage));
     }
 
@@ -46,6 +50,8 @@ private:
     CameraImageRejectionCallback _imageRejection;
     CameraRangeRejectionCallback _rangeRejection;
     PylonGraphicsFrameAdapter _adapter;
+    std::mutex _storageMutex;
+    GraphicsFrameContext _storage = GraphicsFrameContext::local();
     GraphicsFrameCallbackGate _callbackGate;
     Camera::CallbackId _grabCallbackId = 0;
     Camera::CallbackId _grab3DCallbackId = 0;
@@ -72,16 +78,21 @@ PylonGraphicsFrameStream::Impl::Impl(
             if (!lease) return;
             try
             {
+                GraphicsFrameContext context = GraphicsFrameContext::local();
+                {
+                    std::lock_guard<std::mutex> lock(_storageMutex);
+                    context = _storage;
+                }
+                GraphicsFrameBuilder builder(context);
                 std::optional<PylonImageRejection> rejection;
                 GraphicsImage graphicsImage = _adapter.convertGraphicsImage(
-                    image, sequence, _imageRejection ? &rejection : nullptr);
+                    image, builder, sequence, _imageRejection ? &rejection : nullptr);
                 if (!graphicsImage.isValid())
                 {
                     if (_imageRejection && rejection) _imageRejection(*rejection);
                     return;
                 }
 
-                GraphicsFrameBuilder builder;
                 builder.addImage("image", std::move(graphicsImage), "Image");
                 auto frame = std::move(builder).publish();
                 if (!frame)

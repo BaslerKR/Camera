@@ -245,7 +245,7 @@ void recordRangeRejection(
     const std::size_t size,
     const std::uint8_t declaredMonoSourceBits,
     const std::uint64_t frameSequence,
-    GraphicsFrameContext storage,
+    GraphicsFrameBuilder& builder,
     const GraphicsImageWriterOperation operation,
     const ImageEvidenceContext& evidenceContext = {},
     std::optional<PylonImageRejection>* rejection = nullptr)
@@ -266,7 +266,6 @@ void recordRangeRejection(
     // The one copy out of the SDK buffer. An empty storage result drops the frame.
     // The failure code is read directly from the write that actually failed.
     GraphicsImageFailure failure = GraphicsImageFailure::None;
-    GraphicsFrameBuilder builder(storage);
     GraphicsImage image = writeGraphicsImageWithFailure(
         builder, writerSource, rejection ? &failure : nullptr);
     if (!image.isValid() && rejection)
@@ -309,6 +308,7 @@ void recordRangeRejection(
 
 [[nodiscard]] GraphicsImage componentToGraphicsImage(
     const Pylon::CPylonDataComponent& component,
+    GraphicsFrameBuilder& builder,
     const std::uint64_t frameSequence = 0U,
     std::optional<PylonImageRejection>* rejection = nullptr)
 {
@@ -370,7 +370,7 @@ void recordRangeRejection(
         component.GetDataSize(),
         0U,
         frameSequence,
-        GraphicsFrameContext::local(),
+        builder,
         GraphicsImageWriterOperation::Copy,
         context,
         rejection);
@@ -435,7 +435,7 @@ void recordRangeRejection(
     const int bitsPerPixel,
     const std::uint8_t declaredMonoSourceBits,
     const std::uint64_t frameSequence,
-    GraphicsFrameContext storage,
+    GraphicsFrameBuilder& builder,
     const ImageEvidenceContext& sourceContext,
     std::optional<PylonImageRejection>* rejection)
 {
@@ -467,7 +467,7 @@ void recordRangeRejection(
         converted.GetImageSize(),
         declaredMonoSourceBits,
         frameSequence,
-        storage,
+        builder,
         shiftMono16
             ? GraphicsImageWriterOperation::ShiftMono16
             : GraphicsImageWriterOperation::Copy,
@@ -478,7 +478,7 @@ void recordRangeRejection(
 [[nodiscard]] GraphicsImage pylonImageToGraphicsImage(
     const Pylon::CPylonImage& pylonImage,
     const std::uint64_t frameSequence,
-    GraphicsFrameContext storage,
+    GraphicsFrameBuilder& builder,
     std::optional<PylonImageRejection>* rejection)
 {
     ImageEvidenceContext context;
@@ -520,7 +520,7 @@ void recordRangeRejection(
                 pylonImage.GetImageSize(),
                 0U,
                 frameSequence,
-                storage,
+                builder,
                 GraphicsImageWriterOperation::Copy,
                 context,
                 rejection);
@@ -541,7 +541,7 @@ void recordRangeRejection(
             16,
             monoSourceBits(pixelType),
             frameSequence,
-            storage,
+            builder,
             context,
             rejection);
     }
@@ -555,7 +555,7 @@ void recordRangeRejection(
             24,
             0U,
             frameSequence,
-            storage,
+            builder,
             context,
             rejection);
     } catch (const Pylon::GenericException&) {
@@ -568,7 +568,7 @@ void recordRangeRejection(
             16,
             0U,
             frameSequence,
-            storage,
+            builder,
             context,
             rejection);
     } catch (const Pylon::GenericException&) {
@@ -581,7 +581,7 @@ void recordRangeRejection(
             8,
             0U,
             frameSequence,
-            storage,
+            builder,
             context,
             rejection);
     } catch (const Pylon::GenericException&) {
@@ -700,7 +700,8 @@ bool copyPointCloudRgb(const Pylon::CPylonDataComponent& component, RangeFrame& 
 void appendColorImage(const Pylon::CPylonDataComponent& intensity,
                       const GraphicsFrameRequest& request,
                       const PylonScene3DProfile& profile,
-                       GraphicsFrameContent& scene,
+                      GraphicsFrameBuilder& builder,
+                      GraphicsFrameContent& scene,
                       const std::uint64_t frameSequence = 0U,
                       std::optional<PylonImageRejection>* rejection = nullptr)
 {
@@ -709,7 +710,7 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
         return;
     }
 
-    GraphicsImage image = componentToGraphicsImage(intensity, frameSequence, rejection);
+    GraphicsImage image = componentToGraphicsImage(intensity, builder, frameSequence, rejection);
     if (!image.isValid())
     {
         return;
@@ -764,7 +765,7 @@ void registerColorImageToRange(
     view.distanceScale = 1.15;
 
     const auto intensity = componentByType(container, Pylon::ComponentType_Intensity);
-    appendColorImage(intensity, request, profile, scene, frameSequence, imageRejection);
+    appendColorImage(intensity, request, profile, builder, scene, frameSequence, imageRejection);
     if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range))
     {
         return publishScene(builder);
@@ -938,7 +939,7 @@ void registerColorImageToRange(
     scene.metadata.sourceName = "Basler Stereo ace";
 
     const auto intensity = componentByType(container, Pylon::ComponentType_Intensity);
-    appendColorImage(intensity, request, profile, scene, frameSequence, imageRejection);
+    appendColorImage(intensity, request, profile, builder, scene, frameSequence, imageRejection);
     if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range))
     {
         return publishScene(builder);
@@ -1086,15 +1087,11 @@ void PylonGraphicsFrameAdapter::setFrameStorage(GraphicsFrameContext storage)
 
 GraphicsImage PylonGraphicsFrameAdapter::convertGraphicsImage(
     const Pylon::CPylonImage& image,
+    GraphicsFrameBuilder& builder,
     const std::uint64_t frameSequence,
     std::optional<PylonImageRejection>* rejection) const
 {
-    GraphicsFrameContext storage = GraphicsFrameContext::local();
-    {
-        std::lock_guard<std::mutex> lock(_storageMutex);
-        storage = _storage;
-    }
-    return pylonImageToGraphicsImage(image, frameSequence, storage, rejection);
+    return pylonImageToGraphicsImage(image, frameSequence, builder, rejection);
 }
 
 std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsFrame(
