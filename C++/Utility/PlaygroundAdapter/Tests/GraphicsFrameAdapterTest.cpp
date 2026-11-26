@@ -8,9 +8,50 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <type_traits>
+
+class TestAllocation final : public GraphicsAllocation
+{
+public:
+    TestAllocation(std::shared_ptr<std::uint8_t> data, std::size_t bytes)
+        : GraphicsAllocation(reinterpret_cast<std::byte*>(data.get()), bytes,
+                             GraphicsAllocationOrigin::Managed, 0U, GraphicsAllocationState::Writable),
+          _data(std::move(data)) {}
+private:
+    void destroy() noexcept override { delete this; }
+    std::shared_ptr<std::uint8_t> _data;
+};
+
+class TestStorageProvider final : public GraphicsFrameAllocator
+{
+public:
+    explicit TestStorageProvider(std::function<std::shared_ptr<std::uint8_t>(std::size_t)> acquire)
+        : _acquire(std::move(acquire)) {}
+    GraphicsResult<GraphicsAllocationRef> allocate(std::size_t bytes, std::size_t alignment) noexcept override
+    {
+        auto data = _acquire(bytes);
+        if (!data || reinterpret_cast<std::uintptr_t>(data.get()) % alignment != 0U)
+            return GraphicsFrameError::Allocation;
+        auto* allocation = new (std::nothrow) TestAllocation(std::move(data), bytes);
+        if (!allocation) return GraphicsFrameError::Allocation;
+        return GraphicsAllocationRef::adoptNew(allocation);
+    }
+private:
+    std::function<std::shared_ptr<std::uint8_t>(std::size_t)> _acquire;
+};
+
+static GraphicsFrameContext testContext(
+    std::function<std::shared_ptr<std::uint8_t>(std::size_t)> acquire)
+{
+    return GraphicsFrameContext(std::make_shared<TestStorageProvider>(std::move(acquire)));
+}
+
+static_assert(std::is_const_v<std::remove_reference_t<decltype(*std::declval<GraphicsSpan<std::uint8_t>>().data())>>);
+static_assert(std::is_const_v<std::remove_reference_t<decltype(std::declval<GraphicsFrame>().ranges())>>);
 
 int main()
 {
@@ -35,6 +76,7 @@ int main()
     assert(image.height == 2);
     assert(image.pixelFormat == GraphicsImagePixelFormat::Mono8);
     assert(image.frameSequence == 42U);
+    assert(image.pixels.size() == source.GetImageSize());
     assert(image.data() != source.GetBuffer());
     assert(image.data()[0] == 1U);
     assert(image.data()[1] == 2U);
@@ -44,11 +86,11 @@ int main()
     // Provided storage receives the direct-copy bytes without an adapter allocation.
     std::uint8_t providedBytes[16] = {};
     std::size_t providedSize = 0U;
-    adapter.setFrameStorage([&](const std::size_t requested) {
+    adapter.setFrameStorage(testContext([&](const std::size_t requested) {
         providedSize = requested;
         assert(requested <= sizeof(providedBytes));
         return std::shared_ptr<std::uint8_t>(providedBytes, [](std::uint8_t*) {});
-    });
+    }));
     const GraphicsImage stored = adapter.convertGraphicsImage(source, 43U);
     assert(stored.isValid());
     assert(stored.data() == providedBytes);
@@ -59,9 +101,9 @@ int main()
     assert(providedBytes[stride + 1U] == 4U);
 
     // An empty storage result drops the frame instead of falling back to a copy.
-    adapter.setFrameStorage([](std::size_t) { return std::shared_ptr<std::uint8_t>(); });
+    adapter.setFrameStorage(testContext([](std::size_t) { return std::shared_ptr<std::uint8_t>(); }));
     assert(!adapter.convertGraphicsImage(source, 44U).isValid());
-    adapter.setFrameStorage({});
+    adapter.setFrameStorage(GraphicsFrameContext::local());
 
     // 2D rejections carry the SDK input sequence and bounded layout values only.
     {
@@ -72,7 +114,7 @@ int main()
         assert(rejection->frameSequence == 71U);
         assert(rejection->conversion == PylonImageRejection::Conversion::None);
 
-        adapter.setFrameStorage([](std::size_t) { return std::shared_ptr<std::uint8_t>(); });
+        adapter.setFrameStorage(testContext([](std::size_t) { return std::shared_ptr<std::uint8_t>(); }));
         rejection.reset();
         assert(!adapter.convertGraphicsImage(source, 72U, &rejection).isValid());
         assert(rejection.has_value());
@@ -83,7 +125,7 @@ int main()
         assert(rejection->minimumRowBytes == 2U);
         assert(rejection->readableBytes == source.GetImageSize());
         assert(rejection->requiredBytes == rejection->effectiveStride * 2U);
-        adapter.setFrameStorage({});
+        adapter.setFrameStorage(GraphicsFrameContext::local());
 
         rejection.reset();
         const GraphicsImage retained = adapter.convertGraphicsImage(source, 73U, &rejection);
@@ -175,23 +217,26 @@ int main()
 
         std::size_t storageCalls = 0U;
         std::shared_ptr<std::uint8_t> storageBlock;
-        GraphicsImageStorage storage = [&](const std::size_t bytes) {
+        auto storage = testContext([&](const std::size_t bytes) {
             ++storageCalls;
             storageBlock = std::shared_ptr<std::uint8_t>(
                 new std::uint8_t[bytes], std::default_delete<std::uint8_t[]>());
             return storageBlock;
-        };
+        });
 
         BlazeGraphicsFrameAdapter blaze;
         blaze.setFrameStorage(storage);
         const auto scene = blaze.convertSource(source, {});
         assert(scene.has_value());
+        const GraphicsFrame sharedScene = *scene;
+        assert(sharedScene.ranges().front().payload.zValues.data()
+            == scene->ranges().front().payload.zValues.data());
         assert(storageCalls == 1U && storageBlock != nullptr);
-        assert(scene->ranges.size() == 1U && scene->pointClouds.empty());
+        assert(scene->ranges().size() == 1U && scene->pointClouds().empty());
 
-        const RangeFrame& range = scene->ranges.front().payload;
+        const RangeFrame& range = scene->ranges().front().payload;
         assert(range.width == 2 && range.height == 2);
-        assert(range.zValues.isBorrowed());
+        assert(range.zValues.size() == 4U);
         assert(range.zValues.data() == reinterpret_cast<const float*>(storageBlock.get()));
         assert(range.xValues[0] == 1.0F && range.yValues[0] == 2.0F && range.zValues[0] == 3.0F);
         assert(range.xValues[1] == 4.0F && range.yValues[1] == 5.0F && range.zValues[1] == 6.0F);
@@ -219,9 +264,9 @@ int main()
         GraphicsFrameRequest cloudOnlyRequest;
         cloudOnlyRequest.components = GraphicsFrameComponent::PointCloud;
         const auto cloudOnly = blaze.convertSource(source, cloudOnlyRequest);
-        assert(cloudOnly.has_value() && cloudOnly->pointClouds.empty());
-        assert(cloudOnly->ranges.size() == 1U);
-        const RangeFrame& cloudOnlyRange = cloudOnly->ranges.front().payload;
+        assert(cloudOnly.has_value() && cloudOnly->pointClouds().empty());
+        assert(cloudOnly->ranges().size() == 1U);
+        const RangeFrame& cloudOnlyRange = cloudOnly->ranges().front().payload;
         assert(cloudOnlyRange.canDerivePointCloud());
         assert(cloudOnlyRange.intensity.empty() && cloudOnlyRange.confidence.empty());
         assert(cloudOnlyRange.rgb.size() == 12U);
@@ -230,9 +275,9 @@ int main()
         GraphicsFrameRequest rangeOnlyRequest;
         rangeOnlyRequest.components = GraphicsFrameComponent::Range;
         const auto rangeOnly = blaze.convertSource(source, rangeOnlyRequest);
-        assert(rangeOnly.has_value() && rangeOnly->pointClouds.empty());
-        assert(rangeOnly->ranges.size() == 1U);
-        assert(rangeOnly->ranges.front().payload.rgb.empty());
+        assert(rangeOnly.has_value() && rangeOnly->pointClouds().empty());
+        assert(rangeOnly->ranges().size() == 1U);
+        assert(rangeOnly->ranges().front().payload.rgb.empty());
 
         // Range evidence names the real failed rule, keeps the SDK sequence, and
         // stays empty when a valid range (and its intensity) is retained.
@@ -250,7 +295,7 @@ int main()
         assert(rejection->frameSequence == 83U);
         assert(rejection->width == 2U && rejection->height == 2U);
 
-        blaze.setFrameStorage([](const std::size_t) { return std::shared_ptr<std::uint8_t>(); });
+        blaze.setFrameStorage(testContext([](const std::size_t) { return std::shared_ptr<std::uint8_t>(); }));
         rejection.reset();
         assert(!blaze.convertSource(source, {}, 84U, &rejection).has_value());
         assert(rejection.has_value());
@@ -261,7 +306,7 @@ int main()
         assert(rejection->readableBytes == sizeof(coordinates));
         assert(rejection->requiredBytes == sizeof(coordinates));
 
-        blaze.setFrameStorage({});
+        blaze.setFrameStorage(GraphicsFrameContext::local());
         auto shortStride = source;
         shortStride.coordinateStride = source.coordinateStride / 2U;
         shortStride.reportedCoordinateStride = shortStride.coordinateStride;

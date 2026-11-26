@@ -320,7 +320,7 @@ void recordRangeRejection(std::optional<PylonRangeRejection>* rejection,
 std::optional<GraphicsFrame> buildBlazeFrame(
     const BlazeRangeSource& source,
     const BlazeFrameOptions& options,
-    const GraphicsImageStorage& storage,
+    GraphicsFrameContext storage,
     const std::uint64_t frameSequence,
     std::optional<PylonRangeRejection>* rejection)
 {
@@ -378,7 +378,8 @@ std::optional<GraphicsFrame> buildBlazeFrame(
     layout.channels.intensity = includeIntensity;
     layout.channels.confidence = includeConfidence;
     layout.channels.rgb = includePointColors;
-    GraphicsRangeFrameWriter writer(layout, storage);
+    GraphicsFrameBuilder builder(storage);
+    GraphicsRangeFrameWriter writer(builder, layout);
     if (!writer.isValid())
     {
         using Reason = PylonRangeRejection::Reason;
@@ -484,7 +485,7 @@ std::optional<GraphicsFrame> buildBlazeFrame(
         frame.confidenceField.bitsPerSample = frame.confidenceBits;
     }
 
-    GraphicsFrame scene;
+    auto& scene = builder.content();
     scene.metadata.sourceName = "Basler blaze";
     if (frame.isValid())
     {
@@ -499,12 +500,19 @@ std::optional<GraphicsFrame> buildBlazeFrame(
         return std::nullopt;
     }
 
-    return scene;
+    auto published = std::move(builder).publish();
+    if (!published)
+    {
+        recordRangeRejection(rejection, rangeEvidence(
+            source, frameSequence, PylonRangeRejection::Reason::StorageRefused, minimumRowBytes));
+        return std::nullopt;
+    }
+    return std::move(published).value();
 }
 
 } // namespace
 
-void BlazeGraphicsFrameAdapter::setFrameStorage(GraphicsImageStorage storage)
+void BlazeGraphicsFrameAdapter::setFrameStorage(GraphicsFrameContext storage)
 {
     std::lock_guard<std::mutex> lock(_storageMutex);
     _storage = std::move(storage);
@@ -516,7 +524,7 @@ std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertSource(
     const std::uint64_t frameSequence,
     std::optional<PylonRangeRejection>* rejection) const
 {
-    GraphicsImageStorage storage;
+    GraphicsFrameContext storage = GraphicsFrameContext::local();
     {
         std::lock_guard<std::mutex> lock(_storageMutex);
         storage = _storage;
@@ -607,10 +615,5 @@ std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertGraphicsFrame(
         source.hasConfidence = true;
     }
 
-    auto scene = convertSource(source, request, frameSequence, rejection);
-    if (scene.has_value())
-    {
-        scene->metadata.sourceName = "Basler blaze";
-    }
-    return scene;
+    return convertSource(source, request, frameSequence, rejection);
 }

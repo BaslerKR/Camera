@@ -28,7 +28,7 @@ public:
     ~PylonGraphicsFrameStream();
 
     /** Forwards the storage 2D images are copied into; callable while grabbing. */
-    void setFrameStorage(GraphicsImageStorage storage);
+    void setFrameStorage(GraphicsFrameContext storage);
 
     PylonGraphicsFrameStream(const PylonGraphicsFrameStream&) = delete;
     PylonGraphicsFrameStream& operator=(const PylonGraphicsFrameStream&) = delete;

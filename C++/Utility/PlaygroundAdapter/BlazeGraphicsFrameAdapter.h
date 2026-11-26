@@ -59,7 +59,7 @@ public:
     using GraphicsFrameAdapter<BlazeGraphicsFrameAdapter, Pylon::CPylonDataContainer>::convertFrame;
 
     /** Sets where range samples are written; empty restores storage of the adapter's own. */
-    void setFrameStorage(GraphicsImageStorage storage);
+    void setFrameStorage(GraphicsFrameContext storage);
 
     /** Converts a neutral source view; the pylon adapter and tests share it. */
     [[nodiscard]] std::optional<GraphicsFrame> convertSource(
@@ -83,5 +83,5 @@ private:
         const GraphicsFrameRequest& request) const;
 
     mutable std::mutex _storageMutex;
-    GraphicsImageStorage _storage;
+    GraphicsFrameContext _storage = GraphicsFrameContext::local();
 };

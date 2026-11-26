@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <utility>
 
@@ -244,7 +245,7 @@ void recordRangeRejection(
     const std::size_t size,
     const std::uint8_t declaredMonoSourceBits,
     const std::uint64_t frameSequence,
-    const GraphicsImageStorage& storage,
+    GraphicsFrameContext storage,
     const GraphicsImageWriterOperation operation,
     const ImageEvidenceContext& evidenceContext = {},
     std::optional<PylonImageRejection>* rejection = nullptr)
@@ -265,8 +266,9 @@ void recordRangeRejection(
     // The one copy out of the SDK buffer. An empty storage result drops the frame.
     // The failure code is read directly from the write that actually failed.
     GraphicsImageFailure failure = GraphicsImageFailure::None;
+    GraphicsFrameBuilder builder(storage);
     GraphicsImage image = writeGraphicsImageWithFailure(
-        writerSource, storage, rejection ? &failure : nullptr);
+        builder, writerSource, rejection ? &failure : nullptr);
     if (!image.isValid() && rejection)
     {
         if (const auto reason = imageRejectionReason(failure))
@@ -368,7 +370,7 @@ void recordRangeRejection(
         component.GetDataSize(),
         0U,
         frameSequence,
-        {},
+        GraphicsFrameContext::local(),
         GraphicsImageWriterOperation::Copy,
         context,
         rejection);
@@ -433,7 +435,7 @@ void recordRangeRejection(
     const int bitsPerPixel,
     const std::uint8_t declaredMonoSourceBits,
     const std::uint64_t frameSequence,
-    const GraphicsImageStorage& storage,
+    GraphicsFrameContext storage,
     const ImageEvidenceContext& sourceContext,
     std::optional<PylonImageRejection>* rejection)
 {
@@ -476,7 +478,7 @@ void recordRangeRejection(
 [[nodiscard]] GraphicsImage pylonImageToGraphicsImage(
     const Pylon::CPylonImage& pylonImage,
     const std::uint64_t frameSequence,
-    const GraphicsImageStorage& storage,
+    GraphicsFrameContext storage,
     std::optional<PylonImageRejection>* rejection)
 {
     ImageEvidenceContext context;
@@ -601,30 +603,32 @@ void recordRangeRejection(
          + static_cast<std::size_t>(sourceX);
 }
 
-void copyScalarIntensity(const Pylon::CPylonDataComponent& component, RangeFrame& frame)
+bool copyScalarIntensity(const Pylon::CPylonDataComponent& component, RangeFrame& frame,
+                         GraphicsFrameBuilder& builder)
 {
     if (!component.IsValid() || component.GetData() == nullptr
         || (component.GetPixelType() != Pylon::PixelType_Mono8
             && component.GetPixelType() != Pylon::PixelType_Mono16))
     {
-        return;
+        return true;
     }
 
     const int sourceWidth = static_cast<int>(component.GetWidth());
     const int sourceHeight = static_cast<int>(component.GetHeight());
     if (sourceWidth <= 0 || sourceHeight <= 0)
     {
-        return;
+        return true;
     }
 
     std::size_t stride = 0U;
     if (!componentStride(component, stride))
     {
-        return;
+        return true;
     }
 
     const auto* data = static_cast<const std::uint8_t*>(component.GetData());
-    frame.intensity.resize(static_cast<std::size_t>(frame.width) * static_cast<std::size_t>(frame.height));
+    auto region = builder.reserve<float>(static_cast<std::size_t>(frame.width) * static_cast<std::size_t>(frame.height));
+    if (!region) return false;
     frame.intensityBits = component.GetPixelType() == Pylon::PixelType_Mono8 ? 8U : 16U;
     for (int y = 0; y < frame.height; ++y)
     {
@@ -638,37 +642,41 @@ void copyScalarIntensity(const Pylon::CPylonDataComponent& component, RangeFrame
             const float value = component.GetPixelType() == Pylon::PixelType_Mono8
                 ? static_cast<float>(row[sourceX])
                 : static_cast<float>(reinterpret_cast<const std::uint16_t*>(row)[sourceX]);
-            frame.intensity[static_cast<std::size_t>(y) * static_cast<std::size_t>(frame.width)
+            region.value().data()[static_cast<std::size_t>(y) * static_cast<std::size_t>(frame.width)
                           + static_cast<std::size_t>(x)] = value;
         }
     }
+    frame.intensity = builder.seal(std::move(region).value());
+    return true;
 }
 
-void copyPointCloudRgb(const Pylon::CPylonDataComponent& component, RangeFrame& frame)
+bool copyPointCloudRgb(const Pylon::CPylonDataComponent& component, RangeFrame& frame,
+                       GraphicsFrameBuilder& builder)
 {
     if (!component.IsValid() || component.GetData() == nullptr
         || (component.GetPixelType() != Pylon::PixelType_RGB8packed
             && component.GetPixelType() != Pylon::PixelType_RGBA8packed))
     {
-        return;
+        return true;
     }
 
     const int sourceWidth = static_cast<int>(component.GetWidth());
     const int sourceHeight = static_cast<int>(component.GetHeight());
     if (sourceWidth <= 0 || sourceHeight <= 0)
     {
-        return;
+        return true;
     }
 
     std::size_t stride = 0U;
     if (!componentStride(component, stride))
     {
-        return;
+        return true;
     }
 
     const std::size_t channels = component.GetPixelType() == Pylon::PixelType_RGB8packed ? 3U : 4U;
     const auto* data = static_cast<const std::uint8_t*>(component.GetData());
-    frame.rgb.resize(static_cast<std::size_t>(frame.width) * static_cast<std::size_t>(frame.height) * 3U);
+    auto region = builder.reserve<std::uint8_t>(static_cast<std::size_t>(frame.width) * static_cast<std::size_t>(frame.height) * 3U);
+    if (!region) return false;
     for (int y = 0; y < frame.height; ++y)
     {
         for (int x = 0; x < frame.width; ++x)
@@ -680,17 +688,19 @@ void copyPointCloudRgb(const Pylon::CPylonDataComponent& component, RangeFrame& 
             const auto* source = data + sourceY * stride + sourceX * channels;
             const std::size_t target = (static_cast<std::size_t>(y) * static_cast<std::size_t>(frame.width)
                                       + static_cast<std::size_t>(x)) * 3U;
-            frame.rgb[target] = source[0];
-            frame.rgb[target + 1U] = source[1];
-            frame.rgb[target + 2U] = source[2];
+            region.value().data()[target] = source[0];
+            region.value().data()[target + 1U] = source[1];
+            region.value().data()[target + 2U] = source[2];
         }
     }
+    frame.rgb = builder.seal(std::move(region).value());
+    return true;
 }
 
 void appendColorImage(const Pylon::CPylonDataComponent& intensity,
                       const GraphicsFrameRequest& request,
                       const PylonScene3DProfile& profile,
-                      GraphicsFrame& scene,
+                       GraphicsFrameContent& scene,
                       const std::uint64_t frameSequence = 0U,
                       std::optional<PylonImageRejection>* rejection = nullptr)
 {
@@ -711,7 +721,7 @@ void appendColorImage(const Pylon::CPylonDataComponent& intensity,
 
 void registerColorImageToRange(
     const PylonScene3DProfile& profile,
-    GraphicsFrame& scene)
+    GraphicsFrameContent& scene)
 {
     if (!profile.colorRegisteredToRange || scene.images.empty() || scene.ranges.empty())
     {
@@ -720,6 +730,19 @@ void registerColorImageToRange(
     auto& descriptor = scene.images.front().descriptor;
     descriptor.registeredResourceId = scene.ranges.front().descriptor.id;
     descriptor.registration = GraphicsImageRegistration::RegisteredToRange;
+}
+
+[[nodiscard]] std::optional<GraphicsFrame> publishScene(GraphicsFrameBuilder& builder)
+{
+    if (!builder.content().isValid()) return std::nullopt;
+    auto result = std::move(builder).publish();
+    if (!result)
+    {
+        std::fprintf(stderr, "Camera frame publication failed (error %u).\n",
+                     static_cast<unsigned>(result.error()));
+        return std::nullopt;
+    }
+    return std::move(result).value();
 }
 
 [[nodiscard]] std::optional<GraphicsFrame> buildDirectXyzScene(
@@ -731,7 +754,8 @@ void registerColorImageToRange(
     std::optional<PylonImageRejection>* imageRejection,
     std::optional<PylonRangeRejection>* rangeRejection)
 {
-    GraphicsFrame scene;
+    GraphicsFrameBuilder builder;
+    auto& scene = builder.content();
     scene.metadata.sourceName = sourceName;
     InitialView3D view;
     view.lookDirection = {0.0, 0.0, 1.0};
@@ -743,7 +767,7 @@ void registerColorImageToRange(
     appendColorImage(intensity, request, profile, scene, frameSequence, imageRejection);
     if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range))
     {
-        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
+        return publishScene(builder);
     }
 
     const auto range = componentByType(container, Pylon::ComponentType_Range);
@@ -752,13 +776,13 @@ void registerColorImageToRange(
     {
         recordRangeRejection(rangeRejection, rangeContext,
                              PylonRangeRejection::Reason::MissingRange);
-        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
+        return publishScene(builder);
     }
     if (range.GetData() == nullptr)
     {
         recordRangeRejection(rangeRejection, rangeContext,
                              PylonRangeRejection::Reason::MissingData);
-        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
+        return publishScene(builder);
     }
 
     const auto pixelType = range.GetPixelType();
@@ -766,7 +790,7 @@ void registerColorImageToRange(
     {
         recordRangeRejection(rangeRejection, rangeContext,
                              PylonRangeRejection::Reason::UnsupportedFormat);
-        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
+        return publishScene(builder);
     }
 
     std::size_t stride = 0U;
@@ -774,7 +798,7 @@ void registerColorImageToRange(
     {
         recordRangeRejection(rangeRejection, rangeContext,
                              PylonRangeRejection::Reason::InvalidLayout);
-        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
+        return publishScene(builder);
     }
 
     RangeFrame frame;
@@ -801,11 +825,16 @@ void registerColorImageToRange(
         0U};
     frame.sensorType = sourceName;
     const std::size_t count = static_cast<std::size_t>(frame.width) * static_cast<std::size_t>(frame.height);
-    frame.xValues.resize(count);
-    frame.yValues.resize(count);
-    frame.zValues.resize(count);
+    auto xs = builder.reserve<float>(count);
+    auto ys = builder.reserve<float>(count);
+    auto zs = builder.reserve<float>(count);
+    auto mask = builder.reserve<std::uint8_t>(count);
+    if (!xs || !ys || !zs || !mask)
+    {
+        recordRangeRejection(rangeRejection, rangeContext, PylonRangeRejection::Reason::StorageRefused);
+        return std::nullopt;
+    }
     frame.xyCoordinateMode = RangeFrameXYCoordinateMode::ExplicitXY;
-    frame.validMask.resize(count);
     const auto* data = static_cast<const std::uint8_t*>(range.GetData());
 
     if (pixelType == Pylon::PixelType_Coord3D_ABC32f)
@@ -818,10 +847,10 @@ void registerColorImageToRange(
                 const std::size_t index = static_cast<std::size_t>(y) * static_cast<std::size_t>(frame.width)
                                         + static_cast<std::size_t>(x);
                 const Coord3DPoint& point = row[x];
-                frame.xValues[index] = point.x;
-                frame.yValues[index] = point.y;
-                frame.zValues[index] = point.z;
-                frame.validMask[index] = std::isfinite(point.x)
+                xs.value().data()[index] = point.x;
+                ys.value().data()[index] = point.y;
+                zs.value().data()[index] = point.z;
+                mask.value().data()[index] = std::isfinite(point.x)
                     && std::isfinite(point.y)
                     && std::isfinite(point.z)
                     && point.z > 0.0F ? 1U : 0U;
@@ -843,31 +872,43 @@ void registerColorImageToRange(
                 if (raw == 0U || !std::isfinite(z) || z <= 0.0
                     || !std::isfinite(profile.focalLength) || profile.focalLength <= 0.0)
                 {
-                    frame.xValues[index] = std::numeric_limits<float>::quiet_NaN();
-                    frame.yValues[index] = std::numeric_limits<float>::quiet_NaN();
-                    frame.zValues[index] = std::numeric_limits<float>::quiet_NaN();
-                    frame.validMask[index] = 0U;
+                    xs.value().data()[index] = std::numeric_limits<float>::quiet_NaN();
+                    ys.value().data()[index] = std::numeric_limits<float>::quiet_NaN();
+                    zs.value().data()[index] = std::numeric_limits<float>::quiet_NaN();
+                    mask.value().data()[index] = 0U;
                     continue;
                 }
 
-                frame.xValues[index] = static_cast<float>((static_cast<double>(x) - profile.principalPointU)
+                xs.value().data()[index] = static_cast<float>((static_cast<double>(x) - profile.principalPointU)
                                                            * z / profile.focalLength);
-                frame.yValues[index] = static_cast<float>((static_cast<double>(y) - profile.principalPointV)
+                ys.value().data()[index] = static_cast<float>((static_cast<double>(y) - profile.principalPointV)
                                                            * z / profile.focalLength);
-                frame.zValues[index] = static_cast<float>(z);
-                frame.validMask[index] = 1U;
+                zs.value().data()[index] = static_cast<float>(z);
+                mask.value().data()[index] = 1U;
             }
         }
     }
 
+    frame.xValues = builder.seal(std::move(xs).value());
+    frame.yValues = builder.seal(std::move(ys).value());
+    frame.zValues = builder.seal(std::move(zs).value());
+    frame.validMask = builder.seal(std::move(mask).value());
     if (request.includeRangeAuxiliaryChannels)
     {
-        copyScalarIntensity(intensity, frame);
+        if (!copyScalarIntensity(intensity, frame, builder))
+        {
+            recordRangeRejection(rangeRejection, rangeContext, PylonRangeRejection::Reason::StorageRefused);
+            return std::nullopt;
+        }
         frame.intensityField.bitsPerSample = frame.intensityBits;
     }
     if (request.includePointCloudColors)
     {
-        copyPointCloudRgb(intensity, frame);
+        if (!copyPointCloudRgb(intensity, frame, builder))
+        {
+            recordRangeRejection(rangeRejection, rangeContext, PylonRangeRejection::Reason::StorageRefused);
+            return std::nullopt;
+        }
     }
 
     if (frame.isValid())
@@ -881,7 +922,7 @@ void registerColorImageToRange(
         recordRangeRejection(rangeRejection, rangeContext,
                              PylonRangeRejection::Reason::InvalidLayout);
     }
-    return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
+    return publishScene(builder);
 }
 
 [[nodiscard]] std::optional<GraphicsFrame> buildStereoAceScene(
@@ -892,14 +933,15 @@ void registerColorImageToRange(
     std::optional<PylonImageRejection>* imageRejection,
     std::optional<PylonRangeRejection>* rangeRejection)
 {
-    GraphicsFrame scene;
+    GraphicsFrameBuilder builder;
+    auto& scene = builder.content();
     scene.metadata.sourceName = "Basler Stereo ace";
 
     const auto intensity = componentByType(container, Pylon::ComponentType_Intensity);
     appendColorImage(intensity, request, profile, scene, frameSequence, imageRejection);
     if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range))
     {
-        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
+        return publishScene(builder);
     }
     if (!profile.hasDisparityCalibration())
     {
@@ -907,7 +949,7 @@ void registerColorImageToRange(
         noRange.frameSequence = frameSequence;
         recordRangeRejection(rangeRejection, noRange,
                              PylonRangeRejection::Reason::MissingCalibration);
-        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
+        return publishScene(builder);
     }
 
     const auto disparity = componentByType(container, Pylon::ComponentType_Disparity);
@@ -916,19 +958,19 @@ void registerColorImageToRange(
     {
         recordRangeRejection(rangeRejection, disparityContext,
                              PylonRangeRejection::Reason::MissingRange);
-        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
+        return publishScene(builder);
     }
     if (disparity.GetPixelType() != Pylon::PixelType_Coord3D_C16)
     {
         recordRangeRejection(rangeRejection, disparityContext,
                              PylonRangeRejection::Reason::UnsupportedFormat);
-        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
+        return publishScene(builder);
     }
     if (disparity.GetData() == nullptr)
     {
         recordRangeRejection(rangeRejection, disparityContext,
                              PylonRangeRejection::Reason::MissingData);
-        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
+        return publishScene(builder);
     }
 
     std::size_t stride = 0U;
@@ -936,7 +978,7 @@ void registerColorImageToRange(
     {
         recordRangeRejection(rangeRejection, disparityContext,
                              PylonRangeRejection::Reason::InvalidLayout);
-        return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
+        return publishScene(builder);
     }
 
     RangeFrame frame;
@@ -959,11 +1001,16 @@ void registerColorImageToRange(
         0U};
     frame.sensorType = "Basler Stereo ace";
     const std::size_t count = static_cast<std::size_t>(frame.width) * static_cast<std::size_t>(frame.height);
-    frame.xValues.resize(count);
-    frame.yValues.resize(count);
-    frame.zValues.resize(count);
+    auto xs = builder.reserve<float>(count);
+    auto ys = builder.reserve<float>(count);
+    auto zs = builder.reserve<float>(count);
+    auto mask = builder.reserve<std::uint8_t>(count);
+    if (!xs || !ys || !zs || !mask)
+    {
+        recordRangeRejection(rangeRejection, disparityContext, PylonRangeRejection::Reason::StorageRefused);
+        return std::nullopt;
+    }
     frame.xyCoordinateMode = RangeFrameXYCoordinateMode::ExplicitXY;
-    frame.validMask.resize(count);
     const auto* data = static_cast<const std::uint8_t*>(disparity.GetData());
     for (int y = 0; y < frame.height; ++y)
     {
@@ -976,31 +1023,43 @@ void registerColorImageToRange(
             const double calibrated = static_cast<double>(raw) * profile.coordinateScale + profile.coordinateOffset;
             if (raw == 0U || calibrated <= 0.0)
             {
-                frame.xValues[index] = std::numeric_limits<float>::quiet_NaN();
-                frame.yValues[index] = std::numeric_limits<float>::quiet_NaN();
-                frame.zValues[index] = std::numeric_limits<float>::quiet_NaN();
-                frame.validMask[index] = 0U;
+                xs.value().data()[index] = std::numeric_limits<float>::quiet_NaN();
+                ys.value().data()[index] = std::numeric_limits<float>::quiet_NaN();
+                zs.value().data()[index] = std::numeric_limits<float>::quiet_NaN();
+                mask.value().data()[index] = 0U;
                 continue;
             }
 
             const float z = static_cast<float>(1000.0 * profile.baseline * profile.focalLength / calibrated);
-            frame.xValues[index] = static_cast<float>((static_cast<double>(x) - profile.principalPointU)
+            xs.value().data()[index] = static_cast<float>((static_cast<double>(x) - profile.principalPointU)
                                                        * z / profile.focalLength);
-            frame.yValues[index] = static_cast<float>((static_cast<double>(y) - profile.principalPointV)
+            ys.value().data()[index] = static_cast<float>((static_cast<double>(y) - profile.principalPointV)
                                                        * z / profile.focalLength);
-            frame.zValues[index] = z;
-            frame.validMask[index] = 1U;
+            zs.value().data()[index] = z;
+            mask.value().data()[index] = 1U;
         }
     }
 
+    frame.xValues = builder.seal(std::move(xs).value());
+    frame.yValues = builder.seal(std::move(ys).value());
+    frame.zValues = builder.seal(std::move(zs).value());
+    frame.validMask = builder.seal(std::move(mask).value());
     if (request.includeRangeAuxiliaryChannels)
     {
-        copyScalarIntensity(intensity, frame);
+        if (!copyScalarIntensity(intensity, frame, builder))
+        {
+            recordRangeRejection(rangeRejection, disparityContext, PylonRangeRejection::Reason::StorageRefused);
+            return std::nullopt;
+        }
         frame.intensityField.bitsPerSample = frame.intensityBits;
     }
     if (request.includePointCloudColors)
     {
-        copyPointCloudRgb(intensity, frame);
+        if (!copyPointCloudRgb(intensity, frame, builder))
+        {
+            recordRangeRejection(rangeRejection, disparityContext, PylonRangeRejection::Reason::StorageRefused);
+            return std::nullopt;
+        }
     }
 
     if (frame.isValid())
@@ -1013,12 +1072,12 @@ void registerColorImageToRange(
         recordRangeRejection(rangeRejection, disparityContext,
                              PylonRangeRejection::Reason::InvalidLayout);
     }
-    return scene.isValid() ? std::optional<GraphicsFrame>(std::move(scene)) : std::nullopt;
+    return publishScene(builder);
 }
 
 } // namespace
 
-void PylonGraphicsFrameAdapter::setFrameStorage(GraphicsImageStorage storage)
+void PylonGraphicsFrameAdapter::setFrameStorage(GraphicsFrameContext storage)
 {
     std::lock_guard<std::mutex> lock(_storageMutex);
     _storage = storage;
@@ -1030,7 +1089,7 @@ GraphicsImage PylonGraphicsFrameAdapter::convertGraphicsImage(
     const std::uint64_t frameSequence,
     std::optional<PylonImageRejection>* rejection) const
 {
-    GraphicsImageStorage storage;
+    GraphicsFrameContext storage = GraphicsFrameContext::local();
     {
         std::lock_guard<std::mutex> lock(_storageMutex);
         storage = _storage;

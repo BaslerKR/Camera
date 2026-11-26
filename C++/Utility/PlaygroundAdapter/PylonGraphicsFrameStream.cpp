@@ -35,7 +35,7 @@ public:
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
 
-    void setFrameStorage(GraphicsImageStorage storage)
+    void setFrameStorage(GraphicsFrameContext storage)
     {
         _adapter.setFrameStorage(std::move(storage));
     }
@@ -81,9 +81,15 @@ PylonGraphicsFrameStream::Impl::Impl(
                     return;
                 }
 
-                GraphicsFrame frame;
-                frame.addImage("image", std::move(graphicsImage), "Image");
-                _callback(std::move(frame), 0U);
+                GraphicsFrameBuilder builder;
+                builder.addImage("image", std::move(graphicsImage), "Image");
+                auto frame = std::move(builder).publish();
+                if (!frame)
+                {
+                    CameraSystem::syslog("Camera GraphicsFrame publication failed.", true);
+                    return;
+                }
+                _callback(std::move(frame).value(), 0U);
             }
             catch (const std::exception& error)
             {
@@ -152,7 +158,7 @@ PylonGraphicsFrameStream::PylonGraphicsFrameStream(
 {
 }
 
-void PylonGraphicsFrameStream::setFrameStorage(GraphicsImageStorage storage)
+void PylonGraphicsFrameStream::setFrameStorage(GraphicsFrameContext storage)
 {
     if (_impl) _impl->setFrameStorage(std::move(storage));
 }

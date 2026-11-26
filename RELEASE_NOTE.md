@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Migrate camera frame production to immutable GraphicsFrame handles and builder-backed storage while preserving host lease refusal behavior.
+
 - Keep blaze range rejection diagnostics' SDK-reported row stride separate from the adapter's effective stride and include the readable byte count.
 
 - Report observed 2D write and organized-range assembly failures through the optional `IDeviceImageDiagnostics` and `IDeviceRangeDiagnostics` sinks. The Qt-free adapter records the actual failed rule with bounded layout numbers and the SDK input sequence; Live emits the first and every 100th failure per reason while Single emits every failure. Conversion fallbacks, retained intensity/confidence channels and preview behavior are unchanged.

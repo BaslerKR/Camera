@@ -102,7 +102,7 @@ CameraSourceController::CameraSourceController(Camera* camera, IDevicePluginReso
 void CameraSourceController::setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider)
 {
     if (!_graphicsStream) return;
-    _graphicsStream->setFrameStorage(frameStorageFunction(std::move(provider)));
+    _graphicsStream->setFrameStorage(frameStorageContext(std::move(provider)));
 }
 
 void CameraSourceController::releaseClaim() {
