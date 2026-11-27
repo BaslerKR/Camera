@@ -104,6 +104,11 @@ void CameraSourceController::setFrameStorageProvider(std::shared_ptr<IFrameStora
     _graphicsStream->setFrameStorage(frameStorageContext(std::move(provider)));
 }
 
+void CameraSourceController::setFrameContextSource(std::shared_ptr<GraphicsFrameContextSource> source)
+{
+    if (_graphicsStream) _graphicsStream->setFrameContextSource(std::move(source));
+}
+
 void CameraSourceController::releaseClaim() {
     if (_claim) _claim->reset();
     _claimKey.clear();

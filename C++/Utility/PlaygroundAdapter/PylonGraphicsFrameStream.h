@@ -30,6 +30,9 @@ public:
     /** Forwards the storage 2D images are copied into; callable while grabbing. */
     void setFrameStorage(GraphicsFrameContext storage);
 
+    /** Installs the source for whole-frame transactions. */
+    void setFrameContextSource(std::shared_ptr<GraphicsFrameContextSource> source);
+
     PylonGraphicsFrameStream(const PylonGraphicsFrameStream&) = delete;
     PylonGraphicsFrameStream& operator=(const PylonGraphicsFrameStream&) = delete;
 

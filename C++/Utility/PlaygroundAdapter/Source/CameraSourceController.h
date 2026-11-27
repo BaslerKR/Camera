@@ -6,6 +6,7 @@
 #include "DeviceRuntime/Contract/DeviceRuntime.h"
 #include "DeviceRuntime/Contract/DeviceParameterControl.h"
 #include "DeviceRuntime/Contract/FrameStorage.h"
+#include "DeviceRuntime/Contract/FrameContextClient.h"
 #include <condition_variable>
 #include <deque>
 #include <map>
@@ -28,10 +29,11 @@ struct PylonRangeRejection;
 Q_DECLARE_LOGGING_CATEGORY(cameraSourceDiagnosticLog)
 
 class CameraSourceController : public AbstractSourceController, public IDeviceParameterControl, public IDeviceConnectionControl,
-                               public IFrameStorageClient {
+                               public IFrameStorageClient, public IFrameContextClient {
     Q_OBJECT
-    Q_INTERFACES(IDeviceParameterControl IDeviceConnectionControl IFrameStorageClient)
+    Q_INTERFACES(IDeviceParameterControl IDeviceConnectionControl IFrameStorageClient IFrameContextClient)
 public:
+    void setFrameContextSource(std::shared_ptr<GraphicsFrameContextSource> source) override;
     void setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider) override;
     using Completion = IDeviceParameterControl::Completion;
     using ChangeListener = IDeviceParameterControl::ChangeListener;

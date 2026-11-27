@@ -44,6 +44,12 @@ public:
         _adapter.setFrameStorage(std::move(storage));
     }
 
+    void setFrameContextSource(std::shared_ptr<GraphicsFrameContextSource> source)
+    {
+        std::lock_guard<std::mutex> lock(_storageMutex);
+        _contextSource = std::move(source);
+    }
+
 private:
     Camera* _camera = nullptr;
     GraphicsFrameCallback _callback;
@@ -52,6 +58,7 @@ private:
     PylonGraphicsFrameAdapter _adapter;
     std::mutex _storageMutex;
     GraphicsFrameContext _storage = GraphicsFrameContext::local();
+    std::shared_ptr<GraphicsFrameContextSource> _contextSource;
     GraphicsFrameCallbackGate _callbackGate;
     Camera::CallbackId _grabCallbackId = 0;
     Camera::CallbackId _grab3DCallbackId = 0;
@@ -172,6 +179,11 @@ PylonGraphicsFrameStream::PylonGraphicsFrameStream(
 void PylonGraphicsFrameStream::setFrameStorage(GraphicsFrameContext storage)
 {
     if (_impl) _impl->setFrameStorage(std::move(storage));
+}
+
+void PylonGraphicsFrameStream::setFrameContextSource(std::shared_ptr<GraphicsFrameContextSource> source)
+{
+    if (_impl) _impl->setFrameContextSource(std::move(source));
 }
 
 PylonGraphicsFrameStream::~PylonGraphicsFrameStream() = default;
