@@ -8,7 +8,6 @@
 #include "engine/GraphicsImageWriter.h"
 
 #include <cstdint>
-#include <mutex>
 #include <optional>
 
 class PylonGraphicsFrameAdapter final
@@ -16,7 +15,7 @@ class PylonGraphicsFrameAdapter final
 public:
     PylonGraphicsFrameAdapter() = default;
 
-    /** Sets where 2D images are copied; empty restores storage of the adapter's own. */
+    /** Sets the context Blaze range frames are written into; 2D images use the caller's builder. */
     void setFrameStorage(GraphicsFrameContext storage);
 
     [[nodiscard]] std::optional<GraphicsFrame> convertGraphicsFrame(
@@ -36,6 +35,4 @@ public:
 
 private:
     BlazeGraphicsFrameAdapter _blazeAdapter;
-    mutable std::mutex _storageMutex;
-    GraphicsFrameContext _storage = GraphicsFrameContext::local();
 };

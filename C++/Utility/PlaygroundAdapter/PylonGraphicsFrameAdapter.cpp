@@ -1080,8 +1080,6 @@ void registerColorImageToRange(
 
 void PylonGraphicsFrameAdapter::setFrameStorage(GraphicsFrameContext storage)
 {
-    std::lock_guard<std::mutex> lock(_storageMutex);
-    _storage = storage;
     _blazeAdapter.setFrameStorage(std::move(storage));
 }
 
