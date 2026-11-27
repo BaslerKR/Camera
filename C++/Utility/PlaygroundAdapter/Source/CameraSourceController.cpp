@@ -72,7 +72,6 @@ DeviceRangeRejection deviceRangeRejection(const PylonRangeRejection::Reason reas
     case Reason::UnsupportedUnit: return DeviceRangeRejection::UnsupportedUnit;
     case Reason::SizeLimitExceeded: return DeviceRangeRejection::SizeLimitExceeded;
     case Reason::StorageRefused: return DeviceRangeRejection::StorageRefused;
-    case Reason::StorageMisaligned: return DeviceRangeRejection::StorageMisaligned;
     }
     return DeviceRangeRejection::InvalidLayout;
 }

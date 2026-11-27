@@ -203,6 +203,6 @@ private:
     std::array<std::atomic<std::uint64_t>,
         static_cast<std::size_t>(DeviceImageRejection::NoImage) + 1U> _imageRejectionCounts{};
     std::array<std::atomic<std::uint64_t>,
-        static_cast<std::size_t>(DeviceRangeRejection::StorageMisaligned) + 1U> _rangeRejectionCounts{};
+        static_cast<std::size_t>(DeviceRangeRejection::StorageRefused) + 1U> _rangeRejectionCounts{};
     std::atomic<bool> _rejectionRunSingle{false};
 };

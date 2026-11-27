@@ -40,7 +40,7 @@ struct PylonRangeRejection {
     enum class Reason : std::uint32_t {
         MissingRange, MissingData, InvalidDimensions, UnsupportedFormat, InvalidLayout,
         StrideBelowMinimum, TruncatedData, MissingCalibration, InvalidCalibration,
-        UnsupportedGeometry, UnsupportedUnit, SizeLimitExceeded, StorageRefused, StorageMisaligned
+        UnsupportedGeometry, UnsupportedUnit, SizeLimitExceeded, StorageRefused
     };
 
     Reason reason = Reason::MissingRange;
