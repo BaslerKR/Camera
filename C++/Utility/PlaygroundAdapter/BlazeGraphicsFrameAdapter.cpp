@@ -392,8 +392,6 @@ std::optional<GraphicsFrame> buildBlazeFrame(
             reason = Reason::SizeLimitExceeded; break;
         case GraphicsRangeFrameWriterFailure::StorageRefused:
             reason = Reason::StorageRefused; break;
-        case GraphicsRangeFrameWriterFailure::MisalignedStorage:
-            reason = Reason::StorageMisaligned; break;
         case GraphicsRangeFrameWriterFailure::None:
             break;
         }

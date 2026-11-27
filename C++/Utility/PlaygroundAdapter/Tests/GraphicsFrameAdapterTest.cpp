@@ -31,14 +31,14 @@ class TestStorageProvider final : public GraphicsFrameAllocator
 public:
     explicit TestStorageProvider(std::function<std::shared_ptr<std::uint8_t>(std::size_t)> acquire)
         : _acquire(std::move(acquire)) {}
-    GraphicsResult<GraphicsAllocationRef> allocate(std::size_t bytes, std::size_t alignment) noexcept override
+    GraphicsResult<GraphicsAllocationSlice> allocate(std::size_t bytes, std::size_t alignment) noexcept override
     {
         auto data = _acquire(bytes);
         if (!data || reinterpret_cast<std::uintptr_t>(data.get()) % alignment != 0U)
             return GraphicsFrameError::Allocation;
         auto* allocation = new (std::nothrow) TestAllocation(std::move(data), bytes);
         if (!allocation) return GraphicsFrameError::Allocation;
-        return GraphicsAllocationRef::adoptNew(allocation);
+        return GraphicsAllocationSlice{GraphicsAllocationRef::adoptNew(allocation), 0U, bytes};
     }
 private:
     std::function<std::shared_ptr<std::uint8_t>(std::size_t)> _acquire;

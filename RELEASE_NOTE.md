@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Return `GraphicsAllocationSlice` from the test `GraphicsFrameAllocator` in `GraphicsFrameAdapterTest`, drop the removed `GraphicsRangeFrameWriterFailure::MisalignedStorage` branch in `BlazeGraphicsFrameAdapter`, and adopt `DevicePluginSessionCapability::GraphicsViewer`.
+
 - Migrate camera frame production to immutable GraphicsFrame handles and builder-backed storage while preserving host lease refusal behavior.
 
 - Keep blaze range rejection diagnostics' SDK-reported row stride separate from the adapter's effective stride and include the readable byte count.
