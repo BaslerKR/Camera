@@ -11,6 +11,21 @@
 
 namespace {
 
+class FixedContextSource final : public GraphicsFrameContextSource
+{
+public:
+    explicit FixedContextSource(GraphicsFrameContext context) noexcept
+        : _context(std::move(context)) {}
+
+    [[nodiscard]] GraphicsResult<GraphicsFrameContext> beginFrame(std::size_t) noexcept override
+    {
+        return _context;
+    }
+
+private:
+    GraphicsFrameContext _context;
+};
+
 [[nodiscard]] GraphicsFrameRequest cameraGraphicsFrameRequest() noexcept
 {
     GraphicsFrameRequest request;
@@ -85,29 +100,31 @@ PylonGraphicsFrameStream::Impl::Impl(
             if (!lease) return;
             try
             {
-                GraphicsFrameContext context = GraphicsFrameContext::local();
+                std::shared_ptr<GraphicsFrameContextSource> contextSource;
+                GraphicsFrameContext legacyStorage = GraphicsFrameContext::local();
                 {
                     std::lock_guard<std::mutex> lock(_storageMutex);
-                    context = _storage;
+                    contextSource = _contextSource;
+                    legacyStorage = _storage;
                 }
-                GraphicsFrameBuilder builder(context);
+                FixedContextSource legacySource(std::move(legacyStorage));
+                GraphicsFrameContextSource& activeSource = contextSource ? *contextSource : legacySource;
                 std::optional<PylonImageRejection> rejection;
-                GraphicsImage graphicsImage = _adapter.convertGraphicsImage(
-                    image, builder, sequence, _imageRejection ? &rejection : nullptr);
-                if (!graphicsImage.isValid())
-                {
-                    if (_imageRejection && rejection) _imageRejection(*rejection);
-                    return;
-                }
-
-                builder.addImage("image", std::move(graphicsImage), "Image");
-                auto frame = std::move(builder).publish();
+                GraphicsFrameError storageError = GraphicsFrameError::None;
+                auto frame = _adapter.convertGraphicsImageFrame(
+                    image, activeSource, sequence,
+                    _imageRejection ? &rejection : nullptr,
+                    &storageError);
                 if (!frame)
                 {
-                    CameraSystem::syslog("Camera GraphicsFrame publication failed.", true);
+                    if (_imageRejection && rejection) _imageRejection(*rejection);
+                    if (storageError != GraphicsFrameError::None && storageError != GraphicsFrameError::NoReadyCredit)
+                    {
+                        CameraSystem::syslog("Camera GraphicsFrame 2D storage failed.", true);
+                    }
                     return;
                 }
-                _callback(std::move(frame).value(), 0U);
+                _callback(std::move(*frame), 0U);
             }
             catch (const std::exception& error)
             {

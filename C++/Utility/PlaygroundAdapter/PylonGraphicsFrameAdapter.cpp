@@ -1,5 +1,7 @@
 #include "PylonGraphicsFrameAdapter.h"
 
+#include "engine/detail/GraphicsWriteLayout.h"
+
 #include <pylon/ImageFormatConverter.h>
 
 #include <algorithm>
@@ -234,6 +236,48 @@ void recordRangeRejection(
     return context;
 }
 
+struct PreparedPylonImage
+{
+    Pylon::CPylonImage convertedStorage;
+    GraphicsImageWriterSource writerSource;
+    GraphicsImageWriteLayout writeLayout;
+    ImageEvidenceContext evidenceContext;
+};
+
+void recordWriterFailure(
+    std::optional<PylonImageRejection>* rejection,
+    const ImageEvidenceContext& evidenceContext,
+    const GraphicsImageWriterSource& writerSource,
+    const GraphicsImageFailure failure)
+{
+    if (!rejection) return;
+    if (const auto reason = imageRejectionReason(failure))
+    {
+        const auto minimum = static_cast<std::uint64_t>(
+            GraphicsImageValidation::minimumRowBytes(writerSource.pixelFormat, writerSource.width));
+        const auto effective = writerSource.stride > 0
+            ? static_cast<std::uint64_t>(writerSource.stride) : minimum;
+        recordImageRejection(rejection, evidenceContext, *reason,
+            writerConversion(writerSource.operation), effective, minimum,
+            imageRequiredBytes(effective, minimum, evidenceContext.height));
+    }
+}
+
+[[nodiscard]] bool planPreparedImage(
+    PreparedPylonImage& prepared,
+    std::optional<PylonImageRejection>* rejection)
+{
+    GraphicsImageFailure failure = GraphicsImageFailure::None;
+    const auto plan = planGraphicsImageWrite(prepared.writerSource, &failure);
+    if (!plan)
+    {
+        recordWriterFailure(rejection, prepared.evidenceContext, prepared.writerSource, failure);
+        return false;
+    }
+    prepared.writeLayout = plan.value();
+    return true;
+}
+
 [[nodiscard]] GraphicsImage writeImage(
     const int width,
     const int height,
@@ -268,17 +312,9 @@ void recordRangeRejection(
     GraphicsImageFailure failure = GraphicsImageFailure::None;
     GraphicsImage image = writeGraphicsImageWithFailure(
         builder, writerSource, rejection ? &failure : nullptr);
-    if (!image.isValid() && rejection)
+    if (!image.isValid())
     {
-        if (const auto reason = imageRejectionReason(failure))
-        {
-            const auto minimum = static_cast<std::uint64_t>(
-                GraphicsImageValidation::minimumRowBytes(pixelFormat, width));
-            const auto effective = stride > 0 ? static_cast<std::uint64_t>(stride) : minimum;
-            recordImageRejection(rejection, evidenceContext, *reason,
-                writerConversion(operation), effective, minimum,
-                imageRequiredBytes(effective, minimum, evidenceContext.height));
-        }
+        recordWriterFailure(rejection, evidenceContext, writerSource, failure);
     }
     return image;
 }
@@ -428,57 +464,60 @@ void recordRangeRejection(
     }
 }
 
-[[nodiscard]] GraphicsImage convertViaPylon(
+[[nodiscard]] bool prepareViaPylon(
     const Pylon::CPylonImage& pylonImage,
     const Pylon::EPixelType outputPixelType,
     const GraphicsImagePixelFormat pixelFormat,
     const int bitsPerPixel,
     const std::uint8_t declaredMonoSourceBits,
     const std::uint64_t frameSequence,
-    GraphicsFrameBuilder& builder,
     const ImageEvidenceContext& sourceContext,
+    PreparedPylonImage& prepared,
     std::optional<PylonImageRejection>* rejection)
 {
-    Pylon::CPylonImage converted;
     Pylon::CImageFormatConverter converter;
     converter.OutputBitAlignment = Pylon::OutputBitAlignment_MsbAligned;
     converter.OutputPixelFormat = outputPixelType;
-    converter.Convert(converted, pylonImage);
+    converter.Convert(prepared.convertedStorage, pylonImage);
 
-    ImageEvidenceContext context = sourceContext;
-    if (rejection) context.readableBytes = converted.GetImageSize();
+    prepared.evidenceContext = sourceContext;
+    if (rejection) prepared.evidenceContext.readableBytes = prepared.convertedStorage.GetImageSize();
     int stride = 0;
-    if (!pylonStride(converted, stride))
+    if (!pylonStride(prepared.convertedStorage, stride))
     {
-        recordImageRejection(rejection, context, PylonImageRejection::Reason::InvalidStride);
-        return {};
+        recordImageRejection(rejection, prepared.evidenceContext, PylonImageRejection::Reason::InvalidStride);
+        return false;
+    }
+    if (prepared.convertedStorage.GetWidth() > static_cast<std::size_t>((std::numeric_limits<int>::max)())
+        || prepared.convertedStorage.GetHeight() > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
+    {
+        recordImageRejection(rejection, prepared.evidenceContext, PylonImageRejection::Reason::InvalidDimensions);
+        return false;
     }
     const bool shiftMono16 = outputPixelType == Pylon::PixelType_Mono16
         && declaredMonoSourceBits > 0U
         && declaredMonoSourceBits < 16U;
-    return writeImage(
-        static_cast<int>(converted.GetWidth()),
-        static_cast<int>(converted.GetHeight()),
-        stride,
-        bitsPerPixel,
-        pixelFormat,
-        static_cast<int>(pylonImage.GetPixelType()),
-        converted.GetBuffer(),
-        converted.GetImageSize(),
-        declaredMonoSourceBits,
-        frameSequence,
-        builder,
-        shiftMono16
-            ? GraphicsImageWriterOperation::ShiftMono16
-            : GraphicsImageWriterOperation::Copy,
-        context,
-        rejection);
+
+    prepared.writerSource = {};
+    prepared.writerSource.data = static_cast<const std::uint8_t*>(prepared.convertedStorage.GetBuffer());
+    prepared.writerSource.size = prepared.convertedStorage.GetImageSize();
+    prepared.writerSource.width = static_cast<int>(prepared.convertedStorage.GetWidth());
+    prepared.writerSource.height = static_cast<int>(prepared.convertedStorage.GetHeight());
+    prepared.writerSource.stride = stride;
+    prepared.writerSource.pixelFormat = pixelFormat;
+    prepared.writerSource.bitsPerPixel = bitsPerPixel;
+    prepared.writerSource.sourceFormat = static_cast<int>(pylonImage.GetPixelType());
+    prepared.writerSource.declaredMonoSourceBits = declaredMonoSourceBits;
+    prepared.writerSource.frameSequence = frameSequence;
+    prepared.writerSource.operation = shiftMono16
+        ? GraphicsImageWriterOperation::ShiftMono16
+        : GraphicsImageWriterOperation::Copy;
+    return planPreparedImage(prepared, rejection);
 }
 
-[[nodiscard]] GraphicsImage pylonImageToGraphicsImage(
+[[nodiscard]] std::optional<PreparedPylonImage> preparePylonImageSource(
     const Pylon::CPylonImage& pylonImage,
     const std::uint64_t frameSequence,
-    GraphicsFrameBuilder& builder,
     std::optional<PylonImageRejection>* rejection)
 {
     ImageEvidenceContext context;
@@ -493,14 +532,19 @@ void recordRangeRejection(
     if (pylonImage.GetBuffer() == nullptr || pylonImage.GetImageSize() == 0U)
     {
         recordImageRejection(rejection, context, PylonImageRejection::Reason::MissingBytes);
-        return {};
+        return std::nullopt;
     }
-    if (pylonImage.GetWidth() == 0 || pylonImage.GetHeight() == 0)
+    if (pylonImage.GetWidth() == 0 || pylonImage.GetHeight() == 0
+        || pylonImage.GetWidth() > static_cast<std::size_t>((std::numeric_limits<int>::max)())
+        || pylonImage.GetHeight() > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
     {
         recordImageRejection(rejection, context, PylonImageRejection::Reason::InvalidDimensions);
-        return {};
+        return std::nullopt;
     }
 
+    PreparedPylonImage prepared;
+    std::optional<PylonImageRejection> firstFailure;
+    std::optional<PylonImageRejection>* failureSink = rejection ? &firstFailure : nullptr;
     int stride = 0;
     if (pylonStride(pylonImage, stride, rejection ? &context.reportedStride : nullptr))
     {
@@ -509,85 +553,126 @@ void recordRangeRejection(
         const int bitsPerPixel = GraphicsImageValidation::packedBitsPerPixel(pixelFormat);
         if (pixelFormat != GraphicsImagePixelFormat::Unknown && bitsPerPixel != 0)
         {
-            return writeImage(
-                static_cast<int>(pylonImage.GetWidth()),
-                static_cast<int>(pylonImage.GetHeight()),
-                stride,
-                bitsPerPixel,
-                pixelFormat,
-                static_cast<int>(pixelType),
-                pylonImage.GetBuffer(),
-                pylonImage.GetImageSize(),
-                0U,
-                frameSequence,
-                builder,
-                GraphicsImageWriterOperation::Copy,
-                context,
-                rejection);
+            prepared.evidenceContext = context;
+            prepared.writerSource.data = static_cast<const std::uint8_t*>(pylonImage.GetBuffer());
+            prepared.writerSource.size = pylonImage.GetImageSize();
+            prepared.writerSource.width = static_cast<int>(pylonImage.GetWidth());
+            prepared.writerSource.height = static_cast<int>(pylonImage.GetHeight());
+            prepared.writerSource.stride = stride;
+            prepared.writerSource.pixelFormat = pixelFormat;
+            prepared.writerSource.bitsPerPixel = bitsPerPixel;
+            prepared.writerSource.sourceFormat = static_cast<int>(pixelType);
+            prepared.writerSource.declaredMonoSourceBits = 0U;
+            prepared.writerSource.frameSequence = frameSequence;
+            prepared.writerSource.operation = GraphicsImageWriterOperation::Copy;
+            if (!planPreparedImage(prepared, rejection))
+            {
+                return std::nullopt;
+            }
+            return prepared;
         }
     }
-    else if (rejection && !*rejection)
+    else if (failureSink && !*failureSink)
     {
-        recordImageRejection(rejection, context, PylonImageRejection::Reason::InvalidStride);
+        recordImageRejection(failureSink, context, PylonImageRejection::Reason::InvalidStride);
     }
 
     const auto pixelType = pylonImage.GetPixelType();
     if (shouldConvertToMono16(pixelType))
     {
-        return convertViaPylon(
-            pylonImage,
-            Pylon::PixelType_Mono16,
-            GraphicsImagePixelFormat::Mono16,
-            16,
-            monoSourceBits(pixelType),
-            frameSequence,
-            builder,
-            context,
-            rejection);
+        if (prepareViaPylon(
+                pylonImage,
+                Pylon::PixelType_Mono16,
+                GraphicsImagePixelFormat::Mono16,
+                16,
+                monoSourceBits(pixelType),
+                frameSequence,
+                context,
+                prepared,
+                failureSink))
+        {
+            return prepared;
+        }
+        if (rejection && !*rejection && firstFailure) *rejection = std::move(firstFailure);
+        return std::nullopt;
     }
 
     // Keep the conversion order. The first recorded writer rule wins; all thrown attempts report a failed conversion.
     try {
-        return convertViaPylon(
-            pylonImage,
-            Pylon::PixelType_BGR8packed,
-            GraphicsImagePixelFormat::BGR24,
-            24,
-            0U,
-            frameSequence,
-            builder,
-            context,
-            rejection);
+        if (prepareViaPylon(
+                pylonImage,
+                Pylon::PixelType_BGR8packed,
+                GraphicsImagePixelFormat::BGR24,
+                24,
+                0U,
+                frameSequence,
+                context,
+                prepared,
+                failureSink))
+        {
+            return prepared;
+        }
     } catch (const Pylon::GenericException&) {
     }
     try {
-        return convertViaPylon(
-            pylonImage,
-            Pylon::PixelType_Mono16,
-            GraphicsImagePixelFormat::Mono16,
-            16,
-            0U,
-            frameSequence,
-            builder,
-            context,
-            rejection);
+        if (prepareViaPylon(
+                pylonImage,
+                Pylon::PixelType_Mono16,
+                GraphicsImagePixelFormat::Mono16,
+                16,
+                0U,
+                frameSequence,
+                context,
+                prepared,
+                failureSink))
+        {
+            return prepared;
+        }
     } catch (const Pylon::GenericException&) {
     }
     try {
-        return convertViaPylon(
-            pylonImage,
-            Pylon::PixelType_Mono8,
-            GraphicsImagePixelFormat::Mono8,
-            8,
-            0U,
-            frameSequence,
-            builder,
-            context,
-            rejection);
+        if (prepareViaPylon(
+                pylonImage,
+                Pylon::PixelType_Mono8,
+                GraphicsImagePixelFormat::Mono8,
+                8,
+                0U,
+                frameSequence,
+                context,
+                prepared,
+                failureSink))
+        {
+            return prepared;
+        }
     } catch (const Pylon::GenericException&) {
     }
-    recordImageRejection(rejection, context, PylonImageRejection::Reason::UnsupportedConversion);
-    return {};
+    if (rejection && !*rejection)
+    {
+        if (firstFailure) *rejection = std::move(firstFailure);
+        else recordImageRejection(rejection, context, PylonImageRejection::Reason::UnsupportedConversion);
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] GraphicsImage pylonImageToGraphicsImage(
+    const Pylon::CPylonImage& pylonImage,
+    const std::uint64_t frameSequence,
+    GraphicsFrameBuilder& builder,
+    std::optional<PylonImageRejection>* rejection)
+{
+    auto prepared = preparePylonImageSource(pylonImage, frameSequence, rejection);
+    if (!prepared)
+    {
+        return {};
+    }
+    GraphicsImageFailure failure = GraphicsImageFailure::None;
+    GraphicsImage image = writeGraphicsImageWithFailure(
+        builder, prepared->writerSource, rejection ? &failure : nullptr);
+    if (!image.isValid())
+    {
+        recordWriterFailure(rejection, prepared->evidenceContext, prepared->writerSource, failure);
+    }
+    return image;
 }
 
 [[nodiscard]] std::size_t mappedIndex(const int targetX,
@@ -1090,6 +1175,85 @@ GraphicsImage PylonGraphicsFrameAdapter::convertGraphicsImage(
     std::optional<PylonImageRejection>* rejection) const
 {
     return pylonImageToGraphicsImage(image, frameSequence, builder, rejection);
+}
+
+std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsImageFrame(
+    const Pylon::CPylonImage& image,
+    GraphicsFrameContextSource& contextSource,
+    const std::uint64_t frameSequence,
+    std::optional<PylonImageRejection>* rejection,
+    GraphicsFrameError* storageError,
+    const std::atomic<bool>* cancelled) const
+{
+    auto prepared = preparePylonImageSource(image, frameSequence, rejection);
+    if (!prepared)
+    {
+        return std::nullopt;
+    }
+
+    std::size_t sampleBytes = 0U;
+    if (!appendAligned(sampleBytes, prepared->writeLayout.bytes, prepared->writeLayout.alignment))
+    {
+        if (storageError) *storageError = GraphicsFrameError::Capacity;
+        recordWriterFailure(rejection, prepared->evidenceContext, prepared->writerSource,
+            GraphicsImageFailure::ExtentOverflow);
+        return std::nullopt;
+    }
+
+    if (cancelled && cancelled->load(std::memory_order_acquire))
+    {
+        if (storageError) *storageError = GraphicsFrameError::Disconnected;
+        return std::nullopt;
+    }
+
+    auto contextResult = contextSource.beginFrame(sampleBytes);
+    if (!contextResult)
+    {
+        const GraphicsFrameError err = contextResult.error();
+        if (storageError) *storageError = err;
+        recordWriterFailure(rejection, prepared->evidenceContext, prepared->writerSource,
+            err == GraphicsFrameError::Capacity
+                ? GraphicsImageFailure::ExtentOverflow
+                : GraphicsImageFailure::StorageRefused);
+        return std::nullopt;
+    }
+
+    if (cancelled && cancelled->load(std::memory_order_acquire))
+    {
+        if (storageError) *storageError = GraphicsFrameError::Disconnected;
+        return std::nullopt;
+    }
+
+    GraphicsFrameBuilder builder(contextResult.value());
+    GraphicsImageFailure failure = GraphicsImageFailure::None;
+    GraphicsImage graphicsImage = writeGraphicsImageWithFailure(
+        builder, prepared->writerSource, &failure);
+    if (!graphicsImage.isValid())
+    {
+        if (storageError && failure == GraphicsImageFailure::StorageRefused)
+        {
+            *storageError = GraphicsFrameError::Allocation;
+        }
+        recordWriterFailure(rejection, prepared->evidenceContext, prepared->writerSource, failure);
+        return std::nullopt;
+    }
+
+    if (cancelled && cancelled->load(std::memory_order_acquire))
+    {
+        if (storageError) *storageError = GraphicsFrameError::Disconnected;
+        return std::nullopt;
+    }
+
+    builder.addImage("image", std::move(graphicsImage), "Image");
+    auto published = std::move(builder).publish();
+    if (!published)
+    {
+        if (storageError) *storageError = published.error();
+        recordWriterFailure(rejection, prepared->evidenceContext, prepared->writerSource,
+            GraphicsImageFailure::StorageRefused);
+        return std::nullopt;
+    }
+    return std::move(published).value();
 }
 
 std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsFrame(

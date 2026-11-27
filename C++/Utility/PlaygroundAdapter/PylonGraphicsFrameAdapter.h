@@ -5,8 +5,10 @@
 #include "PylonAssemblyRejection.h"
 #include "PylonScene3DProfile.h"
 #include "engine/GraphicsFrame.h"
+#include "engine/GraphicsFrameContext.h"
 #include "engine/GraphicsImageWriter.h"
 
+#include <atomic>
 #include <cstdint>
 #include <optional>
 
@@ -32,6 +34,15 @@ public:
         GraphicsFrameBuilder& builder,
         std::uint64_t frameSequence = 0U,
         std::optional<PylonImageRejection>* rejection = nullptr) const;
+
+    /** Plans and converts one owned 2D pylon image through a whole-frame context transaction. */
+    [[nodiscard]] std::optional<GraphicsFrame> convertGraphicsImageFrame(
+        const Pylon::CPylonImage& image,
+        GraphicsFrameContextSource& contextSource,
+        std::uint64_t frameSequence = 0U,
+        std::optional<PylonImageRejection>* rejection = nullptr,
+        GraphicsFrameError* storageError = nullptr,
+        const std::atomic<bool>* cancelled = nullptr) const;
 
 private:
     BlazeGraphicsFrameAdapter _blazeAdapter;
