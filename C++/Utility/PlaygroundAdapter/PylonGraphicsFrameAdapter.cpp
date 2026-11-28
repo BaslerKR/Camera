@@ -1295,20 +1295,40 @@ std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsImageFram
     source.pixelFormat = graphicsPixelFormat(image.GetPixelType());
     source.bitsPerPixel = GraphicsImageValidation::packedBitsPerPixel(source.pixelFormat);
     int stride = 0;
-    const bool direct = pylonStride(image, stride, &evidence.reportedStride)
-        && source.pixelFormat != GraphicsImagePixelFormat::Unknown && source.bitsPerPixel != 0;
+    const bool hasStride = pylonStride(image, stride, &evidence.reportedStride);
+    bool direct = hasStride && source.pixelFormat != GraphicsImagePixelFormat::Unknown && source.bitsPerPixel != 0;
+    bool repaired = false;
+    std::size_t inputStride = hasStride && stride > 0 ? static_cast<std::size_t>(stride) : 0U;
+    const auto inputBytes = image.GetImageSize();
     Pylon::CImageFormatConverter converter;
+    if (!direct && !Pylon::CImageFormatConverter::IsSupportedInputFormat(image.GetPixelType())) {
+        source.pixelFormat = GraphicsImagePixelFormat::Mono8;
+        source.bitsPerPixel = 8;
+        direct = true;
+        repaired = true;
+        recordImageRejection(rejection, evidence, PylonImageRejection::Reason::UnsupportedFormat);
+    }
     if (direct)
     {
         source.stride = stride;
+        if (!planPreparedImage(*prepared, nullptr)) {
+            const auto rowBytes = GraphicsImageValidation::minimumRowBytes(source.pixelFormat, source.width);
+            if (!rowBytes || rowBytes > static_cast<std::size_t>((std::numeric_limits<int>::max)())
+                || static_cast<std::size_t>(source.height) > (std::numeric_limits<std::size_t>::max)() / rowBytes) {
+                if (storageError) *storageError = GraphicsFrameError::Capacity;
+                return std::nullopt;
+            }
+            if (!inputStride) inputStride = rowBytes;
+            source.stride = static_cast<int>(rowBytes);
+            source.size = rowBytes * static_cast<std::size_t>(source.height);
+            repaired = true;
+            recordImageRejection(rejection, evidence,
+                inputStride != 0U && static_cast<std::size_t>(source.height) > inputBytes / inputStride
+                    ? PylonImageRejection::Reason::TruncatedBytes : PylonImageRejection::Reason::InvalidStride);
+        }
     }
     else
     {
-        if (!Pylon::CImageFormatConverter::IsSupportedInputFormat(image.GetPixelType()))
-        {
-            recordImageRejection(rejection, evidence, PylonImageRejection::Reason::UnsupportedConversion);
-            return std::nullopt;
-        }
         const bool mono = shouldConvertToMono16(image.GetPixelType());
         converter.OutputBitAlignment = Pylon::OutputBitAlignment_MsbAligned;
         converter.OutputPixelFormat = mono ? Pylon::PixelType_Mono16 : Pylon::PixelType_BGR8packed;
@@ -1362,9 +1382,29 @@ std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsImageFram
     GraphicsFrameBuilder builder(contextResult.value());
     GraphicsImageFailure failure = GraphicsImageFailure::None;
     GraphicsImage graphicsImage;
-    if (direct)
+    if (direct && !repaired)
     {
         graphicsImage = writeGraphicsImageWithFailure(builder, source, &failure);
+    }
+    else if (direct)
+    {
+        auto reserved = builder.reserve<std::uint8_t>(prepared->writeLayout.bytes, prepared->writeLayout.alignment);
+        if (!reserved) { if (storageError) *storageError = reserved.error(); return std::nullopt; }
+        auto region = std::move(reserved).value();
+        std::memset(region.data(), 0, region.size());
+        const auto rowBytes = static_cast<std::size_t>(source.stride);
+        for (std::size_t row = 0; row < static_cast<std::size_t>(source.height); ++row) {
+            if (inputStride && row > (std::numeric_limits<std::size_t>::max)() / inputStride) break;
+            const auto offset = row * inputStride;
+            if (offset >= inputBytes) break;
+            const auto available = (std::min)({rowBytes, inputStride, inputBytes - offset});
+            std::memcpy(region.data() + row * rowBytes, source.data + offset, available);
+        }
+        graphicsImage.pixels = builder.seal(std::move(region));
+        graphicsImage.width = source.width; graphicsImage.height = source.height;
+        graphicsImage.stride = source.stride; graphicsImage.bitsPerPixel = source.bitsPerPixel;
+        graphicsImage.sourceFormat = source.sourceFormat; graphicsImage.pixelFormat = source.pixelFormat;
+        graphicsImage.bitAlignment = source.bitAlignment; graphicsImage.frameSequence = frameSequence;
     }
     else
     {
@@ -1490,17 +1530,60 @@ std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertStereoParts(
         if (storageError) *storageError = GraphicsFrameError::InvalidInput;
         return std::nullopt;
     }
-    std::size_t sampleBytes = 0U;
-    if (!planStereo(parts, request, profile, ace, frameSequence, sampleBytes)) {
-        if (storageError) *storageError = GraphicsFrameError::InvalidInput;
-        if (rangeRejection) {
-            const auto& part = ace ? parts.disparity : parts.range;
-            recordRangeRejection(rangeRejection, componentRangeContext(part, frameSequence),
-                                 PylonRangeRejection::Reason::InvalidLayout);
+    auto selectedParts = parts;
+    auto selectedRequest = request;
+    const bool wantsImage = hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Image);
+    const bool wantsRange = hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range);
+    GraphicsFrameRequest imageRequest;
+    imageRequest.components = GraphicsFrameComponent::Image;
+    imageRequest.includeRangeAuxiliaryChannels = false;
+    imageRequest.includePointCloudColors = false;
+    GraphicsFrameRequest rangeRequest;
+    rangeRequest.components = GraphicsFrameComponent::Range;
+    rangeRequest.includeRangeAuxiliaryChannels = false;
+    rangeRequest.includePointCloudColors = false;
+    std::size_t ignored = 0U;
+    const bool imageValid = planStereo(parts, imageRequest, profile, ace, frameSequence, ignored);
+    ignored = 0U;
+    const bool rangeValid = planStereo(parts, rangeRequest, profile, ace, frameSequence, ignored);
+    if (!imageValid) {
+        if (wantsImage || (wantsRange && (request.includeRangeAuxiliaryChannels || request.includePointCloudColors))) {
+            ImageEvidenceContext evidence;
+            evidence.frameSequence = frameSequence;
+            evidence.width = boundedExtent(parts.intensity.width);
+            evidence.height = boundedExtent(parts.intensity.height);
+            evidence.pixelFormat = static_cast<std::uint64_t>(parts.intensity.pixelType);
+            evidence.readableBytes = parts.intensity.bytes;
+            const auto reason = !parts.intensity.valid || !parts.intensity.data
+                ? PylonImageRejection::Reason::MissingBytes
+                : graphicsPixelFormat(parts.intensity.pixelType) == GraphicsImagePixelFormat::Unknown
+                    ? PylonImageRejection::Reason::UnsupportedFormat : PylonImageRejection::Reason::InvalidStride;
+            recordImageRejection(imageRejection, evidence, reason);
         }
+        selectedParts.intensity = {};
+        selectedRequest.includeRangeAuxiliaryChannels = false;
+        selectedRequest.includePointCloudColors = false;
+        selectedRequest.components = static_cast<GraphicsFrameComponent>(
+            static_cast<std::uint8_t>(selectedRequest.components) & ~static_cast<std::uint8_t>(GraphicsFrameComponent::Image));
+    }
+    if (wantsRange && !rangeValid) {
+        const auto& part = ace ? parts.disparity : parts.range;
+        const auto reason = !part.valid ? PylonRangeRejection::Reason::MissingRange
+            : !part.data ? PylonRangeRejection::Reason::MissingData
+            : (ace && !profile.hasDisparityCalibration()) ? PylonRangeRejection::Reason::MissingCalibration
+            : (ace ? part.pixelType != Pylon::PixelType_Coord3D_C16
+                   : part.pixelType != Pylon::PixelType_Coord3D_C16 && part.pixelType != Pylon::PixelType_Coord3D_ABC32f)
+                ? PylonRangeRejection::Reason::UnsupportedFormat : PylonRangeRejection::Reason::InvalidLayout;
+        recordRangeRejection(rangeRejection, componentRangeContext(part, frameSequence), reason);
+        selectedRequest.components = static_cast<GraphicsFrameComponent>(
+            static_cast<std::uint8_t>(selectedRequest.components) & ~static_cast<std::uint8_t>(GraphicsFrameComponent::Range));
+    }
+    std::size_t sampleBytes = 0U;
+    if (!planStereo(selectedParts, selectedRequest, profile, ace, frameSequence, sampleBytes)) {
+        if (storageError) *storageError = GraphicsFrameError::Capacity;
         return std::nullopt;
     }
-    if (sampleBytes == 0U) return std::nullopt;
+    if (sampleBytes == 0U) { if (storageError) *storageError = GraphicsFrameError::InvalidInput; return std::nullopt; }
     if (cancelled && cancelled->load(std::memory_order_acquire)) {
         if (storageError) *storageError = GraphicsFrameError::Disconnected;
         return std::nullopt;
@@ -1511,8 +1594,8 @@ std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertStereoParts(
         if (storageError) *storageError = GraphicsFrameError::Disconnected;
         return std::nullopt;
     }
-    if (ace) return buildStereoAceScene(parts, request, profile, context.value(), storageError,
+    if (ace) return buildStereoAceScene(selectedParts, selectedRequest, profile, context.value(), storageError,
                                         cancelled, frameSequence, imageRejection, rangeRejection);
-    return buildDirectXyzScene(parts, request, profile, context.value(), storageError,
+    return buildDirectXyzScene(selectedParts, selectedRequest, profile, context.value(), storageError,
                                cancelled, "Basler Stereo mini", frameSequence, imageRejection, rangeRejection);
 }

@@ -115,6 +115,7 @@ PylonGraphicsFrameStream::Impl::Impl(
                     }
                     return;
                 }
+                if (_imageRejection && rejection) _imageRejection(*rejection);
                 if (!_cancelled.load(std::memory_order_acquire)) _callback(std::move(*frame), 0U);
             }
             catch (const std::exception& error)
