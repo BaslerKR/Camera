@@ -83,24 +83,17 @@ struct StereoParts {
     const std::size_t dataSize = component.GetDataSize();
     std::size_t reportedStride = 0U;
 
-    // Stereo mini reports multipart PaddingX that is not present in each
-    // component's GetData() buffer. Use it only when the component size can
-    // actually contain all padded rows.
-    if (component.GetStride(reportedStride)
-        && reportedStride >= packedStride
-        && (height == 0U || reportedStride <= dataSize / height))
-    {
+    if (component.GetStride(reportedStride)) {
+        if (reportedStride < packedStride || height == 0U || reportedStride > dataSize / height) return false;
         stride = reportedStride;
         return true;
     }
-
-    if (height == 0U || packedStride <= dataSize / height)
-    {
-        stride = packedStride;
-        return true;
-    }
-
-    return false;
+    const auto padding = component.GetPaddingX();
+    if (padding > (std::numeric_limits<std::size_t>::max)() - packedStride) return false;
+    const auto effective = packedStride + padding;
+    if (height == 0U || effective > dataSize / height) return false;
+    stride = effective;
+    return true;
 }
 
 /** @brief Fixed layout values of a source, copied without vendor strings or payload. */
@@ -830,6 +823,14 @@ void registerColorImageToRange(
 {
     bytes = 0U;
     const auto& image = parts.intensity;
+    const bool wantsImage = hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Image);
+    const bool wantsRange = hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range);
+    if (wantsImage || (wantsRange && (request.includeRangeAuxiliaryChannels || request.includePointCloudColors))) {
+        if (!image.IsValid() || !image.GetData() || !image.GetWidth() || !image.GetHeight()) return false;
+        if (graphicsPixelFormat(image.GetPixelType()) == GraphicsImagePixelFormat::Unknown) return false;
+        std::size_t imageStride = 0U;
+        if (!componentStride(image, imageStride)) return false;
+    }
     if (hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Image)
         && image.IsValid() && image.GetData()
         && image.GetWidth() <= static_cast<std::size_t>((std::numeric_limits<int>::max)())
@@ -848,17 +849,17 @@ void registerColorImageToRange(
             source.bitsPerPixel = GraphicsImageValidation::packedBitsPerPixel(format);
             source.frameSequence = sequence;
             auto plan = planGraphicsImageWrite(source);
-            if (plan && !appendAligned(bytes, plan.value().bytes, plan.value().alignment)) return false;
-        }
+            if (!plan || !appendAligned(bytes, plan.value().bytes, plan.value().alignment)) return false;
+        } else { return false; }
     }
     const auto& range = ace ? parts.disparity : parts.range;
-    if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range)
-        || (ace && !profile.hasDisparityCalibration()) || !range.IsValid() || !range.GetData()) return true;
+    if (!wantsRange) return true;
+    if ((ace && !profile.hasDisparityCalibration()) || !range.IsValid() || !range.GetData()) return false;
     const auto type = range.GetPixelType();
     if ((ace && type != Pylon::PixelType_Coord3D_C16)
-        || (!ace && type != Pylon::PixelType_Coord3D_C16 && type != Pylon::PixelType_Coord3D_ABC32f)) return true;
+        || (!ace && type != Pylon::PixelType_Coord3D_C16 && type != Pylon::PixelType_Coord3D_ABC32f)) return false;
     std::size_t stride = 0U;
-    if (!componentStride(range, stride)) return true;
+    if (!componentStride(range, stride)) return false;
     const auto width = static_cast<std::size_t>(range.GetWidth());
     const auto height = static_cast<std::size_t>(range.GetHeight());
     if (!width || !height || width > static_cast<std::size_t>((std::numeric_limits<int>::max)())
@@ -1442,7 +1443,12 @@ std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsFrame(
         const auto parts = stereoParts(container);
         std::size_t sampleBytes = 0U;
         if (!planStereo(parts, request, profile, ace, frameSequence, sampleBytes)) {
-            if (storageError) *storageError = GraphicsFrameError::Capacity;
+            if (storageError) *storageError = GraphicsFrameError::InvalidInput;
+            if (rangeRejection) {
+                const auto& part = ace ? parts.disparity : parts.range;
+                recordRangeRejection(rangeRejection, componentRangeContext(part, frameSequence),
+                    PylonRangeRejection::Reason::InvalidLayout);
+            }
             break;
         }
         if (sampleBytes == 0U) break;
