@@ -11,21 +11,6 @@
 
 namespace {
 
-class FixedContextSource final : public GraphicsFrameContextSource
-{
-public:
-    explicit FixedContextSource(GraphicsFrameContext context) noexcept
-        : _context(std::move(context)) {}
-
-    [[nodiscard]] GraphicsResult<GraphicsFrameContext> beginFrame(std::size_t) noexcept override
-    {
-        return _context;
-    }
-
-private:
-    GraphicsFrameContext _context;
-};
-
 [[nodiscard]] GraphicsFrameRequest cameraGraphicsFrameRequest() noexcept
 {
     GraphicsFrameRequest request;
@@ -101,18 +86,19 @@ PylonGraphicsFrameStream::Impl::Impl(
             try
             {
                 std::shared_ptr<GraphicsFrameContextSource> contextSource;
-                GraphicsFrameContext legacyStorage = GraphicsFrameContext::local();
                 {
                     std::lock_guard<std::mutex> lock(_storageMutex);
                     contextSource = _contextSource;
-                    legacyStorage = _storage;
                 }
-                FixedContextSource legacySource(std::move(legacyStorage));
-                GraphicsFrameContextSource& activeSource = contextSource ? *contextSource : legacySource;
+                if (!contextSource)
+                {
+                    CameraSystem::syslog("Camera GraphicsFrame context source is missing.", true);
+                    return;
+                }
                 std::optional<PylonImageRejection> rejection;
                 GraphicsFrameError storageError = GraphicsFrameError::None;
                 auto frame = _adapter.convertGraphicsImageFrame(
-                    image, activeSource, sequence,
+                    image, *contextSource, sequence,
                     _imageRejection ? &rejection : nullptr,
                     &storageError);
                 if (!frame)
