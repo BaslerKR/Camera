@@ -3,6 +3,7 @@
 #include "CameraSystem.h"
 #include "PylonGraphicsFrameAdapter.h"
 
+#include <atomic>
 #include <exception>
 #include <memory>
 #include <optional>
@@ -29,20 +30,13 @@ class PylonGraphicsFrameStream::Impl final
 public:
     Impl(Camera* camera, GraphicsFrameCallback callback,
          CameraImageRejectionCallback imageRejection,
-         CameraRangeRejectionCallback rangeRejection);
+         CameraRangeRejectionCallback rangeRejection, CameraStorageOutcomeCallback storageOutcome);
     ~Impl();
 
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
 
-    void setFrameStorage(GraphicsFrameContext storage)
-    {
-        {
-            std::lock_guard<std::mutex> lock(_storageMutex);
-            _storage = storage;
-        }
-        _adapter.setFrameStorage(std::move(storage));
-    }
+    void cancel() noexcept { _cancelled.store(true, std::memory_order_release); }
 
     void setFrameContextSource(std::shared_ptr<GraphicsFrameContextSource> source)
     {
@@ -57,7 +51,9 @@ private:
     CameraRangeRejectionCallback _rangeRejection;
     PylonGraphicsFrameAdapter _adapter;
     std::mutex _storageMutex;
-    GraphicsFrameContext _storage = GraphicsFrameContext::local();
+    std::atomic<bool> _cancelled{false};
+    std::atomic<bool> _refused{false};
+    CameraStorageOutcomeCallback _storageOutcome;
     std::shared_ptr<GraphicsFrameContextSource> _contextSource;
     GraphicsFrameCallbackGate _callbackGate;
     Camera::CallbackId _grabCallbackId = 0;
@@ -68,10 +64,10 @@ PylonGraphicsFrameStream::Impl::Impl(
     Camera* camera,
     GraphicsFrameCallback callback,
     CameraImageRejectionCallback imageRejection,
-    CameraRangeRejectionCallback rangeRejection)
+    CameraRangeRejectionCallback rangeRejection, CameraStorageOutcomeCallback storageOutcome)
     : _camera(camera), _callback(std::move(callback)),
       _imageRejection(std::move(imageRejection)),
-      _rangeRejection(std::move(rangeRejection))
+      _rangeRejection(std::move(rangeRejection)), _storageOutcome(std::move(storageOutcome))
 {
     if (!_camera || !_callback)
     {
@@ -82,7 +78,8 @@ PylonGraphicsFrameStream::Impl::Impl(
     _grabCallbackId = _camera->registerGrabCallback(
         [this, callbackToken](const Pylon::CPylonImage& image, const std::size_t sequence) {
             GraphicsFrameCallbackGate::Lease lease(callbackToken);
-            if (!lease) return;
+            if (!lease || _cancelled.load(std::memory_order_acquire)
+                || _refused.load(std::memory_order_acquire)) return;
             try
             {
                 std::shared_ptr<GraphicsFrameContextSource> contextSource;
@@ -100,17 +97,25 @@ PylonGraphicsFrameStream::Impl::Impl(
                 auto frame = _adapter.convertGraphicsImageFrame(
                     image, *contextSource, sequence,
                     _imageRejection ? &rejection : nullptr,
-                    &storageError);
+                    &storageError, &_cancelled);
                 if (!frame)
                 {
-                    if (_imageRejection && rejection) _imageRejection(*rejection);
-                    if (storageError != GraphicsFrameError::None && storageError != GraphicsFrameError::NoReadyCredit)
+                    if (storageError == GraphicsFrameError::ClassRefused)
+                        _refused.store(true, std::memory_order_release);
+                    if (_storageOutcome && storageError != GraphicsFrameError::None)
+                        _storageOutcome(storageError);
+                    if (_imageRejection && rejection && storageError != GraphicsFrameError::Disconnected
+                        && storageError != GraphicsFrameError::NoReadyCredit) _imageRejection(*rejection);
+                    if (storageError != GraphicsFrameError::None && storageError != GraphicsFrameError::NoReadyCredit
+                        && storageError != GraphicsFrameError::Disconnected)
                     {
-                        CameraSystem::syslog("Camera GraphicsFrame 2D storage failed.", true);
+                        CameraSystem::syslog(storageError == GraphicsFrameError::ClassRefused
+                            ? "Camera frame storage class was refused."
+                            : "Camera GraphicsFrame 2D storage failed.", true);
                     }
                     return;
                 }
-                _callback(std::move(*frame), 0U);
+                if (!_cancelled.load(std::memory_order_acquire)) _callback(std::move(*frame), 0U);
             }
             catch (const std::exception& error)
             {
@@ -126,7 +131,7 @@ PylonGraphicsFrameStream::Impl::Impl(
     _grab3DCallbackId = _camera->registerGrab3DCallback(
         [this, callbackToken](const Pylon::CPylonDataContainer& container, const std::size_t sequence) {
             GraphicsFrameCallbackGate::Lease lease(callbackToken);
-            if (!lease) return;
+            if (!lease || _cancelled.load(std::memory_order_acquire)) return;
             try
             {
                 std::optional<PylonImageRejection> imageRejection;
@@ -140,7 +145,8 @@ PylonGraphicsFrameStream::Impl::Impl(
                 if (_imageRejection && imageRejection && (!frame || !frame->hasImage()))
                     _imageRejection(*imageRejection);
                 if (_rangeRejection && rangeRejection) _rangeRejection(*rangeRejection);
-                if (frame.has_value()) _callback(std::move(*frame), 0U);
+                if (frame.has_value() && !_cancelled.load(std::memory_order_acquire))
+                    _callback(std::move(*frame), 0U);
             }
             catch (const std::exception& error)
             {
@@ -156,6 +162,7 @@ PylonGraphicsFrameStream::Impl::Impl(
 
 PylonGraphicsFrameStream::Impl::~Impl()
 {
+    cancel();
     _callbackGate.beginShutdown();
     if (!_camera) return;
     if (_grabCallbackId != 0U)
@@ -173,15 +180,15 @@ PylonGraphicsFrameStream::PylonGraphicsFrameStream(
     Camera* camera,
     GraphicsFrameCallback callback,
     CameraImageRejectionCallback imageRejection,
-    CameraRangeRejectionCallback rangeRejection)
+    CameraRangeRejectionCallback rangeRejection, CameraStorageOutcomeCallback storageOutcome)
     : _impl(std::make_unique<Impl>(camera, std::move(callback),
-                                   std::move(imageRejection), std::move(rangeRejection)))
+                                   std::move(imageRejection), std::move(rangeRejection), std::move(storageOutcome)))
 {
 }
 
-void PylonGraphicsFrameStream::setFrameStorage(GraphicsFrameContext storage)
+void PylonGraphicsFrameStream::cancel() noexcept
 {
-    if (_impl) _impl->setFrameStorage(std::move(storage));
+    if (_impl) _impl->cancel();
 }
 
 void PylonGraphicsFrameStream::setFrameContextSource(std::shared_ptr<GraphicsFrameContextSource> source)

@@ -98,15 +98,10 @@ CameraSourceController::CameraSourceController(Camera* camera, IDevicePluginReso
     startChangeWorker();
 }
 
-void CameraSourceController::setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider)
-{
-    if (!_graphicsStream) return;
-    _graphicsStream->setFrameStorage(frameStorageContext(std::move(provider)));
-}
-
 void CameraSourceController::setFrameContextSource(std::shared_ptr<GraphicsFrameContextSource> source)
 {
-    if (_graphicsStream) _graphicsStream->setFrameContextSource(std::move(source));
+    cancelFrameRun();
+    _contextSource = std::move(source);
 }
 
 void CameraSourceController::releaseClaim() {
@@ -134,6 +129,28 @@ CameraSourceController::~CameraSourceController() {
 }
 
 void CameraSourceController::beginRejectionRun(const bool single) {
+    cancelFrameRun();
+    _graphicsStream.reset();
+    _droppedFrames.store(0, std::memory_order_relaxed);
+    _frameClassRefused.store(false, std::memory_order_release);
+    _graphicsStream = std::make_unique<PylonGraphicsFrameStream>(
+        _camera,
+        [this](GraphicsFrame&& payload, unsigned int sourceIndex) {
+            if (!_frameConsumer) return;
+            SessionFrame frame;
+            frame.payload = std::move(payload);
+            frame.frameSeq = _frameSeq.fetch_add(1, std::memory_order_relaxed);
+            _frameConsumer(std::move(frame), sourceIndex);
+        },
+        [this](const PylonImageRejection& evidence) { reportImageRejection(evidence); },
+        [this](const PylonRangeRejection& evidence) { reportRangeRejection(evidence); },
+        [this](GraphicsFrameError error) {
+            if (error == GraphicsFrameError::NoReadyCredit || error == GraphicsFrameError::ClassRefused)
+                _droppedFrames.fetch_add(1, std::memory_order_relaxed);
+            if (error == GraphicsFrameError::ClassRefused)
+                _frameClassRefused.store(true, std::memory_order_release);
+        });
+    _graphicsStream->setFrameContextSource(_contextSource);
     _rejectionRunSingle.store(single, std::memory_order_relaxed);
     for (auto& count : _imageRejectionCounts) count.store(0, std::memory_order_relaxed);
     for (auto& count : _rangeRejectionCounts) count.store(0, std::memory_order_relaxed);
@@ -201,7 +218,12 @@ void CameraSourceController::start() {
     _isGrabbing = true;
 }
 
+void CameraSourceController::cancelFrameRun() noexcept {
+    if (_graphicsStream) _graphicsStream->cancel();
+}
+
 void CameraSourceController::stop() {
+    cancelFrameRun();
     if (_camera) {
         _camera->stop();
         _isGrabbing = false;
@@ -234,17 +256,7 @@ void CameraSourceController::registerCallbacks() {
     _nodeCallbackId = _camera->registerNodeUpdatedCallback(
         [this](const std::string& nodeName) { enqueueParameterChange(nodeName); });
 
-    _graphicsStream = std::make_unique<PylonGraphicsFrameStream>(
-        _camera,
-        [this](GraphicsFrame&& payload, const unsigned int sourceIndex) {
-            if (!_frameConsumer) return;
-            SessionFrame frame;
-            frame.payload = std::move(payload);
-            frame.frameSeq = _frameSeq.fetch_add(1, std::memory_order_relaxed);
-            _frameConsumer(std::move(frame), sourceIndex);
-        },
-        [this](const PylonImageRejection& evidence) { reportImageRejection(evidence); },
-        [this](const PylonRangeRejection& evidence) { reportRangeRejection(evidence); });
+
 }
 
 void CameraSourceController::deregisterCallbacks() {
@@ -275,7 +287,7 @@ std::optional<SourceRuntimeDiagnostics> CameraSourceController::sourceRuntimeDia
 {
     if (sourceIndex != 0 || !_camera) return std::nullopt;
     const auto value = _camera->runtimeDiagnostics();
-    return SourceRuntimeDiagnostics{value.grabbing, value.delivered, value.failed};
+    return SourceRuntimeDiagnostics{value.grabbing, value.delivered, value.failed + _droppedFrames.load(std::memory_order_acquire)};
 }
 
 std::vector<GraphicsSourceDescriptor> CameraSourceController::ownedSourceDescriptors(

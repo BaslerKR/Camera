@@ -16,6 +16,7 @@ class Camera;
 
 /** @brief Neutral best-effort observers of failed 2D and range assembly. */
 using CameraImageRejectionCallback = std::function<void(const PylonImageRejection&)>;
+using CameraStorageOutcomeCallback = std::function<void(GraphicsFrameError)>;
 using CameraRangeRejectionCallback = std::function<void(const PylonRangeRejection&)>;
 
 /** Owns Camera SDK callback registration and emits only owned GraphicsFrame values. */
@@ -24,11 +25,12 @@ class PylonGraphicsFrameStream final
 public:
     PylonGraphicsFrameStream(Camera* camera, GraphicsFrameCallback callback,
         CameraImageRejectionCallback imageRejection = {},
-        CameraRangeRejectionCallback rangeRejection = {});
+        CameraRangeRejectionCallback rangeRejection = {},
+        CameraStorageOutcomeCallback storageOutcome = {});
     ~PylonGraphicsFrameStream();
 
-    /** Forwards the storage 2D images are copied into; callable while grabbing. */
-    void setFrameStorage(GraphicsFrameContext storage);
+    /** Cancels this acquisition run before stopping the camera. */
+    void cancel() noexcept;
 
     /** Installs the source for whole-frame transactions. */
     void setFrameContextSource(std::shared_ptr<GraphicsFrameContextSource> source);

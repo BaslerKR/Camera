@@ -1250,9 +1250,17 @@ DeviceConnectionResult CameraSourceController::requestSingle(std::string connect
         std::unique_lock<std::mutex> lock(wait->mutex);
         if (!wait->condition.wait_for(lock, std::chrono::seconds(30), [&] { return wait->finished; })) {
             lock.unlock();
+            cancelFrameRun();
             _camera->stop();
             return {DeviceConnectionError::Timeout,
                 "Single acquisition did not finish within 30 s; accepted effects may have occurred.",
+                DeviceConnectionEffect::Applied, copiedConnectionState(_camera->connectionState())};
+        }
+        if (_frameClassRefused.load(std::memory_order_acquire)) {
+            lock.unlock();
+            cancelFrameRun();
+            _camera->stop();
+            return {DeviceConnectionError::BackendFailure, "Camera frame storage class was refused.",
                 DeviceConnectionEffect::Applied, copiedConnectionState(_camera->connectionState())};
         }
         if (wait->delivered == 0) {
@@ -1288,6 +1296,7 @@ DeviceConnectionResult CameraSourceController::requestLiveStop(std::string conne
         if (!state.connected) return {DeviceConnectionError::Disconnected, "The camera is disconnected."};
         if (connectionIdFor(state) != connectionId) return {DeviceConnectionError::Conflict, "The connection changed; observe it again."};
         if (!_isGrabbing.load()) return {DeviceConnectionError::Conflict, "Live acquisition is not running."};
+        cancelFrameRun();
         _camera->stop();
         return {{}, {}, DeviceConnectionEffect::Applied, copiedConnectionState(_camera->connectionState())};
     }, std::move(completion));

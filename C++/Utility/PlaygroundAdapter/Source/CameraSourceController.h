@@ -5,7 +5,6 @@
 #include "DeviceRuntime/Contract/DeviceImageDiagnostics.h"
 #include "DeviceRuntime/Contract/DeviceRuntime.h"
 #include "DeviceRuntime/Contract/DeviceParameterControl.h"
-#include "DeviceRuntime/Contract/FrameStorage.h"
 #include "DeviceRuntime/Contract/FrameContextClient.h"
 #include <condition_variable>
 #include <deque>
@@ -29,12 +28,11 @@ struct PylonRangeRejection;
 Q_DECLARE_LOGGING_CATEGORY(cameraSourceDiagnosticLog)
 
 class CameraSourceController : public AbstractSourceController, public IDeviceParameterControl, public IDeviceConnectionControl,
-                               public IFrameStorageClient, public IFrameContextClient {
+                               public IFrameContextClient {
     Q_OBJECT
-    Q_INTERFACES(IDeviceParameterControl IDeviceConnectionControl IFrameStorageClient IFrameContextClient)
+    Q_INTERFACES(IDeviceParameterControl IDeviceConnectionControl IFrameContextClient)
 public:
     void setFrameContextSource(std::shared_ptr<GraphicsFrameContextSource> source) override;
-    void setFrameStorageProvider(std::shared_ptr<IFrameStorageProvider> provider) override;
     using Completion = IDeviceParameterControl::Completion;
     using ChangeListener = IDeviceParameterControl::ChangeListener;
     using TargetsCompletion = IDeviceConnectionControl::TargetsCompletion;
@@ -148,6 +146,7 @@ private:
     void reportRangeRejection(const PylonRangeRejection& evidence);
     /** @brief Selects Single-always or Live first-and-every-100th sampling. */
     void beginRejectionRun(bool single);
+    void cancelFrameRun() noexcept;
     /** @brief Matches the parameter target connection id, so one id addresses both capabilities. */
     std::string connectionIdFor(const CameraConnectionState& state) const;
     /** @brief Copies the source descriptors one connection snapshot owns. */
@@ -200,6 +199,9 @@ private:
 
     Camera::CallbackId _statusCallbackId = 0;
     std::unique_ptr<PylonGraphicsFrameStream> _graphicsStream;
+    std::shared_ptr<GraphicsFrameContextSource> _contextSource;
+    std::atomic<std::uint64_t> _droppedFrames{0};
+    std::atomic<bool> _frameClassRefused{false};
     const DeviceImageRejectionSink _imageRejectionSink = nullptr;
     const DeviceRangeRejectionSink _rangeRejectionSink = nullptr;
     std::array<std::atomic<std::uint64_t>,
