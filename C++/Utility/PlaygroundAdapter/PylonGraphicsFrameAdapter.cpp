@@ -1269,6 +1269,17 @@ std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsImageFram
     GraphicsFrameError* storageError,
     const std::atomic<bool>* cancelled) const
 {
+    const auto directFormat = graphicsPixelFormat(image.GetPixelType());
+    if (directFormat != GraphicsImagePixelFormat::Unknown
+        || (!shouldConvertToMono16(image.GetPixelType())
+            && image.GetPixelType() != Pylon::PixelType_RGB8planar)) {
+        CameraStereoPartView part;
+        part.data = image.GetBuffer(); part.bytes = image.GetImageSize();
+        part.width = image.GetWidth(); part.height = image.GetHeight();
+        part.pixelType = image.GetPixelType(); part.valid = true;
+        part.hasStride = image.GetStride(part.stride);
+        return convertImageViewFrame(part, contextSource, frameSequence, rejection, storageError, cancelled);
+    }
     PreparedPylonImage preparedValue;
     auto* prepared = &preparedValue;
     auto& source = prepared->writerSource;
@@ -1598,4 +1609,90 @@ std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertStereoParts(
                                         cancelled, frameSequence, imageRejection, rangeRejection);
     return buildDirectXyzScene(selectedParts, selectedRequest, profile, context.value(), storageError,
                                cancelled, "Basler Stereo mini", frameSequence, imageRejection, rangeRejection);
+}
+
+std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertImageViewFrame(
+    const CameraStereoPartView& part, GraphicsFrameContextSource& contextSource,
+    std::uint64_t sequence, std::optional<PylonImageRejection>* rejection,
+    GraphicsFrameError* storageError, const std::atomic<bool>* cancelled) const
+{
+    ImageEvidenceContext evidence;
+    evidence.frameSequence = sequence; evidence.width = boundedExtent(part.width);
+    evidence.height = boundedExtent(part.height); evidence.readableBytes = part.bytes;
+    evidence.pixelFormat = static_cast<std::uint64_t>(part.pixelType); evidence.reportedStride = part.stride;
+    if (!part.data || !part.bytes) {
+        recordImageRejection(rejection, evidence, PylonImageRejection::Reason::MissingBytes);
+        return std::nullopt;
+    }
+    if (!part.width || !part.height || part.width > static_cast<std::size_t>((std::numeric_limits<int>::max)())
+        || part.height > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
+        if (storageError) *storageError = GraphicsFrameError::Capacity;
+        recordImageRejection(rejection, evidence, PylonImageRejection::Reason::InvalidDimensions);
+        return std::nullopt;
+    }
+    auto format = graphicsPixelFormat(part.pixelType);
+    if (format == GraphicsImagePixelFormat::Unknown) {
+        std::uint32_t bits = 0U;
+        try { bits = Pylon::BitPerPixel(part.pixelType); } catch (const Pylon::GenericException&) {}
+        switch (bits) {
+        case 16U: format = GraphicsImagePixelFormat::Mono16; break;
+        case 24U: format = GraphicsImagePixelFormat::RGB24; break;
+        case 32U: format = GraphicsImagePixelFormat::Mono32; break;
+        default: format = GraphicsImagePixelFormat::Mono8; break;
+        }
+        recordImageRejection(rejection, evidence, PylonImageRejection::Reason::UnsupportedFormat);
+    }
+    const auto rowBytes = GraphicsImageValidation::minimumRowBytes(format, static_cast<int>(part.width));
+    if (!rowBytes || rowBytes > static_cast<std::size_t>((std::numeric_limits<int>::max)())
+        || part.height > (std::numeric_limits<std::size_t>::max)() / rowBytes) {
+        if (storageError) *storageError = GraphicsFrameError::Capacity;
+        return std::nullopt;
+    }
+    std::size_t inputStride = part.hasStride ? part.stride : rowBytes;
+    if (!part.hasStride && part.padding <= (std::numeric_limits<std::size_t>::max)() - rowBytes)
+        inputStride += part.padding;
+    if (inputStride < rowBytes)
+        recordImageRejection(rejection, evidence, PylonImageRejection::Reason::InvalidStride);
+    else if (inputStride && part.height > part.bytes / inputStride)
+        recordImageRejection(rejection, evidence, PylonImageRejection::Reason::TruncatedBytes);
+    GraphicsImageWriterSource layout;
+    layout.data = static_cast<const std::uint8_t*>(part.data); layout.size = rowBytes * part.height;
+    layout.width = static_cast<int>(part.width); layout.height = static_cast<int>(part.height);
+    layout.stride = static_cast<int>(rowBytes); layout.pixelFormat = format;
+    layout.bitsPerPixel = GraphicsImageValidation::packedBitsPerPixel(format);
+    layout.sourceFormat = static_cast<int>(part.pixelType); layout.frameSequence = sequence;
+    auto plan = planGraphicsImageWrite(layout);
+    if (!plan) { if (storageError) *storageError = plan.error(); return std::nullopt; }
+    if (cancelled && cancelled->load(std::memory_order_acquire)) {
+        if (storageError) *storageError = GraphicsFrameError::Disconnected; return std::nullopt;
+    }
+    auto context = contextSource.beginFrame(plan.value().bytes);
+    if (!context) { if (storageError) *storageError = context.error(); return std::nullopt; }
+    if (cancelled && cancelled->load(std::memory_order_acquire)) {
+        if (storageError) *storageError = GraphicsFrameError::Disconnected; return std::nullopt;
+    }
+    GraphicsFrameBuilder builder(context.value());
+    auto reserved = builder.reserve<std::uint8_t>(plan.value().bytes, plan.value().alignment);
+    if (!reserved) { if (storageError) *storageError = reserved.error(); return std::nullopt; }
+    auto region = std::move(reserved).value();
+    std::memset(region.data(), 0, region.size());
+    const auto* input = static_cast<const std::uint8_t*>(part.data);
+    for (std::size_t y = 0; y < part.height; ++y) {
+        if (inputStride && y > (std::numeric_limits<std::size_t>::max)() / inputStride) break;
+        const auto offset = y * inputStride;
+        if (offset >= part.bytes) break;
+        const auto count = (std::min)({rowBytes, inputStride, part.bytes - offset});
+        std::memcpy(region.data() + y * rowBytes, input + offset, count);
+    }
+    GraphicsImage output;
+    output.pixels = builder.seal(std::move(region)); output.width = layout.width; output.height = layout.height;
+    output.stride = layout.stride; output.pixelFormat = format; output.bitsPerPixel = layout.bitsPerPixel;
+    output.sourceFormat = layout.sourceFormat; output.frameSequence = sequence;
+    if (cancelled && cancelled->load(std::memory_order_acquire)) {
+        if (storageError) *storageError = GraphicsFrameError::Disconnected; return std::nullopt;
+    }
+    builder.addImage("image", std::move(output), "Image");
+    auto result = std::move(builder).publish();
+    if (!result) { if (storageError) *storageError = result.error(); return std::nullopt; }
+    return std::move(result).value();
 }

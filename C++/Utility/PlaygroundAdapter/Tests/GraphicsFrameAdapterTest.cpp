@@ -406,6 +406,43 @@ int main()
         assert(gNewCount.load(std::memory_order_acquire) == 0U);
     }
 
+    // Malformed but readable 2D buffers retain their samples and receive diagnostics.
+    {
+        std::uint8_t pixels[] = {1, 2, 3, 4, 5, 6};
+        CameraStereoPartView part;
+        part.valid = true; part.data = pixels; part.width = 2; part.height = 2;
+        part.pixelType = Pylon::PixelType_Mono8; part.hasStride = true;
+        TrackedContextSource tracked(GraphicsFrameContext::local());
+        std::size_t diagnosticCount = 0U;
+        auto verify = [&](std::size_t bytes, std::size_t stride, Pylon::EPixelType type,
+                          const std::uint8_t (&expected)[4], std::optional<PylonImageRejection::Reason> reason) {
+            part.bytes = bytes; part.stride = stride; part.pixelType = type;
+            std::optional<PylonImageRejection> diagnostic;
+            GraphicsFrameError error = GraphicsFrameError::None;
+            auto frame = adapter.convertImageViewFrame(part, tracked, 100U, &diagnostic, &error);
+            assert(frame && frame->hasImage() && error == GraphicsFrameError::None);
+            const auto& out = frame->images().front().payload;
+            assert(out.width == 2 && out.height == 2 && out.stride == 2);
+            assert(std::memcmp(out.data(), expected, 4) == 0);
+            assert(diagnostic.has_value() == reason.has_value());
+            if (reason) { assert(diagnostic->reason == *reason); ++diagnosticCount; }
+        };
+        const std::uint8_t shortExpected[] = {1,2,3,0};
+        verify(3, 2, Pylon::PixelType_Mono8, shortExpected, PylonImageRejection::Reason::TruncatedBytes);
+        const std::uint8_t narrowExpected[] = {1,0,2,0};
+        verify(2, 1, Pylon::PixelType_Mono8, narrowExpected, PylonImageRejection::Reason::InvalidStride);
+        const std::uint8_t paddedExpected[] = {1,2,4,5};
+        verify(6, 3, Pylon::PixelType_Mono8, paddedExpected, std::nullopt);
+        const std::uint8_t unknownExpected[] = {1,2,3,4};
+        verify(4, 2, Pylon::PixelType_BayerGR8, unknownExpected, PylonImageRejection::Reason::UnsupportedFormat);
+        part.bytes = 0;
+        std::optional<PylonImageRejection> missing;
+        assert(!adapter.convertImageViewFrame(part, tracked, 101U, &missing));
+        assert(missing && missing->reason == PylonImageRejection::Reason::MissingBytes);
+        ++diagnosticCount;
+        assert(diagnosticCount == 4U);
+    }
+
     const Pylon::CPylonImage empty;
     assert(!adapter.convertGraphicsImage(empty, bgrBuilder).isValid());
 
@@ -426,7 +463,7 @@ int main()
             &emptyRejection, &emptySource, &emptyError).has_value());
         assert(emptySource.calls == 0U);
         assert(emptyError == GraphicsFrameError::InvalidInput);
-        assert(emptyRejection && emptyRejection->reason == PylonRangeRejection::Reason::InvalidLayout);
+        assert(emptyRejection && emptyRejection->reason == PylonRangeRejection::Reason::MissingRange);
     }
 
     // Synthetic SDK views use exactly the same production Stereo transaction.
@@ -474,11 +511,18 @@ int main()
                 BudgetSource budget;
                 GraphicsFrameError error = GraphicsFrameError::None;
                 std::optional<PylonRangeRejection> rejection;
+                std::optional<PylonImageRejection> imageDiagnostic;
                 auto frame = adapter.convertStereoParts(invalid, {}, stereo, budget, 101U,
-                    nullptr, &rejection, &error);
-                assert(!frame && error == GraphicsFrameError::InvalidInput);
-                assert(rejection && rejection->reason == PylonRangeRejection::Reason::InvalidLayout);
-                assert(budget.calls == 0U && budget.allocator->reserves == 0U);
+                    &imageDiagnostic, &rejection, &error);
+                assert(frame && error == GraphicsFrameError::None);
+                if (bad == 2) {
+                    assert(frame->hasRangeFrame() && !frame->hasImage());
+                    assert(imageDiagnostic && imageDiagnostic->reason == PylonImageRejection::Reason::InvalidStride);
+                } else {
+                    assert(frame->hasImage() && !frame->hasRangeFrame());
+                    assert(rejection);
+                }
+                assert(budget.calls == 1U && budget.requested == budget.allocator->used);
             }
             BudgetSource shortBudget;
             shortBudget.shortage = 1U;

@@ -56,6 +56,12 @@ public:
         GraphicsFrameError* storageError = nullptr,
         const std::atomic<bool>* cancelled = nullptr) const;
 
+    /** Writes a non-owning image part, retaining the caller's bytes for this call. */
+    [[nodiscard]] std::optional<GraphicsFrame> convertImageViewFrame(
+        const CameraStereoPartView& part, GraphicsFrameContextSource& contextSource,
+        std::uint64_t frameSequence = 0U, std::optional<PylonImageRejection>* rejection = nullptr,
+        GraphicsFrameError* storageError = nullptr, const std::atomic<bool>* cancelled = nullptr) const;
+
     /** Converts one owned 2D pylon image into the canonical GraphicsImage. */
     [[nodiscard]] GraphicsImage convertGraphicsImage(
         const Pylon::CPylonImage& image,
