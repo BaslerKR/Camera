@@ -64,6 +64,7 @@ class Camera : public Pylon::CConfigurationEventHandler,
                public Pylon::CCameraEventHandler
 {
     friend class CameraSystem;
+    friend class CameraRejectionSamplingTest;
 
 public:
     using CallbackId = size_t;

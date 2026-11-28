@@ -1,6 +1,9 @@
 #include "CameraSourceController.h"
+#include "CameraSystem.h"
+#include <pylon/PylonImage.h>
 #include "DeviceRuntime/Contract/DeviceImageDiagnostics.h"
 #include "PylonAssemblyRejection.h"
+#include "DeviceRuntime/Contract/SessionFrame.h"
 
 #include <QObject>
 #include <QtTest>
@@ -48,6 +51,18 @@ PylonImageRejection truncatedImage()
 }
 } // namespace
 
+class ScriptedSource final : public GraphicsFrameContextSource
+{
+public:
+    GraphicsFrameError error = GraphicsFrameError::None;
+    int calls = 0;
+    GraphicsResult<GraphicsFrameContext> beginFrame(std::size_t) noexcept override {
+        ++calls;
+        if (error != GraphicsFrameError::None) return error;
+        return GraphicsFrameContext::local();
+    }
+};
+
 class CameraRejectionSamplingTest : public QObject
 {
     Q_OBJECT
@@ -56,6 +71,49 @@ private slots:
         std::lock_guard<std::mutex> lock(observationMutex);
         imageObservations.clear();
         rangeObservations.clear();
+    }
+
+    void readinessAndOldRunFencing() {
+        CameraSystem system([](Pylon::DeviceInfoList_t&) {});
+        Camera camera(&system);
+        CameraSourceController controller(&camera, nullptr, nullptr, nullptr,
+            CameraSourceController::InitialTargetsPolicy::Cached, &collectImage, nullptr);
+        auto source = std::make_shared<ScriptedSource>();
+        controller.setFrameContextSource(source);
+        int published = 0;
+        controller.setFrameConsumer([&](SessionFrame&&, unsigned) { ++published; });
+        controller.beginRejectionRun(false);
+        QVERIFY(!camera._grabCallbacks.empty());
+        auto oldCallback = camera._grabCallbacks.begin()->second;
+        auto image = Pylon::CPylonImage::Create(Pylon::PixelType_Mono8, 2U, 2U);
+        source->error = GraphicsFrameError::NoReadyCredit;
+        oldCallback(image, 1U);
+        QCOMPARE(source->calls, 1);
+        QCOMPARE(controller._droppedFrames.load(), std::uint64_t{1});
+        QCOMPARE(published, 0);
+        source->error = GraphicsFrameError::ClassRefused;
+        oldCallback(image, 2U);
+        QCOMPARE(source->calls, 2);
+        QVERIFY(controller._frameClassRefused.load());
+        QCOMPARE(controller._droppedFrames.load(), std::uint64_t{2});
+        {
+            std::lock_guard<std::mutex> lock(observationMutex);
+            QVERIFY(!imageObservations.empty());
+            QCOMPARE(imageObservations.back().reason, DeviceImageRejection::StorageRefused);
+        }
+        oldCallback(image, 3U);
+        QCOMPARE(source->calls, 2);
+        controller.cancelFrameRun();
+        source->error = GraphicsFrameError::None;
+        controller.beginRejectionRun(false);
+        oldCallback(image, 4U);
+        QCOMPARE(source->calls, 2);
+        QCOMPARE(published, 0);
+        QVERIFY(!camera._grabCallbacks.empty());
+        auto newCallback = camera._grabCallbacks.begin()->second;
+        newCallback(image, 5U);
+        QCOMPARE(source->calls, 3);
+        QCOMPARE(published, 1);
     }
 
     void singleEmitsEveryFailure() {
