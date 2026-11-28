@@ -332,6 +332,23 @@ int main()
         assert(error == GraphicsFrameError::Disconnected && tracked.calls == 3U);
     }
 
+    // Cancellation during reserve abandons the open transaction and its backing.
+    {
+        std::atomic<bool> cancelled{false};
+        std::weak_ptr<std::uint8_t> released;
+        auto context = testContext([&](std::size_t size) {
+            auto memory = std::shared_ptr<std::uint8_t>(new std::uint8_t[size], std::default_delete<std::uint8_t[]>());
+            released = memory;
+            cancelled.store(true, std::memory_order_release);
+            return memory;
+        });
+        TrackedContextSource tracked(context);
+        GraphicsFrameError error = GraphicsFrameError::None;
+        auto frame = adapter.convertGraphicsImageFrame(source, tracked, 94U, nullptr, &error, &cancelled);
+        assert(!frame && error == GraphicsFrameError::Disconnected);
+        assert(tracked.calls == 1U && released.expired());
+    }
+
     // Count C++ allocations over warmed-up frames, including GE Local context work.
     {
         TrackedContextSource tracked(GraphicsFrameContext::local());
