@@ -22,19 +22,24 @@ struct Coord3DPoint
     float z;
 };
 
-[[nodiscard]] Pylon::CPylonDataComponent componentByType(
-    const Pylon::CPylonDataContainer& container,
-    const Pylon::EComponentType type)
+struct StereoParts {
+    Pylon::CPylonDataComponent intensity, range, disparity;
+};
+
+[[nodiscard]] StereoParts stereoParts(const Pylon::CPylonDataContainer& container)
 {
-    for (std::size_t index = 0; index < container.GetDataComponentCount(); ++index)
-    {
-        const auto component = container.GetDataComponent(index);
-        if (component.IsValid() && component.GetComponentType() == type)
-        {
-            return component;
+    StereoParts parts;
+    for (std::size_t i = 0; i < container.GetDataComponentCount(); ++i) {
+        auto part = container.GetDataComponent(i);
+        if (!part.IsValid()) continue;
+        switch (part.GetComponentType()) {
+        case Pylon::ComponentType_Intensity: if (!parts.intensity.IsValid()) parts.intensity = part; break;
+        case Pylon::ComponentType_Range: if (!parts.range.IsValid()) parts.range = part; break;
+        case Pylon::ComponentType_Disparity: if (!parts.disparity.IsValid()) parts.disparity = part; break;
+        default: break;
         }
     }
-    return {};
+    return parts;
 }
 
 [[nodiscard]] std::size_t bytesPerPixel(const Pylon::EPixelType pixelType) noexcept
@@ -819,12 +824,77 @@ void registerColorImageToRange(
     descriptor.registration = GraphicsImageRegistration::RegisteredToRange;
 }
 
-[[nodiscard]] std::optional<GraphicsFrame> publishScene(GraphicsFrameBuilder& builder)
+// Plan the same reservations as appendColorImage and the range writers, before any sample copy.
+[[nodiscard]] bool planStereo(const StereoParts& parts, const GraphicsFrameRequest& request,
+    const PylonScene3DProfile& profile, bool ace, std::uint64_t sequence, std::size_t& bytes)
 {
+    bytes = 0U;
+    const auto& image = parts.intensity;
+    if (hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Image)
+        && image.IsValid() && image.GetData()
+        && image.GetWidth() <= static_cast<std::size_t>((std::numeric_limits<int>::max)())
+        && image.GetHeight() <= static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
+        std::size_t stride = 0U;
+        const auto format = graphicsPixelFormat(image.GetPixelType());
+        if (format != GraphicsImagePixelFormat::Unknown && componentStride(image, stride)
+            && stride <= static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
+            GraphicsImageWriterSource source;
+            source.data = static_cast<const std::uint8_t*>(image.GetData());
+            source.size = image.GetDataSize();
+            source.width = static_cast<int>(image.GetWidth());
+            source.height = static_cast<int>(image.GetHeight());
+            source.stride = static_cast<int>(stride);
+            source.pixelFormat = format;
+            source.bitsPerPixel = GraphicsImageValidation::packedBitsPerPixel(format);
+            source.frameSequence = sequence;
+            auto plan = planGraphicsImageWrite(source);
+            if (plan && !appendAligned(bytes, plan.value().bytes, plan.value().alignment)) return false;
+        }
+    }
+    const auto& range = ace ? parts.disparity : parts.range;
+    if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range)
+        || (ace && !profile.hasDisparityCalibration()) || !range.IsValid() || !range.GetData()) return true;
+    const auto type = range.GetPixelType();
+    if ((ace && type != Pylon::PixelType_Coord3D_C16)
+        || (!ace && type != Pylon::PixelType_Coord3D_C16 && type != Pylon::PixelType_Coord3D_ABC32f)) return true;
+    std::size_t stride = 0U;
+    if (!componentStride(range, stride)) return true;
+    const auto width = static_cast<std::size_t>(range.GetWidth());
+    const auto height = static_cast<std::size_t>(range.GetHeight());
+    if (!width || !height || width > static_cast<std::size_t>((std::numeric_limits<int>::max)())
+        || height > static_cast<std::size_t>((std::numeric_limits<int>::max)())
+        || height > (std::numeric_limits<std::size_t>::max)() / width) return false;
+    const auto count = width * height;
+    if (count > (std::numeric_limits<std::size_t>::max)() / sizeof(float)
+        || count > (std::numeric_limits<std::size_t>::max)() / 3U) return false;
+    for (int i = 0; i < 3; ++i)
+        if (!appendAligned(bytes, count * sizeof(float), alignof(float))) return false;
+    if (!appendAligned(bytes, count, alignof(std::uint8_t))) return false;
+    if (image.IsValid() && image.GetData() && image.GetWidth() && image.GetHeight()
+        && componentStride(image, stride)) {
+        const auto imageType = image.GetPixelType();
+        if (request.includeRangeAuxiliaryChannels
+            && (imageType == Pylon::PixelType_Mono8 || imageType == Pylon::PixelType_Mono16)
+            && !appendAligned(bytes, count * sizeof(float), alignof(float))) return false;
+        if (request.includePointCloudColors
+            && (imageType == Pylon::PixelType_RGB8packed || imageType == Pylon::PixelType_RGBA8packed)
+            && !appendAligned(bytes, count * 3U, alignof(std::uint8_t))) return false;
+    }
+    return true;
+}
+
+[[nodiscard]] std::optional<GraphicsFrame> publishScene(GraphicsFrameBuilder& builder,
+    GraphicsFrameError* storageError, const std::atomic<bool>* cancelled)
+{
+    if (cancelled && cancelled->load(std::memory_order_acquire)) {
+        if (storageError) *storageError = GraphicsFrameError::Disconnected;
+        return std::nullopt;
+    }
     if (!builder.content().isValid()) return std::nullopt;
     auto result = std::move(builder).publish();
     if (!result)
     {
+        if (storageError) *storageError = result.error();
         std::fprintf(stderr, "Camera frame publication failed (error %u).\n",
                      static_cast<unsigned>(result.error()));
         return std::nullopt;
@@ -833,15 +903,16 @@ void registerColorImageToRange(
 }
 
 [[nodiscard]] std::optional<GraphicsFrame> buildDirectXyzScene(
-    const Pylon::CPylonDataContainer& container,
+    const StereoParts& parts,
     const GraphicsFrameRequest& request,
     const PylonScene3DProfile& profile,
-    const char* sourceName,
+    GraphicsFrameContext& context, GraphicsFrameError* storageError,
+    const std::atomic<bool>* cancelled, const char* sourceName,
     const std::uint64_t frameSequence,
     std::optional<PylonImageRejection>* imageRejection,
     std::optional<PylonRangeRejection>* rangeRejection)
 {
-    GraphicsFrameBuilder builder;
+    GraphicsFrameBuilder builder(context);
     auto& scene = builder.content();
     scene.metadata.sourceName = sourceName;
     InitialView3D view;
@@ -850,26 +921,26 @@ void registerColorImageToRange(
     view.parallelProjection = false;
     view.distanceScale = 1.15;
 
-    const auto intensity = componentByType(container, Pylon::ComponentType_Intensity);
+    const auto& intensity = parts.intensity;
     appendColorImage(intensity, request, profile, builder, scene, frameSequence, imageRejection);
     if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range))
     {
-        return publishScene(builder);
+        return publishScene(builder, storageError, cancelled);
     }
 
-    const auto range = componentByType(container, Pylon::ComponentType_Range);
+    const auto& range = parts.range;
     const auto rangeContext = componentRangeContext(range, frameSequence);
     if (!range.IsValid())
     {
         recordRangeRejection(rangeRejection, rangeContext,
                              PylonRangeRejection::Reason::MissingRange);
-        return publishScene(builder);
+        return publishScene(builder, storageError, cancelled);
     }
     if (range.GetData() == nullptr)
     {
         recordRangeRejection(rangeRejection, rangeContext,
                              PylonRangeRejection::Reason::MissingData);
-        return publishScene(builder);
+        return publishScene(builder, storageError, cancelled);
     }
 
     const auto pixelType = range.GetPixelType();
@@ -877,7 +948,7 @@ void registerColorImageToRange(
     {
         recordRangeRejection(rangeRejection, rangeContext,
                              PylonRangeRejection::Reason::UnsupportedFormat);
-        return publishScene(builder);
+        return publishScene(builder, storageError, cancelled);
     }
 
     std::size_t stride = 0U;
@@ -885,7 +956,7 @@ void registerColorImageToRange(
     {
         recordRangeRejection(rangeRejection, rangeContext,
                              PylonRangeRejection::Reason::InvalidLayout);
-        return publishScene(builder);
+        return publishScene(builder, storageError, cancelled);
     }
 
     RangeFrame frame;
@@ -918,6 +989,7 @@ void registerColorImageToRange(
     auto mask = builder.reserve<std::uint8_t>(count);
     if (!xs || !ys || !zs || !mask)
     {
+        if (storageError) *storageError = GraphicsFrameError::Allocation;
         recordRangeRejection(rangeRejection, rangeContext, PylonRangeRejection::Reason::StorageRefused);
         return std::nullopt;
     }
@@ -984,6 +1056,7 @@ void registerColorImageToRange(
     {
         if (!copyScalarIntensity(intensity, frame, builder))
         {
+            if (storageError) *storageError = GraphicsFrameError::Allocation;
             recordRangeRejection(rangeRejection, rangeContext, PylonRangeRejection::Reason::StorageRefused);
             return std::nullopt;
         }
@@ -993,6 +1066,7 @@ void registerColorImageToRange(
     {
         if (!copyPointCloudRgb(intensity, frame, builder))
         {
+            if (storageError) *storageError = GraphicsFrameError::Allocation;
             recordRangeRejection(rangeRejection, rangeContext, PylonRangeRejection::Reason::StorageRefused);
             return std::nullopt;
         }
@@ -1009,26 +1083,27 @@ void registerColorImageToRange(
         recordRangeRejection(rangeRejection, rangeContext,
                              PylonRangeRejection::Reason::InvalidLayout);
     }
-    return publishScene(builder);
+    return publishScene(builder, storageError, cancelled);
 }
 
 [[nodiscard]] std::optional<GraphicsFrame> buildStereoAceScene(
-    const Pylon::CPylonDataContainer& container,
+    const StereoParts& parts,
     const GraphicsFrameRequest& request,
     const PylonScene3DProfile& profile,
-    const std::uint64_t frameSequence,
+    GraphicsFrameContext& context, GraphicsFrameError* storageError,
+    const std::atomic<bool>* cancelled, const std::uint64_t frameSequence,
     std::optional<PylonImageRejection>* imageRejection,
     std::optional<PylonRangeRejection>* rangeRejection)
 {
-    GraphicsFrameBuilder builder;
+    GraphicsFrameBuilder builder(context);
     auto& scene = builder.content();
     scene.metadata.sourceName = "Basler Stereo ace";
 
-    const auto intensity = componentByType(container, Pylon::ComponentType_Intensity);
+    const auto& intensity = parts.intensity;
     appendColorImage(intensity, request, profile, builder, scene, frameSequence, imageRejection);
     if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range))
     {
-        return publishScene(builder);
+        return publishScene(builder, storageError, cancelled);
     }
     if (!profile.hasDisparityCalibration())
     {
@@ -1036,28 +1111,28 @@ void registerColorImageToRange(
         noRange.frameSequence = frameSequence;
         recordRangeRejection(rangeRejection, noRange,
                              PylonRangeRejection::Reason::MissingCalibration);
-        return publishScene(builder);
+        return publishScene(builder, storageError, cancelled);
     }
 
-    const auto disparity = componentByType(container, Pylon::ComponentType_Disparity);
+    const auto& disparity = parts.disparity;
     const auto disparityContext = componentRangeContext(disparity, frameSequence);
     if (!disparity.IsValid())
     {
         recordRangeRejection(rangeRejection, disparityContext,
                              PylonRangeRejection::Reason::MissingRange);
-        return publishScene(builder);
+        return publishScene(builder, storageError, cancelled);
     }
     if (disparity.GetPixelType() != Pylon::PixelType_Coord3D_C16)
     {
         recordRangeRejection(rangeRejection, disparityContext,
                              PylonRangeRejection::Reason::UnsupportedFormat);
-        return publishScene(builder);
+        return publishScene(builder, storageError, cancelled);
     }
     if (disparity.GetData() == nullptr)
     {
         recordRangeRejection(rangeRejection, disparityContext,
                              PylonRangeRejection::Reason::MissingData);
-        return publishScene(builder);
+        return publishScene(builder, storageError, cancelled);
     }
 
     std::size_t stride = 0U;
@@ -1065,7 +1140,7 @@ void registerColorImageToRange(
     {
         recordRangeRejection(rangeRejection, disparityContext,
                              PylonRangeRejection::Reason::InvalidLayout);
-        return publishScene(builder);
+        return publishScene(builder, storageError, cancelled);
     }
 
     RangeFrame frame;
@@ -1094,6 +1169,7 @@ void registerColorImageToRange(
     auto mask = builder.reserve<std::uint8_t>(count);
     if (!xs || !ys || !zs || !mask)
     {
+        if (storageError) *storageError = GraphicsFrameError::Allocation;
         recordRangeRejection(rangeRejection, disparityContext, PylonRangeRejection::Reason::StorageRefused);
         return std::nullopt;
     }
@@ -1135,6 +1211,7 @@ void registerColorImageToRange(
     {
         if (!copyScalarIntensity(intensity, frame, builder))
         {
+            if (storageError) *storageError = GraphicsFrameError::Allocation;
             recordRangeRejection(rangeRejection, disparityContext, PylonRangeRejection::Reason::StorageRefused);
             return std::nullopt;
         }
@@ -1144,6 +1221,7 @@ void registerColorImageToRange(
     {
         if (!copyPointCloudRgb(intensity, frame, builder))
         {
+            if (storageError) *storageError = GraphicsFrameError::Allocation;
             recordRangeRejection(rangeRejection, disparityContext, PylonRangeRejection::Reason::StorageRefused);
             return std::nullopt;
         }
@@ -1159,7 +1237,7 @@ void registerColorImageToRange(
         recordRangeRejection(rangeRejection, disparityContext,
                              PylonRangeRejection::Reason::InvalidLayout);
     }
-    return publishScene(builder);
+    return publishScene(builder, storageError, cancelled);
 }
 
 } // namespace
@@ -1358,13 +1436,34 @@ std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsFrame(
             container, request, *contextSource, frameSequence, rangeRejection, storageError, cancelled);
         break;
     case PylonScene3DProfile::DeviceFamily::StereoMini:
-        result = buildDirectXyzScene(container, request, profile, "Basler Stereo mini",
-                                     frameSequence, imageRejection, rangeRejection);
+    case PylonScene3DProfile::DeviceFamily::StereoAce: {
+        if (!contextSource) { if (storageError) *storageError = GraphicsFrameError::Disconnected; break; }
+        const bool ace = profile.family == PylonScene3DProfile::DeviceFamily::StereoAce;
+        const auto parts = stereoParts(container);
+        std::size_t sampleBytes = 0U;
+        if (!planStereo(parts, request, profile, ace, frameSequence, sampleBytes)) {
+            if (storageError) *storageError = GraphicsFrameError::Capacity;
+            break;
+        }
+        if (sampleBytes == 0U) break;
+        if (cancelled && cancelled->load(std::memory_order_acquire)) {
+            if (storageError) *storageError = GraphicsFrameError::Disconnected;
+            break;
+        }
+        auto context = contextSource->beginFrame(sampleBytes);
+        if (!context) { if (storageError) *storageError = context.error(); break; }
+        if (cancelled && cancelled->load(std::memory_order_acquire)) {
+            if (storageError) *storageError = GraphicsFrameError::Disconnected;
+            break;
+        }
+        if (ace)
+            result = buildStereoAceScene(parts, request, profile, context.value(), storageError,
+                cancelled, frameSequence, imageRejection, rangeRejection);
+        else
+            result = buildDirectXyzScene(parts, request, profile, context.value(), storageError,
+                cancelled, "Basler Stereo mini", frameSequence, imageRejection, rangeRejection);
         break;
-    case PylonScene3DProfile::DeviceFamily::StereoAce:
-        result = buildStereoAceScene(container, request, profile, frameSequence,
-                                     imageRejection, rangeRejection);
-        break;
+    }
     case PylonScene3DProfile::DeviceFamily::Image2D:
         break;
     }

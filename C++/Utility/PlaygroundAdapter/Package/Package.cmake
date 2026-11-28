@@ -4,7 +4,7 @@
 # Repeat NAME=value to declare multiple environment paths for one variable.
 set(PLAYGROUND_PLUGIN_ID "camera")
 set(PLAYGROUND_PLUGIN_VERSION "1.4.0")
-# Host-provided frame storage (IFrameStorageClient) and the image writer first ship in Core 0.7.0.
+# Frame context transactions and the image writer require Core 0.7.0.
 set(PLAYGROUND_PLUGIN_MINIMUM_CORE_VERSION "0.7.0")
 set(PLAYGROUND_PLUGIN_DISPLAY_NAME "Camera")
 # Optional presentation metadata; consumers must export it to manifests/catalogs.
