@@ -160,6 +160,18 @@ static GraphicsFrameContext testContext(
     return GraphicsFrameContext(std::make_shared<TestStorageProvider>(std::move(acquire)));
 }
 
+// Isolate producer and content work from the Local test allocator's backing allocation.
+class UncountedLocalBacking final : public GraphicsFrameAllocator
+{
+public:
+    GraphicsResult<GraphicsAllocationSlice> allocate(std::size_t bytes, std::size_t alignment) noexcept override {
+        const bool counting = gCountNew.exchange(false, std::memory_order_acq_rel);
+        auto result = GraphicsFrameContext::local().allocate(bytes, alignment);
+        gCountNew.store(counting, std::memory_order_release);
+        return result;
+    }
+};
+
 class TrackedContextSource final : public GraphicsFrameContextSource
 {
 public:
@@ -351,7 +363,9 @@ int main()
 
     // Count C++ allocations over warmed-up frames, including GE Local context work.
     {
-        TrackedContextSource tracked(GraphicsFrameContext::local());
+        auto allocator = std::make_shared<UncountedLocalBacking>();
+        auto pool = GraphicsFrameContentPool::create(8U);
+        TrackedContextSource tracked(GraphicsFrameContext(allocator, pool));
         for (int i = 0; i < 10; ++i) {
             auto frame = adapter.convertGraphicsImageFrame(source, tracked, i);
             assert(frame && frame->hasImage());
@@ -363,8 +377,9 @@ int main()
             assert(frame && frame->hasImage());
         }
         gCountNew.store(false, std::memory_order_release);
-        std::printf("Camera 2D Local steady-state operator-new calls: %zu/100 frames\n",
+        std::printf("Camera 2D steady-state operator-new calls excluding backing allocator: %zu/100 frames\n",
                     gNewCount.load(std::memory_order_acquire));
+        assert(gNewCount.load(std::memory_order_acquire) == 0U);
     }
 
     const Pylon::CPylonImage empty;
