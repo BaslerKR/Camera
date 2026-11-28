@@ -5,6 +5,7 @@
 #include <pylon/ImageFormatConverter.h>
 
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -1185,11 +1186,62 @@ std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsImageFram
     GraphicsFrameError* storageError,
     const std::atomic<bool>* cancelled) const
 {
-    auto prepared = preparePylonImageSource(image, frameSequence, rejection);
-    if (!prepared)
+    PreparedPylonImage preparedValue;
+    auto* prepared = &preparedValue;
+    auto& source = prepared->writerSource;
+    auto& evidence = prepared->evidenceContext;
+    evidence.frameSequence = frameSequence;
+    evidence.pixelFormat = static_cast<std::uint64_t>(image.GetPixelType());
+    evidence.width = boundedExtent(image.GetWidth());
+    evidence.height = boundedExtent(image.GetHeight());
+    evidence.readableBytes = image.GetImageSize();
+    if (!image.GetBuffer() || image.GetImageSize() == 0U || image.GetWidth() == 0U
+        || image.GetHeight() == 0U
+        || image.GetWidth() >= static_cast<std::size_t>((std::numeric_limits<int>::max)())
+        || image.GetHeight() >= static_cast<std::size_t>((std::numeric_limits<int>::max)()))
     {
+        recordImageRejection(rejection, evidence, PylonImageRejection::Reason::InvalidDimensions);
         return std::nullopt;
     }
+    source.data = static_cast<const std::uint8_t*>(image.GetBuffer());
+    source.size = image.GetImageSize();
+    source.width = static_cast<int>(image.GetWidth());
+    source.height = static_cast<int>(image.GetHeight());
+    source.sourceFormat = static_cast<int>(image.GetPixelType());
+    source.frameSequence = frameSequence;
+    source.pixelFormat = graphicsPixelFormat(image.GetPixelType());
+    source.bitsPerPixel = GraphicsImageValidation::packedBitsPerPixel(source.pixelFormat);
+    int stride = 0;
+    const bool direct = pylonStride(image, stride, &evidence.reportedStride)
+        && source.pixelFormat != GraphicsImagePixelFormat::Unknown && source.bitsPerPixel != 0;
+    Pylon::CImageFormatConverter converter;
+    if (direct)
+    {
+        source.stride = stride;
+    }
+    else
+    {
+        if (!Pylon::CImageFormatConverter::IsSupportedInputFormat(image.GetPixelType()))
+        {
+            recordImageRejection(rejection, evidence, PylonImageRejection::Reason::UnsupportedConversion);
+            return std::nullopt;
+        }
+        const bool mono = shouldConvertToMono16(image.GetPixelType());
+        converter.OutputBitAlignment = Pylon::OutputBitAlignment_MsbAligned;
+        converter.OutputPixelFormat = mono ? Pylon::PixelType_Mono16 : Pylon::PixelType_BGR8packed;
+        source.pixelFormat = mono ? GraphicsImagePixelFormat::Mono16 : GraphicsImagePixelFormat::BGR24;
+        source.bitsPerPixel = mono ? 16 : 24;
+        source.declaredMonoSourceBits = mono ? monoSourceBits(image.GetPixelType()) : 0U;
+        source.size = converter.GetBufferSizeForConversion(image);
+        if (source.size % image.GetHeight() != 0U
+            || source.size / image.GetHeight() > static_cast<std::size_t>((std::numeric_limits<int>::max)()))
+        {
+            recordImageRejection(rejection, evidence, PylonImageRejection::Reason::InvalidStride);
+            return std::nullopt;
+        }
+        source.stride = static_cast<int>(source.size / image.GetHeight());
+    }
+    if (!planPreparedImage(*prepared, rejection)) return std::nullopt;
 
     std::size_t sampleBytes = 0U;
     if (!appendAligned(sampleBytes, prepared->writeLayout.bytes, prepared->writeLayout.alignment))
@@ -1226,8 +1278,44 @@ std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsImageFram
 
     GraphicsFrameBuilder builder(contextResult.value());
     GraphicsImageFailure failure = GraphicsImageFailure::None;
-    GraphicsImage graphicsImage = writeGraphicsImageWithFailure(
-        builder, prepared->writerSource, &failure);
+    GraphicsImage graphicsImage;
+    if (direct)
+    {
+        graphicsImage = writeGraphicsImageWithFailure(builder, source, &failure);
+    }
+    else
+    {
+        auto reserved = builder.reserve<std::uint8_t>(prepared->writeLayout.bytes, prepared->writeLayout.alignment);
+        if (!reserved)
+        {
+            if (storageError) *storageError = reserved.error();
+            recordWriterFailure(rejection, evidence, source, GraphicsImageFailure::StorageRefused);
+            return std::nullopt;
+        }
+        auto region = std::move(reserved).value();
+        converter.Convert(region.data(), region.size(), image);
+        if (source.declaredMonoSourceBits > 0U && source.declaredMonoSourceBits < 16U)
+        {
+            const int shift = 16 - source.declaredMonoSourceBits;
+            for (std::size_t offset = 0; offset + 1U < region.size(); offset += 2U)
+            {
+                std::uint16_t value;
+                std::memcpy(&value, region.data() + offset, sizeof(value));
+                value = static_cast<std::uint16_t>(value >> shift);
+                std::memcpy(region.data() + offset, &value, sizeof(value));
+            }
+        }
+        graphicsImage.pixels = builder.seal(std::move(region));
+        graphicsImage.width = source.width;
+        graphicsImage.height = source.height;
+        graphicsImage.stride = source.stride;
+        graphicsImage.bitsPerPixel = source.bitsPerPixel;
+        graphicsImage.declaredMonoSourceBits = source.declaredMonoSourceBits;
+        graphicsImage.sourceFormat = source.sourceFormat;
+        graphicsImage.pixelFormat = source.pixelFormat;
+        graphicsImage.bitAlignment = source.bitAlignment;
+        graphicsImage.frameSequence = frameSequence;
+    }
     if (!graphicsImage.isValid())
     {
         if (storageError && failure == GraphicsImageFailure::StorageRefused)
