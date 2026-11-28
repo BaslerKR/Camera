@@ -160,6 +160,26 @@ private slots:
         QCOMPARE(imageObservations.back().reason, DeviceImageRejection::TruncatedBytes);
     }
 
+    void countsEveryMultipartAnomaly() {
+        CameraSourceController controller(nullptr, nullptr, nullptr, nullptr,
+            CameraSourceController::InitialTargetsPolicy::Cached, nullptr, &collectRange);
+        controller.beginRejectionRun(true);
+        PylonRangeRejection first;
+        first.reason = PylonRangeRejection::Reason::TruncatedData;
+        first.affectedPart = 1U;
+        PylonRangeRejection second;
+        second.reason = PylonRangeRejection::Reason::InvalidDimensions;
+        second.affectedPart = 2U;
+        controller.reportRangeRejection(first);
+        controller.reportRangeRejection(second);
+        QCOMPARE(controller._rangeRejectionCounts[static_cast<std::size_t>(DeviceRangeRejection::TruncatedData)].load(), std::uint64_t{1});
+        QCOMPARE(controller._rangeRejectionCounts[static_cast<std::size_t>(DeviceRangeRejection::InvalidDimensions)].load(), std::uint64_t{1});
+        std::lock_guard<std::mutex> lock(observationMutex);
+        QCOMPARE(rangeObservations.size(), std::size_t{2});
+        QCOMPARE(rangeObservations[0].affectedPart, std::uint32_t{1});
+        QCOMPARE(rangeObservations[1].affectedPart, std::uint32_t{2});
+    }
+
     void mapsRangeEvidenceAndRetention() {
         CameraSourceController controller(nullptr, nullptr, nullptr, nullptr,
             CameraSourceController::InitialTargetsPolicy::Cached, nullptr, &collectRange);

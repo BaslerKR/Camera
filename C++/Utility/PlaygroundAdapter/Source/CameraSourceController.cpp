@@ -79,9 +79,8 @@ DeviceRangeRejection deviceRangeRejection(const PylonRangeRejection::Reason reas
 /** Single always emits; Live emits the first and every 100th failure of one reason. */
 bool sampleRejection(std::atomic<std::uint64_t>& counter, const bool single) noexcept
 {
-    if (single) return true;
     const auto count = counter.fetch_add(1, std::memory_order_relaxed) + 1U;
-    return count == 1U || count % 100U == 0U;
+    return single || count == 1U || count % 100U == 0U;
 }
 
 } // namespace
@@ -183,10 +182,10 @@ void CameraSourceController::reportImageRejection(const PylonImageRejection& evi
 
 void CameraSourceController::reportRangeRejection(const PylonRangeRejection& evidence)
 {
-    if (!_rangeRejectionSink) return;
     const auto reason = deviceRangeRejection(evidence.reason);
     const bool single = _rejectionRunSingle.load(std::memory_order_relaxed);
-    if (!sampleRejection(_rangeRejectionCounts[static_cast<std::size_t>(reason)], single)) return;
+    const bool emitObservation = sampleRejection(_rangeRejectionCounts[static_cast<std::size_t>(reason)], single);
+    if (!_rangeRejectionSink || !emitObservation) return;
 
     DeviceRangeRejectionObservation observation;
     observation.reason = reason;

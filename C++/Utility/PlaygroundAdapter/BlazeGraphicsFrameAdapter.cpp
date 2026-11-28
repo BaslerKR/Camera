@@ -201,6 +201,8 @@ void writeScalarComponent(const BlazeScalarSource& component,
     source.stride = stride;
     source.pixelType = pixelType;
     source.readableBytes = component.GetDataSize();
+    source.width = static_cast<int>(component.GetWidth());
+    source.height = static_cast<int>(component.GetHeight());
     return source;
 }
 
@@ -290,8 +292,13 @@ std::optional<GraphicsFrame> buildBlazeFrame(
     const std::uint64_t frameSequence,
     std::optional<PylonRangeRejection>* rejection,
     GraphicsFrameError* storageError,
-    const std::atomic<bool>* cancelled)
+    const std::atomic<bool>* cancelled, PylonFrameAnomalies* anomalies)
 {
+    const auto record = [&](PylonRangeRejection evidence, std::uint32_t part = (std::numeric_limits<std::uint32_t>::max)()) {
+        evidence.affectedPart = part == (std::numeric_limits<std::uint32_t>::max)() ? source.rangePartIndex : part;
+        if (anomalies) anomalies->add(evidence);
+        recordRangeRejection(rejection, evidence);
+    };
     const bool wantsRangeFrame = hasGraphicsFrameComponent(options.components, GraphicsFrameComponent::Range);
     const bool wantsPointCloud = hasGraphicsFrameComponent(options.components, GraphicsFrameComponent::PointCloud);
     const bool rangePresent = source.coordinates && source.coordinateReadableBytes != 0U && !source.rangeAsImage;
@@ -302,12 +309,20 @@ std::optional<GraphicsFrame> buildBlazeFrame(
     const bool hasRange = (wantsRangeFrame || wantsPointCloud) && rangePresent;
     const bool wantsImage = hasGraphicsFrameComponent(options.components, GraphicsFrameComponent::Image)
         && intensityPresent;
-    const bool confidenceImage = !hasRange && confidencePresent && (wantsRangeFrame || wantsPointCloud);
-    const bool intensityImage = wantsImage || (!hasRange && intensityPresent && (wantsRangeFrame || wantsPointCloud));
+    const auto sameExtent = [&](const BlazeScalarSource& scalar) {
+        return (scalar.width <= 0 || scalar.width == source.width)
+            && (scalar.height <= 0 || scalar.height == source.height);
+    };
+    const bool intensitySame = sameExtent(source.intensity);
+    const bool confidenceSame = sameExtent(source.confidence);
+    const bool confidenceImage = confidencePresent && (wantsRangeFrame || wantsPointCloud)
+        && (!hasRange || !confidenceSame);
+    const bool intensityImage = wantsImage || (intensityPresent && (wantsRangeFrame || wantsPointCloud)
+        && (!hasRange || !intensitySame));
     if (!hasRange && !intensityImage && !confidenceImage && !rawRangeImage)
     {
         if (wantsRangeFrame || wantsPointCloud)
-            recordRangeRejection(rejection, rangeEvidence(source, frameSequence,
+            record(rangeEvidence(source, frameSequence,
                 source.coordinates ? PylonRangeRejection::Reason::MissingRange : PylonRangeRejection::Reason::MissingData));
         return std::nullopt;
     }
@@ -316,45 +331,67 @@ std::optional<GraphicsFrame> buildBlazeFrame(
             <= (std::numeric_limits<std::uint64_t>::max)() / sizeof(Coord3DPoint)
         ? static_cast<std::uint64_t>(source.width) * sizeof(Coord3DPoint) : 0U;
     if (source.width <= 0 || source.height <= 0) {
-        recordRangeRejection(rejection, rangeEvidence(source, frameSequence,
+        record(rangeEvidence(source, frameSequence,
             PylonRangeRejection::Reason::InvalidDimensions, minimumRowBytes));
         return std::nullopt;
     }
-    if (!rangePresent && (wantsRangeFrame || wantsPointCloud))
-        recordRangeRejection(rejection, rangeEvidence(source, frameSequence,
+    if (!rangePresent && !rawRangeImage && (wantsRangeFrame || wantsPointCloud))
+        record(rangeEvidence(source, frameSequence,
             PylonRangeRejection::Reason::MissingRange, minimumRowBytes));
-    else if (rangePresent && source.coordinateStride < minimumRowBytes)
-        recordRangeRejection(rejection, rangeEvidence(source, frameSequence,
+    else if (rawRangeImage)
+        record(rangeEvidence(source, frameSequence, PylonRangeRejection::Reason::UnsupportedFormat));
+    if (rangePresent && source.coordinateStride < minimumRowBytes)
+        record(rangeEvidence(source, frameSequence,
             PylonRangeRejection::Reason::StrideBelowMinimum, minimumRowBytes, source.coordinateStride));
-    else if (rangePresent && source.coordinateStride != 0U && static_cast<std::size_t>(source.height)
+    if (rangePresent && source.coordinateStride != 0U && static_cast<std::size_t>(source.height)
              > source.coordinateReadableBytes / source.coordinateStride)
-        recordRangeRejection(rejection, rangeEvidence(source, frameSequence,
+        record(rangeEvidence(source, frameSequence,
             PylonRangeRejection::Reason::TruncatedData, minimumRowBytes, source.coordinateStride));
 
     const std::size_t width = static_cast<std::size_t>(source.width);
     const std::size_t height = static_cast<std::size_t>(source.height);
-    const auto diagnoseScalar = [&](const BlazeScalarSource& scalar, bool present) {
+    const auto diagnoseScalar = [&](const BlazeScalarSource& scalar, bool present, std::uint32_t part) {
         if (!present) return;
         const auto bytes = bytesPerPixel(scalar.pixelType);
-        if (!bytes)
-            recordRangeRejection(rejection, rangeEvidence(source, frameSequence, PylonRangeRejection::Reason::UnsupportedFormat));
-        else if (!scalar.stride || scalar.stride < width * bytes)
-            recordRangeRejection(rejection, rangeEvidence(source, frameSequence, PylonRangeRejection::Reason::StrideBelowMinimum));
-        else if (height > scalar.readableBytes / scalar.stride)
-            recordRangeRejection(rejection, rangeEvidence(source, frameSequence, PylonRangeRejection::Reason::TruncatedData));
+        const auto scalarWidth = static_cast<std::size_t>(scalar.width > 0 ? scalar.width : source.width);
+        const auto scalarHeight = static_cast<std::size_t>(scalar.height > 0 ? scalar.height : source.height);
+        const auto scalarEvidence = [&](PylonRangeRejection::Reason reason) {
+            auto result = rangeEvidence(source, frameSequence, reason);
+            result.width = static_cast<std::uint32_t>(scalarWidth);
+            result.height = static_cast<std::uint32_t>(scalarHeight);
+            result.pixelFormat = static_cast<std::uint64_t>(scalar.pixelType);
+            result.reportedStride = scalar.stride;
+            result.effectiveStride = scalar.stride;
+            result.readableBytes = scalar.readableBytes;
+            return result;
+        };
+        if (scalar.pixelType != Pylon::PixelType_Mono8 && scalar.pixelType != Pylon::PixelType_Mono16
+            && scalar.pixelType != Pylon::PixelType_Confidence8 && scalar.pixelType != Pylon::PixelType_Confidence16)
+            record(scalarEvidence(PylonRangeRejection::Reason::UnsupportedFormat), part);
+        if (bytes && (!scalar.stride || scalarWidth > (std::numeric_limits<std::size_t>::max)() / bytes
+                      || scalar.stride < scalarWidth * bytes))
+            record(scalarEvidence(PylonRangeRejection::Reason::StrideBelowMinimum), part);
+        if (scalar.stride && scalarHeight > scalar.readableBytes / scalar.stride)
+            record(scalarEvidence(PylonRangeRejection::Reason::TruncatedData), part);
     };
-    diagnoseScalar(source.intensity, intensityPresent);
-    diagnoseScalar(source.confidence, confidencePresent);
+    const auto intensityPart = source.intensity.partIndex == (std::numeric_limits<std::uint32_t>::max)() ? 1U : source.intensity.partIndex;
+    const auto confidencePart = source.confidence.partIndex == (std::numeric_limits<std::uint32_t>::max)() ? 2U : source.confidence.partIndex;
+    diagnoseScalar(source.intensity, intensityPresent, intensityPart);
+    diagnoseScalar(source.confidence, confidencePresent, confidencePart);
+    if (intensityPresent && !intensitySame)
+        record(rangeEvidence(source, frameSequence, PylonRangeRejection::Reason::InvalidDimensions), intensityPart);
+    if (confidencePresent && !confidenceSame)
+        record(rangeEvidence(source, frameSequence, PylonRangeRejection::Reason::InvalidDimensions), confidencePart);
     const bool allValid = !hasRange || !hasInvalidPoint(source, width, height);
     // A point cloud is derived from the range by the consumer, so a
     // PointCloud-only request still carries the range. Its RGB channel keeps
     // the grayscale intensity colours the explicit cloud used to carry.
     const bool includeIntensity = wantsRangeFrame && options.includeRangeAuxiliaryChannels
-        && source.hasIntensity;
+        && source.hasIntensity && intensitySame;
     const bool includeConfidence = wantsRangeFrame && options.includeRangeAuxiliaryChannels
-        && source.hasConfidence;
+        && source.hasConfidence && confidenceSame;
     const bool includePointColors = wantsPointCloud && options.includePointCloudColors
-        && source.hasIntensity && source.intensity.data != nullptr;
+        && source.hasIntensity && intensitySame && source.intensity.data != nullptr;
     const BlazeScalarSource* const pointColorSource =
         includePointColors ? &source.intensity : nullptr;
 
@@ -375,7 +412,9 @@ std::optional<GraphicsFrame> buildBlazeFrame(
     auto planImage = [&](const BlazeScalarSource& scalar, GraphicsImageWriteLayout& layout) {
         GraphicsImageWriterSource image;
         image.data = scalar.data;
-        image.width = source.width; image.height = source.height;
+        image.width = scalar.width > 0 ? scalar.width : source.width;
+        image.height = scalar.height > 0 ? scalar.height : source.height;
+        const auto imageHeight = static_cast<std::size_t>(image.height);
         const auto bpp = bytesPerPixel(scalar.pixelType);
         image.pixelFormat = bpp == 2U ? GraphicsImagePixelFormat::Mono16
             : bpp == 3U ? GraphicsImagePixelFormat::RGB24
@@ -383,14 +422,11 @@ std::optional<GraphicsFrame> buildBlazeFrame(
         image.bitsPerPixel = GraphicsImageValidation::packedBitsPerPixel(image.pixelFormat);
         const auto rowBytes = GraphicsImageValidation::minimumRowBytes(image.pixelFormat, image.width);
         if (!rowBytes || rowBytes > static_cast<std::size_t>((std::numeric_limits<int>::max)())
-            || height > (std::numeric_limits<std::size_t>::max)() / rowBytes) return false;
-        image.stride = static_cast<int>(rowBytes); image.size = rowBytes * height;
+            || imageHeight > (std::numeric_limits<std::size_t>::max)() / rowBytes) return false;
+        image.stride = static_cast<int>(rowBytes); image.size = rowBytes * imageHeight;
         auto plan = planGraphicsImageWrite(image);
         if (!plan) return false;
         layout = plan.value();
-        if (bpp == 0U || scalar.stride < rowBytes || (scalar.stride && height > scalar.readableBytes / scalar.stride))
-            recordRangeRejection(rejection, rangeEvidence(source, frameSequence,
-                bpp == 0U ? PylonRangeRejection::Reason::UnsupportedFormat : PylonRangeRejection::Reason::TruncatedData));
         return true;
     };
     GraphicsImageWriteLayout intensityLayout, confidenceLayout, rawRangeLayout;
@@ -428,7 +464,7 @@ std::optional<GraphicsFrame> buildBlazeFrame(
         std::memset(region.data(), 0, region.size());
         const auto rowBytes = static_cast<std::size_t>(imageLayout.strideBytes);
         const auto stride = scalar.stride ? scalar.stride : rowBytes;
-        for (std::size_t y = 0; y < height; ++y) {
+        for (std::size_t y = 0; y < static_cast<std::size_t>(imageLayout.height); ++y) {
             if (stride && y > (std::numeric_limits<std::size_t>::max)() / stride) break;
             const auto offset = y * stride;
             if (offset >= scalar.readableBytes) break;
@@ -436,12 +472,12 @@ std::optional<GraphicsFrame> buildBlazeFrame(
                         (std::min)({rowBytes, stride, scalar.readableBytes - offset}));
         }
         GraphicsImage image;
-        image.pixels = builder.seal(std::move(region)); image.width = source.width; image.height = source.height;
+        image.pixels = builder.seal(std::move(region)); image.width = imageLayout.width; image.height = imageLayout.height;
         image.stride = imageLayout.strideBytes; image.pixelFormat = imageLayout.format;
         image.bitsPerPixel = GraphicsImageValidation::packedBitsPerPixel(imageLayout.format);
         image.sourceFormat = static_cast<int>(scalar.pixelType); image.frameSequence = frameSequence;
         builder.addImage(id, std::move(image), label, "primary");
-        if (hasRange) {
+        if (hasRange && imageLayout.width == source.width && imageLayout.height == source.height) {
             auto& descriptor = builder.content().images.back().descriptor;
             descriptor.registration = GraphicsImageRegistration::RegisteredToRange;
             descriptor.registeredResourceId = "range";
@@ -474,7 +510,7 @@ std::optional<GraphicsFrame> buildBlazeFrame(
             break;
         }
         if (storageError && reason == Reason::StorageRefused) *storageError = GraphicsFrameError::Allocation;
-        recordRangeRejection(rejection, rangeEvidence(source, frameSequence, reason,
+        record(rangeEvidence(source, frameSequence, reason,
             minimumRowBytes, source.coordinateStride, writer.blockBytes()));
         return std::nullopt;
     }
@@ -569,7 +605,7 @@ std::optional<GraphicsFrame> buildBlazeFrame(
 
     if (!scene.isValid())
     {
-        recordRangeRejection(rejection, rangeEvidence(
+        record(rangeEvidence(
             source, frameSequence, PylonRangeRejection::Reason::InvalidLayout, minimumRowBytes));
         return std::nullopt;
     }
@@ -582,7 +618,7 @@ std::optional<GraphicsFrame> buildBlazeFrame(
     if (!published)
     {
         if (storageError) *storageError = published.error();
-        recordRangeRejection(rejection, rangeEvidence(
+        record(rangeEvidence(
             source, frameSequence, PylonRangeRejection::Reason::StorageRefused, minimumRowBytes));
         return std::nullopt;
     }
@@ -594,10 +630,10 @@ std::optional<GraphicsFrame> buildBlazeFrame(
 std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertSource(
     const BlazeRangeSource& source, const GraphicsFrameRequest& request,
     GraphicsFrameContextSource& contextSource, const std::uint64_t frameSequence,
-    std::optional<PylonRangeRejection>* rejection) const
+    std::optional<PylonRangeRejection>* rejection, PylonFrameAnomalies* anomalies) const
 {
     return buildBlazeFrame(source, blazeFrameOptionsFromRequest(request), contextSource,
-                           frameSequence, rejection, nullptr, nullptr);
+                           frameSequence, rejection, nullptr, nullptr, anomalies);
 }
 
 std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertGraphicsFrame(
@@ -607,21 +643,24 @@ std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertGraphicsFrame(
     const std::uint64_t frameSequence,
     std::optional<PylonRangeRejection>* rejection,
     GraphicsFrameError* storageError,
-    const std::atomic<bool>* cancelled) const
+    const std::atomic<bool>* cancelled, PylonFrameAnomalies* anomalies) const
 {
     if (!hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::Range)
         && !hasGraphicsFrameComponent(request.components, GraphicsFrameComponent::PointCloud))
         rejection = nullptr;
     struct Parts {
         Pylon::CPylonDataComponent range, intensity, confidence;
+        std::uint32_t rangeIndex = (std::numeric_limits<std::uint32_t>::max)();
+        std::uint32_t intensityIndex = (std::numeric_limits<std::uint32_t>::max)();
+        std::uint32_t confidenceIndex = (std::numeric_limits<std::uint32_t>::max)();
     } parts;
     for (std::size_t i = 0; i < container.GetDataComponentCount(); ++i) {
         auto part = container.GetDataComponent(i);
         if (!part.IsValid()) continue;
         switch (part.GetComponentType()) {
-        case Pylon::ComponentType_Range: if (!parts.range.IsValid()) parts.range = part; break;
-        case Pylon::ComponentType_Intensity: if (!parts.intensity.IsValid()) parts.intensity = part; break;
-        case Pylon::ComponentType_Confidence: if (!parts.confidence.IsValid()) parts.confidence = part; break;
+        case Pylon::ComponentType_Range: if (!parts.range.IsValid()) { parts.range = part; parts.rangeIndex = static_cast<std::uint32_t>(i); } break;
+        case Pylon::ComponentType_Intensity: if (!parts.intensity.IsValid()) { parts.intensity = part; parts.intensityIndex = static_cast<std::uint32_t>(i); } break;
+        case Pylon::ComponentType_Confidence: if (!parts.confidence.IsValid()) { parts.confidence = part; parts.confidenceIndex = static_cast<std::uint32_t>(i); } break;
         default: break;
         }
     }
@@ -644,6 +683,7 @@ std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertGraphicsFrame(
     }
     BlazeRangeSource source;
     source.width = static_cast<int>(width); source.height = static_cast<int>(height);
+    source.rangePartIndex = parts.rangeIndex;
     if (hasData(range)) {
         source.coordinates = static_cast<const std::uint8_t*>(range.GetData());
         source.coordinateReadableBytes = range.GetDataSize();
@@ -652,8 +692,6 @@ std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertGraphicsFrame(
         else if (!componentStride(range, sizeof(Coord3DPoint), source.coordinateStride))
             source.coordinateStride = width * sizeof(Coord3DPoint);
         if (source.rangePixelType != Pylon::PixelType_Coord3D_ABC32f) {
-            recordRangeRejection(rejection, rangeEvidence(source, frameSequence,
-                PylonRangeRejection::Reason::UnsupportedFormat));
             source.rangeAsImage = true;
             source.rawRange = {source.coordinates, source.coordinateStride, source.rangePixelType, source.coordinateReadableBytes};
         }
@@ -661,11 +699,11 @@ std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertGraphicsFrame(
         recordRangeRejection(rejection, rangeEvidence(source, frameSequence, PylonRangeRejection::Reason::MissingRange));
     }
     if (const auto intensity = scalarComponentSource(parts.intensity, width, height)) {
-        source.intensity = *intensity; source.hasIntensity = true;
+        source.intensity = *intensity; source.intensity.partIndex = parts.intensityIndex; source.hasIntensity = true;
     }
     if (const auto confidence = scalarComponentSource(parts.confidence, width, height)) {
-        source.confidence = *confidence; source.hasConfidence = true;
+        source.confidence = *confidence; source.confidence.partIndex = parts.confidenceIndex; source.hasConfidence = true;
     }
     return buildBlazeFrame(source, blazeFrameOptionsFromRequest(request), contextSource,
-                           frameSequence, rejection, storageError, cancelled);
+                           frameSequence, rejection, storageError, cancelled, anomalies);
 }

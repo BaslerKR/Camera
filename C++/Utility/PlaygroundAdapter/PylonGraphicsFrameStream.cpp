@@ -138,6 +138,7 @@ PylonGraphicsFrameStream::Impl::Impl(
             {
                 std::optional<PylonImageRejection> imageRejection;
                 std::optional<PylonRangeRejection> rangeRejection;
+                PylonFrameAnomalies anomalies;
                 std::shared_ptr<GraphicsFrameContextSource> contextSource;
                 {
                     std::lock_guard<std::mutex> lock(_storageMutex);
@@ -148,7 +149,7 @@ PylonGraphicsFrameStream::Impl::Impl(
                     container, cameraGraphicsFrameRequest(), _camera->scene3DProfile(),
                     sequence, _imageRejection ? &imageRejection : nullptr,
                     _rangeRejection ? &rangeRejection : nullptr, contextSource.get(),
-                    &storageError, &_cancelled);
+                    &storageError, &_cancelled, &anomalies);
                 if (storageError == GraphicsFrameError::ClassRefused) {
                     _refused.store(true, std::memory_order_release);
                     CameraSystem::syslog("Camera frame storage class was refused.", true);
@@ -159,7 +160,18 @@ PylonGraphicsFrameStream::Impl::Impl(
                 // A fallback that produced an image is not an assembly rejection.
                 if (_imageRejection && imageRejection && (!frame || !frame->hasImage()))
                     _imageRejection(*imageRejection);
-                if (_rangeRejection && rangeRejection) _rangeRejection(*rangeRejection);
+                if (_rangeRejection) {
+                    if (anomalies.count) {
+                        for (std::size_t i = 0; i < anomalies.count; ++i) _rangeRejection(anomalies.entries[i]);
+                        for (std::size_t reason = 0; reason < anomalies.overflowByReason.size(); ++reason) {
+                            PylonRangeRejection overflowEvidence;
+                            overflowEvidence.reason = static_cast<PylonRangeRejection::Reason>(reason);
+                            overflowEvidence.frameSequence = sequence;
+                            for (std::size_t i = 0; i < anomalies.overflowByReason[reason]; ++i)
+                                _rangeRejection(overflowEvidence);
+                        }
+                    } else if (rangeRejection) _rangeRejection(*rangeRejection);
+                }
                 if (frame.has_value() && !_cancelled.load(std::memory_order_acquire))
                     _callback(std::move(*frame), 0U);
             }

@@ -44,7 +44,8 @@ public:
         std::optional<PylonRangeRejection>* rangeRejection = nullptr,
         GraphicsFrameContextSource* contextSource = nullptr,
         GraphicsFrameError* storageError = nullptr,
-        const std::atomic<bool>* cancelled = nullptr) const;
+        const std::atomic<bool>* cancelled = nullptr,
+        PylonFrameAnomalies* anomalies = nullptr) const;
 
     /** Converts non-owning Stereo part views while their SDK container is retained. */
     [[nodiscard]] std::optional<GraphicsFrame> convertStereoParts(

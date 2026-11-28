@@ -1486,7 +1486,7 @@ std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsFrame(
     std::optional<PylonImageRejection>* imageRejection,
     std::optional<PylonRangeRejection>* rangeRejection,
     GraphicsFrameContextSource* contextSource, GraphicsFrameError* storageError,
-    const std::atomic<bool>* cancelled) const
+    const std::atomic<bool>* cancelled, PylonFrameAnomalies* anomalies) const
 {
     std::optional<GraphicsFrame> result;
     switch (profile.family)
@@ -1494,7 +1494,7 @@ std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsFrame(
     case PylonScene3DProfile::DeviceFamily::Blaze:
         if (!contextSource) { if (storageError) *storageError = GraphicsFrameError::Disconnected; break; }
         result = _blazeAdapter.convertGraphicsFrame(
-            container, request, *contextSource, frameSequence, rangeRejection, storageError, cancelled);
+            container, request, *contextSource, frameSequence, rangeRejection, storageError, cancelled, anomalies);
         break;
     case PylonScene3DProfile::DeviceFamily::StereoMini:
     case PylonScene3DProfile::DeviceFamily::StereoAce:
@@ -1667,7 +1667,12 @@ std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertImageViewFrame(
         if (storageError) *storageError = GraphicsFrameError::Disconnected; return std::nullopt;
     }
     auto context = contextSource.beginFrame(plan.value().bytes);
-    if (!context) { if (storageError) *storageError = context.error(); return std::nullopt; }
+    if (!context) {
+        if (storageError) *storageError = context.error();
+        if (context.error() == GraphicsFrameError::ClassRefused || context.error() == GraphicsFrameError::Capacity)
+            recordImageRejection(rejection, evidence, PylonImageRejection::Reason::StorageRefused);
+        return std::nullopt;
+    }
     if (cancelled && cancelled->load(std::memory_order_acquire)) {
         if (storageError) *storageError = GraphicsFrameError::Disconnected; return std::nullopt;
     }

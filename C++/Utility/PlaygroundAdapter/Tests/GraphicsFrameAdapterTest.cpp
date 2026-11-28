@@ -686,6 +686,25 @@ int main()
         assert(fittedShort->ranges().front().payload.zValues[3] == 0.0F);
         assert(fittedShort->ranges().front().payload.intensity[1] == 0.0F);
 
+        auto different = source;
+        different.intensity.width = 1; different.intensity.height = 2;
+        different.intensity.stride = 2; different.intensity.readableBytes = 2;
+        different.confidence.width = 3; different.confidence.height = 1;
+        different.confidence.stride = 2; different.confidence.readableBytes = 2;
+        PylonFrameAnomalies anomalies;
+        rejection.reset();
+        const auto independent = blaze.convertSource(different, {}, frameSource, 88U, &rejection, &anomalies);
+        assert(independent && independent->hasRangeFrame() && independent->images().size() == 2U);
+        assert(independent->images()[0].payload.width == 1 && independent->images()[0].payload.height == 2);
+        assert(independent->images()[1].payload.width == 3 && independent->images()[1].payload.height == 1);
+        bool sawIntensity = false, sawConfidence = false;
+        for (std::size_t i = 0; i < anomalies.count; ++i) {
+            sawIntensity |= anomalies.entries[i].affectedPart == 1U;
+            sawConfidence |= anomalies.entries[i].affectedPart == 2U;
+        }
+        assert(anomalies.count >= 2U && sawIntensity && sawConfidence);
+        assert(independent->ranges().front().payload.zValues[0] == 3.0F);
+
         auto noRange = source;
         noRange.coordinates = nullptr; noRange.coordinateReadableBytes = 0U;
         rejection.reset();

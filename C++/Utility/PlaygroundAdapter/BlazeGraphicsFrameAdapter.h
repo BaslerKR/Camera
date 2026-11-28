@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <mutex>
 #include <optional>
 
@@ -25,6 +26,8 @@ struct BlazeScalarSource
     std::size_t stride = 0;
     Pylon::EPixelType pixelType = Pylon::PixelType_Mono8;
     std::size_t readableBytes = 0;
+    int width = 0, height = 0;
+    std::uint32_t partIndex = (std::numeric_limits<std::uint32_t>::max)();
 };
 
 /**
@@ -46,6 +49,7 @@ struct BlazeRangeSource
     BlazeScalarSource confidence;
     BlazeScalarSource rawRange;
     bool rangeAsImage = false;
+    std::uint32_t rangePartIndex = 0U;
     bool hasIntensity = false;
     bool hasConfidence = false;
     /** SDK-reported stride and readable extent. Zero denotes an unavailable value. */
@@ -65,7 +69,8 @@ public:
         const GraphicsFrameRequest& request,
         GraphicsFrameContextSource& contextSource,
         std::uint64_t frameSequence = 0U,
-        std::optional<PylonRangeRejection>* rejection = nullptr) const;
+        std::optional<PylonRangeRejection>* rejection = nullptr,
+        PylonFrameAnomalies* anomalies = nullptr) const;
 
     /** Converts a container and optionally reports the first failed range rule. */
     [[nodiscard]] std::optional<GraphicsFrame> convertGraphicsFrame(
@@ -75,6 +80,7 @@ public:
         std::uint64_t frameSequence,
         std::optional<PylonRangeRejection>* rejection,
         GraphicsFrameError* storageError,
-        const std::atomic<bool>* cancelled) const;
+        const std::atomic<bool>* cancelled,
+        PylonFrameAnomalies* anomalies = nullptr) const;
 
 };

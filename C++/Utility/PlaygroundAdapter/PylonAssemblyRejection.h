@@ -9,6 +9,8 @@
  * controller maps these neutral values to the host diagnostic contract.
  */
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 
@@ -59,4 +61,17 @@ struct PylonRangeRejection {
     std::uint64_t readableBytes = 0;
     std::uint64_t requiredBytes = 0;
     std::uint64_t requestedStorageBytes = 0;
+};
+
+/** Bounded, allocation-free anomaly observations for a single multipart frame. */
+struct PylonFrameAnomalies {
+    std::array<PylonRangeRejection, 8> entries{};
+    std::size_t count = 0;
+    static constexpr std::size_t reasonCount = static_cast<std::size_t>(PylonRangeRejection::Reason::StorageRefused) + 1U;
+    std::array<std::size_t, reasonCount> overflowByReason{};
+    std::size_t overflow = 0;
+    void add(const PylonRangeRejection& evidence) noexcept {
+        if (count < entries.size()) entries[count++] = evidence;
+        else { ++overflow; ++overflowByReason[static_cast<std::size_t>(evidence.reason)]; }
+    }
 };
