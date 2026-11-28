@@ -1,3 +1,6 @@
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include "PylonGraphicsFrameAdapter.h"
 #include "graphics/data/GraphicsRangeFrameWriter.h"
 
@@ -6,6 +9,13 @@
 #include <pylon/PylonImage.h>
 
 #include <cassert>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <new>
+#ifdef _WIN32
+#include <malloc.h>
+#endif
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -14,6 +24,105 @@
 #include <memory>
 #include <optional>
 #include <type_traits>
+
+namespace {
+
+std::atomic<bool> gCountNew{false};
+std::atomic<std::size_t> gNewCount{0};
+
+void* allocUnaligned(const std::size_t size) noexcept
+{
+    if (gCountNew.load(std::memory_order_relaxed))
+    {
+        gNewCount.fetch_add(1U, std::memory_order_relaxed);
+    }
+    return std::malloc(size == 0U ? 1U : size);
+}
+
+void* allocAligned(const std::size_t size, const std::align_val_t alignment) noexcept
+{
+    if (gCountNew.load(std::memory_order_relaxed))
+    {
+        gNewCount.fetch_add(1U, std::memory_order_relaxed);
+    }
+    const std::size_t alignVal = static_cast<std::size_t>(alignment);
+#ifdef _WIN32
+    return _aligned_malloc(size == 0U ? 1U : size, alignVal < sizeof(void*) ? sizeof(void*) : alignVal);
+#else
+    const std::size_t effectiveAlign = alignVal < sizeof(void*) ? sizeof(void*) : alignVal;
+    const std::size_t requested = size == 0U ? 1U : size;
+    const std::size_t padded = ((requested + effectiveAlign - 1U) / effectiveAlign) * effectiveAlign;
+    void* ptr = nullptr;
+    if (posix_memalign(&ptr, effectiveAlign, padded) != 0) return nullptr;
+    return ptr;
+#endif
+}
+
+void freeAligned(void* ptr) noexcept
+{
+#ifdef _WIN32
+    _aligned_free(ptr);
+#else
+    std::free(ptr);
+#endif
+}
+
+} // namespace
+
+void* operator new(const std::size_t size)
+{
+    if (void* ptr = allocUnaligned(size)) return ptr;
+    throw std::bad_alloc();
+}
+
+void* operator new[](const std::size_t size)
+{
+    return ::operator new(size);
+}
+
+void* operator new(const std::size_t size, const std::nothrow_t&) noexcept
+{
+    return allocUnaligned(size);
+}
+
+void* operator new[](const std::size_t size, const std::nothrow_t&) noexcept
+{
+    return allocUnaligned(size);
+}
+
+void* operator new(const std::size_t size, const std::align_val_t alignment)
+{
+    if (void* ptr = allocAligned(size, alignment)) return ptr;
+    throw std::bad_alloc();
+}
+
+void* operator new[](const std::size_t size, const std::align_val_t alignment)
+{
+    return ::operator new(size, alignment);
+}
+
+void* operator new(const std::size_t size, const std::align_val_t alignment, const std::nothrow_t&) noexcept
+{
+    return allocAligned(size, alignment);
+}
+
+void* operator new[](const std::size_t size, const std::align_val_t alignment, const std::nothrow_t&) noexcept
+{
+    return allocAligned(size, alignment);
+}
+
+void operator delete(void* ptr) noexcept { std::free(ptr); }
+void operator delete[](void* ptr) noexcept { std::free(ptr); }
+void operator delete(void* ptr, std::size_t) noexcept { std::free(ptr); }
+void operator delete[](void* ptr, std::size_t) noexcept { std::free(ptr); }
+void operator delete(void* ptr, const std::nothrow_t&) noexcept { std::free(ptr); }
+void operator delete[](void* ptr, const std::nothrow_t&) noexcept { std::free(ptr); }
+void operator delete(void* ptr, std::align_val_t) noexcept { freeAligned(ptr); }
+void operator delete[](void* ptr, std::align_val_t) noexcept { freeAligned(ptr); }
+void operator delete(void* ptr, std::size_t, std::align_val_t) noexcept { freeAligned(ptr); }
+void operator delete[](void* ptr, std::size_t, std::align_val_t) noexcept { freeAligned(ptr); }
+void operator delete(void* ptr, std::align_val_t, const std::nothrow_t&) noexcept { freeAligned(ptr); }
+void operator delete[](void* ptr, std::align_val_t, const std::nothrow_t&) noexcept { freeAligned(ptr); }
 
 class TestAllocation final : public GraphicsAllocation
 {
@@ -221,6 +330,24 @@ int main()
         error = GraphicsFrameError::None;
         assert(!adapter.convertGraphicsImageFrame(planar, tracked, 93U, nullptr, &error, &cancelled));
         assert(error == GraphicsFrameError::Disconnected && tracked.calls == 3U);
+    }
+
+    // Count C++ allocations over warmed-up frames, including GE Local context work.
+    {
+        TrackedContextSource tracked(GraphicsFrameContext::local());
+        for (int i = 0; i < 10; ++i) {
+            auto frame = adapter.convertGraphicsImageFrame(source, tracked, i);
+            assert(frame && frame->hasImage());
+        }
+        gNewCount.store(0U, std::memory_order_relaxed);
+        gCountNew.store(true, std::memory_order_release);
+        for (int i = 0; i < 100; ++i) {
+            auto frame = adapter.convertGraphicsImageFrame(source, tracked, i);
+            assert(frame && frame->hasImage());
+        }
+        gCountNew.store(false, std::memory_order_release);
+        std::printf("Camera 2D Local steady-state operator-new calls: %zu/100 frames\n",
+                    gNewCount.load(std::memory_order_acquire));
     }
 
     const Pylon::CPylonImage empty;
