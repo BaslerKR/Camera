@@ -571,48 +571,43 @@ std::optional<GraphicsFrame> buildBlazeFrame(
         writeScalarComponent(source.confidence, width, height, writer.confidenceData(), options);
     }
 
-    RangeFrame frame = writer.takeFrame();
+    // The description strings live in a per-thread frame, so a warm producer assigns none per frame.
+    thread_local RangeFrame frame;
+    struct ReleaseSpans {
+        RangeFrame& value;
+        ~ReleaseSpans() {
+            value.xValues = {}; value.yValues = {}; value.zValues = {}; value.validMask = {};
+            value.intensity = {}; value.confidence = {}; value.rgb = {};
+        }
+    } releaseSpans{frame};
+    const RangeFrame taken = writer.takeFrame();
+    frame.width = taken.width; frame.height = taken.height;
+    frame.xValues = taken.xValues; frame.yValues = taken.yValues; frame.zValues = taken.zValues;
+    frame.validMask = taken.validMask; frame.intensity = taken.intensity; frame.confidence = taken.confidence;
+    frame.rgb = taken.rgb;
     frame.lengthUnit = GraphicsLengthUnit::Millimeter;
     frame.zScale = options.rotatePointCloudAroundX180 ? -1.0 : 1.0;
     frame.xyCoordinateMode = RangeFrameXYCoordinateMode::ExplicitXY;
-    frame.rangeField = {
-        "basler.blaze.z-coordinate",
-        "Z coordinate",
-        "mm",
-        MeasurementValueDomain::Calibrated,
-        MeasurementSampleKind::GridSample,
-        32U};
-    frame.intensityField = {
-        "basler.blaze.intensity",
-        "Intensity",
-        "",
-        MeasurementValueDomain::Native,
-        MeasurementSampleKind::GridSample,
-        0U};
-    frame.confidenceField = {
-        "basler.blaze.confidence",
-        "Confidence",
-        "",
-        MeasurementValueDomain::Native,
-        MeasurementSampleKind::GridSample,
-        0U};
-    frame.sensorType = "Basler blaze";
-    if (includeIntensity)
-    {
-        frame.intensityBits = scalarBits(source.intensity.pixelType);
-        frame.intensityField.bitsPerSample = frame.intensityBits;
-    }
-    if (includeConfidence)
-    {
-        frame.confidenceBits = scalarBits(source.confidence.pixelType);
-        frame.confidenceField.bitsPerSample = frame.confidenceBits;
-    }
+    const auto describe = [](MeasurementFieldDescriptor& field, const char* id, const char* name,
+                             const char* unit, const MeasurementValueDomain domain, const std::uint8_t bits) {
+        field.id.assign(id); field.displayName.assign(name); field.unitSymbol.assign(unit);
+        field.domain = domain; field.sampleKind = MeasurementSampleKind::GridSample; field.bitsPerSample = bits;
+    };
+    frame.intensityBits = includeIntensity ? scalarBits(source.intensity.pixelType) : 0U;
+    frame.confidenceBits = includeConfidence ? scalarBits(source.confidence.pixelType) : 0U;
+    describe(frame.rangeField, "basler.blaze.z-coordinate", "Z coordinate", "mm",
+             MeasurementValueDomain::Calibrated, 32U);
+    describe(frame.intensityField, "basler.blaze.intensity", "Intensity", "",
+             MeasurementValueDomain::Native, frame.intensityBits);
+    describe(frame.confidenceField, "basler.blaze.confidence", "Confidence", "",
+             MeasurementValueDomain::Native, frame.confidenceBits);
+    frame.sensorType.assign("Basler blaze");
 
     auto& scene = builder.content();
     scene.metadata.sourceName = "Basler blaze";
     if (frame.isValid())
     {
-        scene.addRange("range", std::move(frame), "Range", "primary");
+        scene.addRange("range", frame, "Range", "primary");
         scene.ranges.back().initialView = blazeInitialView(1.0);
     }
 

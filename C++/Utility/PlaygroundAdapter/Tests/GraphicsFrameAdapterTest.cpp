@@ -458,6 +458,30 @@ int main()
         assert(zeroStride && zeroStride->images().front().payload.data()[3] == 4U);
     }
 
+    // Every published span lives in a region reserved from the frame context: overwriting the SDK
+    // buffer after conversion leaves the published bytes intact, on the view and the image paths.
+    {
+        std::uint8_t sdk[4] = {1, 2, 3, 4};
+        CameraStereoPartView view;
+        view.valid = true; view.data = sdk; view.bytes = sizeof(sdk); view.pixelType = Pylon::PixelType_Mono8;
+        TrackedContextSource owned(GraphicsFrameContext::local());
+        auto fromView = adapter.convertImageViewFrame(view, owned, 120U);   // zero extents: raw row
+        auto own = Pylon::CPylonImage::Create(Pylon::PixelType_Mono8, 2U, 2U);
+        std::size_t ownStride = 0U;
+        assert(own.GetStride(ownStride));
+        auto* ownBytes = static_cast<std::uint8_t*>(own.GetBuffer());
+        ownBytes[0] = 1U; ownBytes[1] = 2U; ownBytes[ownStride] = 3U; ownBytes[ownStride + 1U] = 4U;
+        auto fromImage = adapter.convertGraphicsImageFrame(own, owned, 121U);
+        assert(fromView && fromImage);
+        const auto* viewPixels = fromView->images().front().payload.data();
+        const auto* imagePixels = fromImage->images().front().payload.data();
+        assert(viewPixels != sdk && imagePixels != ownBytes);
+        std::memset(sdk, 0xEE, sizeof(sdk));
+        std::memset(ownBytes, 0xEE, own.GetImageSize());
+        assert(viewPixels[0] == 1U && viewPixels[3] == 4U);
+        assert(imagePixels[0] == 1U && imagePixels[static_cast<std::size_t>(fromImage->images().front().payload.stride) + 1U] == 4U);
+    }
+
     const Pylon::CPylonImage empty;
     assert(!adapter.convertGraphicsImage(empty, bgrBuilder).isValid());
 
@@ -613,11 +637,13 @@ int main()
             {   // Unexpected formats map to the same bytes per element, or stay raw bytes.
                 auto input = parts;
                 input.intensity.pixelType = Pylon::PixelType_BayerGR8;
-                const std::uint16_t rawRange[4] = {11, 12, 13, 14};
+                const std::uint16_t expectedRange[4] = {11, 12, 13, 14};
+                std::uint16_t rawRange[4] = {11, 12, 13, 14};
                 auto& sel = selectedPart(input);
                 sel.data = rawRange; sel.bytes = sizeof(rawRange); sel.stride = 4U;
                 sel.pixelType = Pylon::PixelType_Mono16;
                 const auto out = run(input, 204U, stereo);
+                std::memset(rawRange, 0xEE, sizeof(rawRange));   // the published bytes are a copy
                 assert(out.frame && !out.frame->hasRangeFrame() && out.frame->images().size() == 2U);
                 assert(has(out, PylonRangeRejection::Reason::UnsupportedFormat, 0U));
                 assert(has(out, PylonRangeRejection::Reason::UnsupportedFormat, selectedIndex));
@@ -625,7 +651,7 @@ int main()
                 assert(image.pixelFormat == GraphicsImagePixelFormat::Mono8 && image.data()[3] == 4U);
                 const auto& raw = out.frame->images()[1].payload;
                 assert(raw.pixelFormat == GraphicsImagePixelFormat::Mono16 && raw.width == 2 && raw.height == 2);
-                assert(std::memcmp(raw.data(), rawRange, sizeof(rawRange)) == 0);
+                assert(std::memcmp(raw.data(), expectedRange, sizeof(expectedRange)) == 0);
             }
             {   // A missing part is absent with a diagnostic and never removes another part.
                 auto input = parts;
@@ -881,10 +907,11 @@ int main()
 
         auto oddRange = source;
         oddRange.rangeAsImage = true;
-        const std::uint8_t rawBytes[] = {1U, 2U, 3U};
+        std::uint8_t rawBytes[] = {1U, 2U, 3U};
         oddRange.rawRange = {rawBytes, 2U, Pylon::PixelType_BayerGR8, sizeof(rawBytes)};
         rejection.reset();
         const auto retainedRaw = blaze.convertSource(oddRange, {}, frameSource, 88U, &rejection);
+        std::memset(rawBytes, 0xEE, sizeof(rawBytes));   // the published bytes are a copy
         assert(retainedRaw && retainedRaw->images().size() == 3U && !retainedRaw->hasRangeFrame());
         assert(rejection);
         const auto& raw = retainedRaw->images().back().payload;
@@ -896,6 +923,38 @@ int main()
         const auto imageOnly = blaze.convertSource(source, unrequested, frameSource, 86U, &rejection);
         assert(imageOnly && imageOnly->hasImage() && !imageOnly->hasRangeFrame());
         assert(!rejection.has_value());
+
+        // Steady blaze frames, clean and malformed, allocate nothing after warmup.
+        {
+            auto backing = std::make_shared<UncountedLocalBacking>();
+            auto pool = GraphicsFrameContentPool::create(8U);
+            TrackedContextSource steady(GraphicsFrameContext(backing, pool));
+            auto malformed = source;
+            malformed.coordinateStride = source.coordinateStride / 2U;
+            malformed.reportedCoordinateStride = malformed.coordinateStride;
+            malformed.coordinateReadableBytes = sizeof(float) * 4U;
+            malformed.intensity.readableBytes = sizeof(std::uint16_t);
+            malformed.confidence.stride = 1U;
+            for (const auto* input : {&source, &malformed}) {
+                PylonFrameAnomalies steadyAnomalies;
+                for (int i = 0; i < 10; ++i) {
+                    steadyAnomalies = {};
+                    auto frame = blaze.convertSource(*input, {}, steady, i, nullptr, &steadyAnomalies);
+                    assert(frame && frame->hasRangeFrame());
+                }
+                gNewCount.store(0U, std::memory_order_relaxed);
+                gCountNew.store(true, std::memory_order_release);
+                for (int i = 0; i < 100; ++i) {
+                    steadyAnomalies = {};
+                    auto frame = blaze.convertSource(*input, {}, steady, i, nullptr, &steadyAnomalies);
+                    assert(frame && frame->hasRangeFrame());
+                }
+                gCountNew.store(false, std::memory_order_release);
+                std::printf("Camera blaze %s steady-state operator-new calls excluding backing allocator: %zu/100 frames\n",
+                            input == &source ? "clean" : "malformed", gNewCount.load(std::memory_order_acquire));
+                assert(gNewCount.load(std::memory_order_acquire) == 0U);
+            }
+        }
     }
     return 0;
 }
