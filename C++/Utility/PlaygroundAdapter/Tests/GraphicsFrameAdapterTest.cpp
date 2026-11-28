@@ -189,6 +189,30 @@ public:
     std::size_t requestedBytes = 0;
 };
 
+class BudgetAllocator final : public GraphicsFrameAllocator
+{
+public:
+    std::size_t limit = 0U, used = 0U, reserves = 0U;
+    GraphicsResult<GraphicsAllocationSlice> allocate(std::size_t bytes, std::size_t alignment) noexcept override {
+        std::size_t next = used;
+        if (!appendAligned(next, bytes, alignment) || next > limit) return GraphicsFrameError::Capacity;
+        auto result = GraphicsFrameContext::local().allocate(bytes, alignment);
+        if (result) { used = next; ++reserves; }
+        return result;
+    }
+};
+class BudgetSource final : public GraphicsFrameContextSource
+{
+public:
+    std::shared_ptr<BudgetAllocator> allocator = std::make_shared<BudgetAllocator>();
+    std::size_t calls = 0U, requested = 0U, shortage = 0U;
+    GraphicsResult<GraphicsFrameContext> beginFrame(std::size_t bytes) noexcept override {
+        ++calls; requested = bytes; allocator->used = 0U; allocator->reserves = 0U;
+        allocator->limit = bytes > shortage ? bytes - shortage : 0U;
+        return GraphicsFrameContext(allocator);
+    }
+};
+
 static_assert(std::is_const_v<std::remove_reference_t<decltype(*std::declval<GraphicsSpan<std::uint8_t>>().data())>>);
 static_assert(std::is_const_v<std::remove_reference_t<decltype(std::declval<GraphicsFrame>().ranges().front())>>);
 
@@ -403,6 +427,66 @@ int main()
         assert(emptySource.calls == 0U);
         assert(emptyError == GraphicsFrameError::InvalidInput);
         assert(emptyRejection && emptyRejection->reason == PylonRangeRejection::Reason::InvalidLayout);
+    }
+
+    // Synthetic SDK views use exactly the same production Stereo transaction.
+    {
+        float xyz[12] = {1,2,3, 4,5,6, 7,8,9, 10,11,12};
+        std::uint16_t disparity[4] = {1,2,3,4};
+        std::uint8_t mono[4] = {1,2,3,4};
+        std::uint8_t rgb[12] = {};
+        auto part = [](const void* data, std::size_t bytes, Pylon::EPixelType type, std::size_t stride) {
+            CameraStereoPartView value;
+            value.data = data; value.bytes = bytes; value.width = 2; value.height = 2;
+            value.pixelType = type; value.stride = stride; value.hasStride = true; value.valid = true;
+            return value;
+        };
+        CameraStereoParts parts;
+        parts.range = part(xyz, sizeof(xyz), Pylon::PixelType_Coord3D_ABC32f, 24);
+        parts.disparity = part(disparity, sizeof(disparity), Pylon::PixelType_Coord3D_C16, 4);
+        PylonScene3DProfile stereo;
+        stereo.geometry = PylonScene3DProfile::GeometryKind::DisparityReconstruction;
+        stereo.coordinateScale = 1; stereo.baseline = 1; stereo.focalLength = 1;
+        for (const auto family : {PylonScene3DProfile::DeviceFamily::StereoMini,
+                                  PylonScene3DProfile::DeviceFamily::StereoAce}) {
+            stereo.family = family;
+            for (int mode = 0; mode < 2; ++mode) {
+                parts.intensity = mode == 0
+                    ? part(mono, sizeof(mono), Pylon::PixelType_Mono8, 2)
+                    : part(rgb, sizeof(rgb), Pylon::PixelType_RGB8packed, 6);
+                BudgetSource budget;
+                GraphicsFrameError error = GraphicsFrameError::None;
+                auto frame = adapter.convertStereoParts(parts, {}, stereo, budget, 100U, nullptr, nullptr, &error);
+                assert(frame && frame->hasImage() && frame->hasRangeFrame());
+                assert(error == GraphicsFrameError::None && budget.calls == 1U);
+                assert(budget.requested == budget.allocator->used);
+                assert(budget.allocator->reserves == 6U);
+            }
+            parts.intensity = part(mono, sizeof(mono), Pylon::PixelType_Mono8, 2);
+            for (int bad = 0; bad < 4; ++bad) {
+                auto invalid = parts;
+                auto& selected = family == PylonScene3DProfile::DeviceFamily::StereoAce
+                    ? invalid.disparity : invalid.range;
+                if (bad == 0) selected.pixelType = Pylon::PixelType_Mono8;
+                if (bad == 1) selected.stride = selected.bytes + 1U;
+                if (bad == 2) { invalid.intensity.stride = 1U; }
+                if (bad == 3) { selected.hasStride = false; selected.padding = selected.bytes; }
+                BudgetSource budget;
+                GraphicsFrameError error = GraphicsFrameError::None;
+                std::optional<PylonRangeRejection> rejection;
+                auto frame = adapter.convertStereoParts(invalid, {}, stereo, budget, 101U,
+                    nullptr, &rejection, &error);
+                assert(!frame && error == GraphicsFrameError::InvalidInput);
+                assert(rejection && rejection->reason == PylonRangeRejection::Reason::InvalidLayout);
+                assert(budget.calls == 0U && budget.allocator->reserves == 0U);
+            }
+            BudgetSource shortBudget;
+            shortBudget.shortage = 1U;
+            GraphicsFrameError error = GraphicsFrameError::None;
+            auto frame = adapter.convertStereoParts(parts, {}, stereo, shortBudget, 102U, nullptr, nullptr, &error);
+            assert(!frame && error == GraphicsFrameError::Allocation);
+            assert(shortBudget.calls == 1U && shortBudget.allocator->used < shortBudget.requested);
+        }
     }
 
     // Blaze conversion through the neutral source seam: the range keeps the
