@@ -69,7 +69,7 @@ public:
 };
 
 static_assert(std::is_const_v<std::remove_reference_t<decltype(*std::declval<GraphicsSpan<std::uint8_t>>().data())>>);
-static_assert(std::is_const_v<std::remove_reference_t<decltype(std::declval<GraphicsFrame>().ranges())>>);
+static_assert(std::is_const_v<std::remove_reference_t<decltype(std::declval<GraphicsFrame>().ranges().front())>>);
 
 int main()
 {
