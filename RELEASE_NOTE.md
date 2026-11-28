@@ -1,6 +1,6 @@
 ## Unreleased
 
-- Admit Camera 2D and 3D frame samples through one managed frame-context transaction.
+- Admit Camera 2D, blaze and Stereo frame samples through one managed frame-context transaction and fit every device part into the GE format instead of rejecting it: each part is planned at its own declared extent, copied only as far as the SDK buffer reaches (short buffers, small and padded strides) with the rest zero-filled, and unexpected formats map to the GE type with the same bytes per element or raw bytes. Stereo ranges without usable calibration publish as a raw range image. A part failure never removes another part, every anomaly is counted, and a frame is dropped only when all selected parts are empty. A refused or oversized storage admission drops that frame only and the run continues; the controller no longer keeps sticky refusal state.
 
 - Return `GraphicsAllocationSlice` from the test `GraphicsFrameAllocator` in `GraphicsFrameAdapterTest`, drop the removed `GraphicsRangeFrameWriterFailure::MisalignedStorage` branch in `BlazeGraphicsFrameAdapter` and the unreachable `PylonRangeRejection::Reason::StorageMisaligned` rejection, and adopt `DevicePluginSessionCapability::GraphicsViewer`.
 

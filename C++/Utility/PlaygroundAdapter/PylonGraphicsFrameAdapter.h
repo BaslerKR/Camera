@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <limits>
 #include <optional>
 
 /** Non-owning SDK part view; payload stays owned by the caller through conversion. */
@@ -18,6 +19,7 @@ struct CameraStereoPartView
     const void* data = nullptr;
     std::size_t bytes = 0, width = 0, height = 0, stride = 0, padding = 0;
     Pylon::EPixelType pixelType = Pylon::PixelType_Undefined;
+    std::uint32_t index = (std::numeric_limits<std::uint32_t>::max)();
     bool valid = false, hasStride = false;
     bool IsValid() const noexcept { return valid; }
     const void* GetData() const noexcept { return data; }
@@ -47,15 +49,15 @@ public:
         const std::atomic<bool>* cancelled = nullptr,
         PylonFrameAnomalies* anomalies = nullptr) const;
 
-    /** Converts non-owning Stereo part views while their SDK container is retained. */
+    /** Fits non-owning Stereo part views into one GE frame while their SDK container is retained; every anomaly is reported. */
     [[nodiscard]] std::optional<GraphicsFrame> convertStereoParts(
         const CameraStereoParts& parts, const GraphicsFrameRequest& request,
         const PylonScene3DProfile& profile, GraphicsFrameContextSource& contextSource,
         std::uint64_t frameSequence = 0U,
-        std::optional<PylonImageRejection>* imageRejection = nullptr,
         std::optional<PylonRangeRejection>* rangeRejection = nullptr,
         GraphicsFrameError* storageError = nullptr,
-        const std::atomic<bool>* cancelled = nullptr) const;
+        const std::atomic<bool>* cancelled = nullptr,
+        PylonFrameAnomalies* anomalies = nullptr) const;
 
     /** Writes a non-owning image part, retaining the caller's bytes for this call. */
     [[nodiscard]] std::optional<GraphicsFrame> convertImageViewFrame(

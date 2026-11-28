@@ -9,6 +9,7 @@
 #include <pylon/PylonImage.h>
 
 #include <cassert>
+#include <cmath>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -441,6 +442,20 @@ int main()
         assert(missing && missing->reason == PylonImageRejection::Reason::MissingBytes);
         ++diagnosticCount;
         assert(diagnosticCount == 4U);
+        // Unusable declared extents publish the held bytes as one raw Mono8 row, with a diagnostic.
+        part.width = 0; part.height = 0; part.bytes = 4; part.hasStride = false; part.stride = 0;
+        part.pixelType = Pylon::PixelType_Mono8;
+        std::optional<PylonImageRejection> degenerate;
+        GraphicsFrameError degenerateError = GraphicsFrameError::None;
+        auto raw = adapter.convertImageViewFrame(part, tracked, 102U, &degenerate, &degenerateError);
+        assert(raw && raw->hasImage() && degenerateError == GraphicsFrameError::None);
+        assert(raw->images().front().payload.width == 4 && raw->images().front().payload.height == 1);
+        assert(raw->images().front().payload.data()[3] == 4U);
+        assert(degenerate && degenerate->reason == PylonImageRejection::Reason::InvalidDimensions);
+        // A zero SDK stride reads packed rows instead of dropping the part.
+        part.width = 2; part.height = 2; part.hasStride = true; part.stride = 0; part.bytes = 4;
+        auto zeroStride = adapter.convertImageViewFrame(part, tracked, 103U);
+        assert(zeroStride && zeroStride->images().front().payload.data()[3] == 4U);
     }
 
     const Pylon::CPylonImage empty;
@@ -493,41 +508,178 @@ int main()
                     : part(rgb, sizeof(rgb), Pylon::PixelType_RGB8packed, 6);
                 BudgetSource budget;
                 GraphicsFrameError error = GraphicsFrameError::None;
-                auto frame = adapter.convertStereoParts(parts, {}, stereo, budget, 100U, nullptr, nullptr, &error);
+                auto frame = adapter.convertStereoParts(parts, {}, stereo, budget, 100U, nullptr, &error);
                 assert(frame && frame->hasImage() && frame->hasRangeFrame());
                 assert(error == GraphicsFrameError::None && budget.calls == 1U);
                 assert(budget.requested == budget.allocator->used);
-                assert(budget.allocator->reserves == 6U);
+                assert(budget.allocator->reserves == 2U);
             }
             parts.intensity = part(mono, sizeof(mono), Pylon::PixelType_Mono8, 2);
-            for (int bad = 0; bad < 4; ++bad) {
-                auto invalid = parts;
-                auto& selected = family == PylonScene3DProfile::DeviceFamily::StereoAce
-                    ? invalid.disparity : invalid.range;
-                if (bad == 0) selected.pixelType = Pylon::PixelType_Mono8;
-                if (bad == 1) selected.stride = selected.bytes + 1U;
-                if (bad == 2) { invalid.intensity.stride = 1U; }
-                if (bad == 3) { selected.hasStride = false; selected.padding = selected.bytes; }
-                BudgetSource budget;
+            parts.intensity.index = 0U; parts.range.index = 1U; parts.disparity.index = 2U;
+            const bool ace = family == PylonScene3DProfile::DeviceFamily::StereoAce;
+            const std::uint32_t selectedIndex = ace ? 2U : 1U;
+            struct Outcome {
+                std::optional<GraphicsFrame> frame;
+                PylonFrameAnomalies anomalies;
+                std::optional<PylonRangeRejection> first;
                 GraphicsFrameError error = GraphicsFrameError::None;
-                std::optional<PylonRangeRejection> rejection;
-                std::optional<PylonImageRejection> imageDiagnostic;
-                auto frame = adapter.convertStereoParts(invalid, {}, stereo, budget, 101U,
-                    &imageDiagnostic, &rejection, &error);
-                assert(frame && error == GraphicsFrameError::None);
-                if (bad == 2) {
-                    assert(frame->hasRangeFrame() && !frame->hasImage());
-                    assert(imageDiagnostic && imageDiagnostic->reason == PylonImageRejection::Reason::InvalidStride);
-                } else {
-                    assert(frame->hasImage() && !frame->hasRangeFrame());
-                    assert(rejection);
+                std::size_t calls = 0U;
+            };
+            // Every case publishes with the exact planned reserve sum and a single frame admission.
+            const auto run = [&](const CameraStereoParts& input, std::uint64_t sequence,
+                                 const PylonScene3DProfile& profileUsed) {
+                Outcome out;
+                BudgetSource budget;
+                out.frame = adapter.convertStereoParts(input, {}, profileUsed, budget, sequence, &out.first,
+                    &out.error, nullptr, &out.anomalies);
+                out.calls = budget.calls;
+                if (out.frame) assert(budget.calls == 1U && budget.requested == budget.allocator->used);
+                return out;
+            };
+            const auto has = [](const Outcome& out, PylonRangeRejection::Reason reason, std::uint32_t partIndex) {
+                for (std::size_t i = 0; i < out.anomalies.count; ++i)
+                    if (out.anomalies.entries[i].reason == reason && out.anomalies.entries[i].affectedPart == partIndex)
+                        return true;
+                return false;
+            };
+            const auto selectedPart = [&](CameraStereoParts& input) -> CameraStereoPartView& {
+                return ace ? input.disparity : input.range;
+            };
+            {   // Clean parts report nothing.
+                const auto out = run(parts, 200U, stereo);
+                assert(out.frame && out.frame->hasImage() && out.frame->hasRangeFrame());
+                assert(out.anomalies.count == 0U && !out.first);
+            }
+            {   // Steady Stereo frames, clean and malformed, allocate nothing after warmup.
+                auto backing = std::make_shared<UncountedLocalBacking>();
+                auto pool = GraphicsFrameContentPool::create(8U);
+                TrackedContextSource tracked(GraphicsFrameContext(backing, pool));
+                auto malformed = parts;
+                selectedPart(malformed).bytes = ace ? 6U : 36U;
+                malformed.intensity.stride = 1U;
+                for (const auto* input : {&parts, &malformed}) {
+                    PylonFrameAnomalies anomalies;
+                    for (int i = 0; i < 10; ++i) {
+                        anomalies = {};
+                        auto frame = adapter.convertStereoParts(*input, {}, stereo, tracked, i, nullptr, nullptr, nullptr, &anomalies);
+                        assert(frame && frame->hasImage() && frame->hasRangeFrame());
+                    }
+                    gNewCount.store(0U, std::memory_order_relaxed);
+                    gCountNew.store(true, std::memory_order_release);
+                    for (int i = 0; i < 100; ++i) {
+                        anomalies = {};
+                        auto frame = adapter.convertStereoParts(*input, {}, stereo, tracked, i, nullptr, nullptr, nullptr, &anomalies);
+                        assert(frame && frame->hasRangeFrame());
+                    }
+                    gCountNew.store(false, std::memory_order_release);
+                    std::printf("Camera Stereo %s steady-state operator-new calls excluding backing allocator: %zu/100 frames\n",
+                                ace ? "ace" : "mini", gNewCount.load(std::memory_order_acquire));
+                    assert(gNewCount.load(std::memory_order_acquire) == 0U);
                 }
-                assert(budget.calls == 1U && budget.requested == budget.allocator->used);
+            }
+            {   // Short buffer: the held samples are copied, the rest is zero, and the part stays.
+                auto input = parts;
+                auto& sel = selectedPart(input);
+                sel.bytes = ace ? 6U : 36U;
+                const auto out = run(input, 201U, stereo);
+                assert(out.frame && out.frame->hasImage() && out.frame->hasRangeFrame());
+                assert(has(out, PylonRangeRejection::Reason::TruncatedData, selectedIndex));
+                const auto& range = out.frame->ranges().front().payload;
+                assert(range.validMask[0] == 1U && range.validMask[2] == 1U && range.validMask[3] == 0U);
+                if (ace) assert(std::isnan(range.zValues[3]) && range.zValues[2] > 0.0F);
+                else assert(range.zValues[2] == 9.0F && range.zValues[3] == 0.0F);
+            }
+            {   // Small stride: min(sdkStride, row) is copied per row and the part stays.
+                auto input = parts;
+                selectedPart(input).stride = 2U;
+                const auto out = run(input, 202U, stereo);
+                assert(out.frame && out.frame->hasRangeFrame());
+                assert(has(out, PylonRangeRejection::Reason::StrideBelowMinimum, selectedIndex));
+            }
+            {   // Padded stride: padding is skipped and nothing is reported.
+                auto input = parts;
+                float paddedXyz[14] = {1,2,3, 4,5,6, 0, 7,8,9, 10,11,12, 0};
+                std::uint16_t paddedDisparity[6] = {1,2,0, 3,4,0};
+                auto& sel = selectedPart(input);
+                sel.data = ace ? static_cast<const void*>(paddedDisparity) : static_cast<const void*>(paddedXyz);
+                sel.bytes = ace ? sizeof(paddedDisparity) : sizeof(paddedXyz);
+                sel.stride = ace ? 6U : 28U;
+                const auto out = run(input, 203U, stereo);
+                assert(out.frame && out.frame->hasRangeFrame() && out.anomalies.count == 0U);
+                const auto& range = out.frame->ranges().front().payload;
+                if (ace) assert(std::fabs(range.zValues[2] - 1000.0F / 3.0F) < 0.01F);
+                else assert(range.zValues[2] == 9.0F && range.zValues[3] == 12.0F);
+            }
+            {   // Unexpected formats map to the same bytes per element, or stay raw bytes.
+                auto input = parts;
+                input.intensity.pixelType = Pylon::PixelType_BayerGR8;
+                const std::uint16_t rawRange[4] = {11, 12, 13, 14};
+                auto& sel = selectedPart(input);
+                sel.data = rawRange; sel.bytes = sizeof(rawRange); sel.stride = 4U;
+                sel.pixelType = Pylon::PixelType_Mono16;
+                const auto out = run(input, 204U, stereo);
+                assert(out.frame && !out.frame->hasRangeFrame() && out.frame->images().size() == 2U);
+                assert(has(out, PylonRangeRejection::Reason::UnsupportedFormat, 0U));
+                assert(has(out, PylonRangeRejection::Reason::UnsupportedFormat, selectedIndex));
+                const auto& image = out.frame->images()[0].payload;
+                assert(image.pixelFormat == GraphicsImagePixelFormat::Mono8 && image.data()[3] == 4U);
+                const auto& raw = out.frame->images()[1].payload;
+                assert(raw.pixelFormat == GraphicsImagePixelFormat::Mono16 && raw.width == 2 && raw.height == 2);
+                assert(std::memcmp(raw.data(), rawRange, sizeof(rawRange)) == 0);
+            }
+            {   // A missing part is absent with a diagnostic and never removes another part.
+                auto input = parts;
+                selectedPart(input) = {};
+                auto out = run(input, 205U, stereo);
+                assert(out.frame && out.frame->hasImage() && !out.frame->hasRangeFrame());
+                assert(out.first && out.first->reason == PylonRangeRejection::Reason::MissingRange);
+                input = parts;
+                input.intensity = {};
+                out = run(input, 206U, stereo);
+                assert(out.frame && out.frame->hasRangeFrame() && !out.frame->hasImage());
+                assert(out.anomalies.count >= 1U);
+            }
+            {   // Anomalies in two parts are all counted and both parts are published.
+                auto input = parts;
+                input.intensity.stride = 1U;
+                selectedPart(input).bytes = ace ? 6U : 36U;
+                const auto out = run(input, 207U, stereo);
+                assert(out.frame && out.frame->hasImage() && out.frame->hasRangeFrame());
+                assert(has(out, PylonRangeRejection::Reason::StrideBelowMinimum, 0U));
+                assert(has(out, PylonRangeRejection::Reason::TruncatedData, selectedIndex));
+                assert(out.anomalies.count >= 2U);
+            }
+            {   // Every selected part empty: nothing is published and no frame is admitted.
+                CameraStereoParts none;
+                auto out = run(none, 208U, stereo);
+                assert(!out.frame && out.calls == 0U && out.error == GraphicsFrameError::InvalidInput);
+                assert(out.anomalies.count >= 1U);
+                auto input = parts;
+                input.intensity.bytes = 0U; selectedPart(input).data = nullptr;
+                out = run(input, 209U, stereo);
+                assert(!out.frame && out.calls == 0U && out.error == GraphicsFrameError::InvalidInput);
+                assert(has(out, PylonRangeRejection::Reason::MissingData, 0U));
+                assert(has(out, PylonRangeRejection::Reason::MissingData, selectedIndex));
+            }
+            {   // Missing or invalid calibration publishes the samples as a raw range image.
+                auto uncalibrated = stereo;
+                if (ace) uncalibrated.baseline = 0.0; else uncalibrated.focalLength = 0.0;
+                auto input = parts;
+                auto& sel = selectedPart(input);
+                const std::uint16_t depth[4] = {5, 6, 7, 8};
+                sel.data = depth; sel.bytes = sizeof(depth); sel.stride = 4U; sel.pixelType = Pylon::PixelType_Coord3D_C16;
+                auto out = run(input, 210U, uncalibrated);
+                assert(out.frame && !out.frame->hasRangeFrame() && out.frame->images().size() == 2U);
+                assert(has(out, PylonRangeRejection::Reason::InvalidCalibration, selectedIndex));
+                assert(std::memcmp(out.frame->images()[1].payload.data(), depth, sizeof(depth)) == 0);
+                uncalibrated.coordinateScale = 0.0; uncalibrated.baseline = 0.0; uncalibrated.focalLength = 0.0;
+                out = run(input, 211U, uncalibrated);
+                assert(out.frame && has(out, PylonRangeRejection::Reason::MissingCalibration, selectedIndex));
             }
             BudgetSource shortBudget;
             shortBudget.shortage = 1U;
             GraphicsFrameError error = GraphicsFrameError::None;
-            auto frame = adapter.convertStereoParts(parts, {}, stereo, shortBudget, 102U, nullptr, nullptr, &error);
+            auto frame = adapter.convertStereoParts(parts, {}, stereo, shortBudget, 102U, nullptr, &error);
             assert(!frame && error == GraphicsFrameError::Allocation);
             assert(shortBudget.calls == 1U && shortBudget.allocator->used < shortBudget.requested);
         }
@@ -704,6 +856,20 @@ int main()
         }
         assert(anomalies.count >= 2U && sawIntensity && sawConfidence);
         assert(independent->ranges().front().payload.zValues[0] == 3.0F);
+
+        // A listed part without bytes is absent with a diagnostic and adds no zero-filled channel.
+        auto emptyIntensity = source;
+        emptyIntensity.intensity.readableBytes = 0U;
+        PylonFrameAnomalies emptyAnomalies;
+        rejection.reset();
+        const auto withoutIntensity = blaze.convertSource(
+            emptyIntensity, rangeAndCloud, frameSource, 89U, &rejection, &emptyAnomalies);
+        assert(withoutIntensity && withoutIntensity->hasRangeFrame());
+        assert(withoutIntensity->ranges().front().payload.intensity.empty()
+            && withoutIntensity->ranges().front().payload.rgb.empty());
+        assert(withoutIntensity->ranges().front().payload.confidence.size() == 4U);
+        assert(emptyAnomalies.count == 1U && emptyAnomalies.entries[0].affectedPart == 1U
+            && emptyAnomalies.entries[0].reason == PylonRangeRejection::Reason::MissingData);
 
         auto noRange = source;
         noRange.coordinates = nullptr; noRange.coordinateReadableBytes = 0U;
