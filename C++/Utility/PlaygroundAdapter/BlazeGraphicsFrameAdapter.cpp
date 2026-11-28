@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <utility>
 
@@ -79,11 +80,9 @@ struct BlazeFrameOptions
                                    std::size_t& stride)
 {
     const std::size_t width = static_cast<std::size_t>(component.GetWidth());
-    const std::size_t height = static_cast<std::size_t>(component.GetHeight());
-    const std::size_t dataSize = component.GetDataSize();
     if (component.GetStride(stride))
     {
-        return stride > 0U && (height == 0U || stride <= dataSize / height);
+        return stride > 0U;
     }
 
     if (fallbackBytesPerPixel == 0U)
@@ -102,7 +101,7 @@ struct BlazeFrameOptions
         return false;
     }
     stride = packedStride + padding;
-    return stride > 0U && (height == 0U || stride <= dataSize / height);
+    return stride > 0U;
 }
 
 [[nodiscard]] bool hasSameExtent(const Pylon::CPylonDataComponent& component,
@@ -125,21 +124,21 @@ struct BlazeFrameOptions
     return dstY * width + dstX;
 }
 
-[[nodiscard]] float readScalar(const std::uint8_t* row,
-                               const std::size_t x,
-                               const Pylon::EPixelType pixelType) noexcept
+[[nodiscard]] std::uint16_t boundedScalar(const BlazeScalarSource& source,
+                                                std::size_t x, std::size_t y) noexcept
 {
-    switch (pixelType)
-    {
-    case Pylon::PixelType_Mono8:
-    case Pylon::PixelType_Confidence8:
-        return static_cast<float>(row[x]);
-    case Pylon::PixelType_Mono16:
-    case Pylon::PixelType_Confidence16:
-        return static_cast<float>(reinterpret_cast<const std::uint16_t*>(row)[x]);
-    default:
-        return std::numeric_limits<float>::quiet_NaN();
-    }
+    const auto bytes = bytesPerPixel(source.pixelType);
+    const auto max = (std::numeric_limits<std::size_t>::max)();
+    if (!source.data || !source.stride || !bytes || y > max / source.stride || x > max / bytes) return 0U;
+    const auto row = y * source.stride;
+    const auto column = x * bytes;
+    if (column >= source.stride || row > max - column) return 0U;
+    const auto offset = row + column;
+    if (offset >= source.readableBytes) return 0U;
+    std::uint16_t value = 0U;
+    std::memcpy(&value, source.data + offset,
+                (std::min)({bytes, source.stride - column, source.readableBytes - offset}));
+    return value;
 }
 
 [[nodiscard]] std::uint8_t scalarBits(const Pylon::EPixelType pixelType) noexcept
@@ -154,23 +153,6 @@ struct BlazeFrameOptions
         return 16U;
     default:
         return 0U;
-    }
-}
-
-[[nodiscard]] std::uint8_t readScalarRgb8(const std::uint8_t* row,
-                                          const std::size_t x,
-                                          const Pylon::EPixelType pixelType) noexcept
-{
-    switch (pixelType)
-    {
-    case Pylon::PixelType_Mono8:
-    case Pylon::PixelType_Confidence8:
-        return row[x];
-    case Pylon::PixelType_Mono16:
-    case Pylon::PixelType_Confidence16:
-        return static_cast<std::uint8_t>(reinterpret_cast<const std::uint16_t*>(row)[x] >> 8U);
-    default:
-        return 255U;
     }
 }
 
@@ -189,11 +171,10 @@ void writeScalarComponent(const BlazeScalarSource& component,
     for (std::ptrdiff_t ySigned = 0; ySigned < static_cast<std::ptrdiff_t>(height); ++ySigned)
     {
         const auto y = static_cast<std::size_t>(ySigned);
-        const auto* row = component.data + y * component.stride;
         for (std::size_t x = 0; x < width; ++x)
         {
             values[orientedIndex(x, y, width, height, options)] =
-                readScalar(row, x, component.pixelType);
+                static_cast<float>(boundedScalar(component, x, y));
         }
     }
 }
@@ -283,23 +264,30 @@ void recordRangeRejection(std::optional<PylonRangeRejection>* rejection,
     }
 }
 
-[[nodiscard]] bool hasInvalidPoint(
-    const BlazeRangeSource& source,
-    const std::size_t width,
-    const std::size_t height) noexcept
+[[nodiscard]] Coord3DPoint boundedPoint(const BlazeRangeSource& source,
+                                         std::size_t x, std::size_t y) noexcept
+{
+    Coord3DPoint point{};
+    const auto max = (std::numeric_limits<std::size_t>::max)();
+    if (!source.coordinates || !source.coordinateStride || y > max / source.coordinateStride
+        || x > max / sizeof(Coord3DPoint)) return point;
+    const auto row = y * source.coordinateStride;
+    const auto column = x * sizeof(Coord3DPoint);
+    if (column >= source.coordinateStride || row > max - column) return point;
+    const auto offset = row + column;
+    if (offset >= source.coordinateReadableBytes) return point;
+    const auto available = (std::min)({sizeof(point), source.coordinateStride - column,
+                                        source.coordinateReadableBytes - offset});
+    std::memcpy(&point, source.coordinates + offset, available);
+    return point;
+}
+
+[[nodiscard]] bool hasInvalidPoint(const BlazeRangeSource& source,
+                                   std::size_t width, std::size_t height) noexcept
 {
     for (std::size_t y = 0; y < height; ++y)
-    {
-        const auto* row = reinterpret_cast<const Coord3DPoint*>(
-            source.coordinates + y * source.coordinateStride);
         for (std::size_t x = 0; x < width; ++x)
-        {
-            if (!isFinitePoint(row[x]))
-            {
-                return true;
-            }
-        }
-    }
+            if (!isFinitePoint(boundedPoint(source, x, y))) return true;
     return false;
 }
 
@@ -338,11 +326,12 @@ std::optional<GraphicsFrame> buildBlazeFrame(
     }
 
     if (source.coordinateStride < minimumRowBytes)
-    {
         recordRangeRejection(rejection, rangeEvidence(source, frameSequence,
             PylonRangeRejection::Reason::StrideBelowMinimum, minimumRowBytes, source.coordinateStride));
-        return std::nullopt;
-    }
+    else if (source.coordinateStride != 0U && static_cast<std::size_t>(source.height)
+             > source.coordinateReadableBytes / source.coordinateStride)
+        recordRangeRejection(rejection, rangeEvidence(source, frameSequence,
+            PylonRangeRejection::Reason::TruncatedData, minimumRowBytes, source.coordinateStride));
 
     const std::size_t width = static_cast<std::size_t>(source.width);
     const std::size_t height = static_cast<std::size_t>(source.height);
@@ -459,14 +448,10 @@ std::optional<GraphicsFrame> buildBlazeFrame(
     std::uint8_t* const rgb = writer.rgbData();
     for (std::size_t y = 0; y < height; ++y)
     {
-        const auto* row = reinterpret_cast<const Coord3DPoint*>(
-            source.coordinates + y * source.coordinateStride);
-        const auto* intensityRow = pointColorSource != nullptr
-            ? pointColorSource->data + y * pointColorSource->stride : nullptr;
         for (std::size_t x = 0; x < width; ++x)
         {
             const std::size_t index = orientedIndex(x, y, width, height, options);
-            const Coord3DPoint& point = row[x];
+            const Coord3DPoint point = boundedPoint(source, x, y);
             const bool valid = isFinitePoint(point);
             const float worldY = options.rotatePointCloudAroundX180 ? -point.y : point.y;
 
@@ -479,8 +464,9 @@ std::optional<GraphicsFrame> buildBlazeFrame(
             }
             if (rgb != nullptr)
             {
-                const std::uint8_t gray = readScalarRgb8(
-                    intensityRow, x, pointColorSource->pixelType);
+                const auto scalar = boundedScalar(*pointColorSource, x, y);
+                const std::uint8_t gray = static_cast<std::uint8_t>(
+                    scalarBits(pointColorSource->pixelType) == 16U ? scalar >> 8U : scalar);
                 const std::size_t colorOffset = index * 3U;
                 rgb[colorOffset] = gray;
                 rgb[colorOffset + 1U] = gray;

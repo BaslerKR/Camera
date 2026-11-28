@@ -668,11 +668,23 @@ int main()
         shortStride.coordinateStride = source.coordinateStride / 2U;
         shortStride.reportedCoordinateStride = shortStride.coordinateStride;
         rejection.reset();
-        assert(!blaze.convertSource(shortStride, {}, frameSource, 85U, &rejection).has_value());
+        const auto fittedRange = blaze.convertSource(shortStride, rangeAndCloud, frameSource, 85U, &rejection);
+        assert(fittedRange && fittedRange->hasRangeFrame());
+        assert(fittedRange->ranges().front().payload.zValues[1] == 0.0F);
         assert(rejection && rejection->reason == PylonRangeRejection::Reason::StrideBelowMinimum);
         assert(rejection->reportedStride == shortStride.reportedCoordinateStride);
         assert(rejection->effectiveStride == shortStride.coordinateStride);
         assert(rejection->minimumRowBytes == source.coordinateStride);
+
+        auto shortData = source;
+        shortData.coordinateReadableBytes = sizeof(float) * 4U;
+        shortData.intensity.readableBytes = sizeof(std::uint16_t);
+        rejection.reset();
+        const auto fittedShort = blaze.convertSource(shortData, rangeAndCloud, frameSource, 86U, &rejection);
+        assert(fittedShort && fittedShort->hasRangeFrame());
+        assert(rejection && rejection->reason == PylonRangeRejection::Reason::TruncatedData);
+        assert(fittedShort->ranges().front().payload.zValues[3] == 0.0F);
+        assert(fittedShort->ranges().front().payload.intensity[1] == 0.0F);
 
         GraphicsFrameRequest unrequested;
         unrequested.components = GraphicsFrameComponent::Image;
