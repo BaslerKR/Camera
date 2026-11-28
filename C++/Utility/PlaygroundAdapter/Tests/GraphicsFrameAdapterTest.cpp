@@ -387,12 +387,23 @@ int main()
 
     Pylon::CPylonDataContainer emptyContainer;
     PylonScene3DProfile profile;
+    TrackedContextSource emptySource(GraphicsFrameContext::local());
+    GraphicsFrameError emptyError = GraphicsFrameError::None;
+    std::optional<PylonRangeRejection> emptyRejection;
     profile.family = PylonScene3DProfile::DeviceFamily::Blaze;
-    assert(!adapter.convertGraphicsFrame(emptyContainer, {}, profile).has_value());
-    profile.family = PylonScene3DProfile::DeviceFamily::StereoMini;
-    assert(!adapter.convertGraphicsFrame(emptyContainer, {}, profile).has_value());
-    profile.family = PylonScene3DProfile::DeviceFamily::StereoAce;
-    assert(!adapter.convertGraphicsFrame(emptyContainer, {}, profile).has_value());
+    assert(!adapter.convertGraphicsFrame(emptyContainer, {}, profile, 0U, nullptr,
+        &emptyRejection, &emptySource, &emptyError).has_value());
+    for (const auto family : {PylonScene3DProfile::DeviceFamily::StereoMini,
+                              PylonScene3DProfile::DeviceFamily::StereoAce}) {
+        profile.family = family;
+        emptyError = GraphicsFrameError::None;
+        emptyRejection.reset();
+        assert(!adapter.convertGraphicsFrame(emptyContainer, {}, profile, 0U, nullptr,
+            &emptyRejection, &emptySource, &emptyError).has_value());
+        assert(emptySource.calls == 0U);
+        assert(emptyError == GraphicsFrameError::InvalidInput);
+        assert(emptyRejection && emptyRejection->reason == PylonRangeRejection::Reason::InvalidLayout);
+    }
 
     // Blaze conversion through the neutral source seam: the range keeps the
     // previous XYZ values, validity mask, auxiliary channels and cloud colours,
