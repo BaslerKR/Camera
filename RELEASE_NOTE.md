@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Admit Camera 2D and 3D frame samples through one managed frame-context transaction.
+
 - Return `GraphicsAllocationSlice` from the test `GraphicsFrameAllocator` in `GraphicsFrameAdapterTest`, drop the removed `GraphicsRangeFrameWriterFailure::MisalignedStorage` branch in `BlazeGraphicsFrameAdapter` and the unreachable `PylonRangeRejection::Reason::StorageMisaligned` rejection, and adopt `DevicePluginSessionCapability::GraphicsViewer`.
 
 - Migrate camera frame production to immutable GraphicsFrame handles and builder-backed storage while preserving host lease refusal behavior.
