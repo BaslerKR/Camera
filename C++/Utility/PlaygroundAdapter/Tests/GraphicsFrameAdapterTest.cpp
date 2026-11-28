@@ -50,6 +50,23 @@ static GraphicsFrameContext testContext(
     return GraphicsFrameContext(std::make_shared<TestStorageProvider>(std::move(acquire)));
 }
 
+class TrackedContextSource final : public GraphicsFrameContextSource
+{
+public:
+    explicit TrackedContextSource(GraphicsFrameContext context) : context(std::move(context)) {}
+    GraphicsResult<GraphicsFrameContext> beginFrame(std::size_t bytes) noexcept override
+    {
+        ++calls;
+        requestedBytes = bytes;
+        if (error != GraphicsFrameError::None) return error;
+        return context;
+    }
+    GraphicsFrameContext context;
+    GraphicsFrameError error = GraphicsFrameError::None;
+    std::size_t calls = 0;
+    std::size_t requestedBytes = 0;
+};
+
 static_assert(std::is_const_v<std::remove_reference_t<decltype(*std::declval<GraphicsSpan<std::uint8_t>>().data())>>);
 static_assert(std::is_const_v<std::remove_reference_t<decltype(std::declval<GraphicsFrame>().ranges())>>);
 
@@ -110,7 +127,6 @@ int main()
     auto refusedContext = testContext([](std::size_t) { return std::shared_ptr<std::uint8_t>(); });
     GraphicsFrameBuilder refusedBuilder(refusedContext);
     assert(!adapter.convertGraphicsImage(source, refusedBuilder, 44U).isValid());
-    adapter.setFrameStorage(GraphicsFrameContext::local());
 
     // 2D rejections carry the SDK input sequence and bounded layout values only.
     {
@@ -133,7 +149,6 @@ int main()
         assert(rejection->minimumRowBytes == 2U);
         assert(rejection->readableBytes == source.GetImageSize());
         assert(rejection->requiredBytes == rejection->effectiveStride * 2U);
-        adapter.setFrameStorage(GraphicsFrameContext::local());
 
         rejection.reset();
         const GraphicsImage retained = adapter.convertGraphicsImage(source, rejectionBuilder, 73U, &rejection);
@@ -224,6 +239,8 @@ int main()
         source.confidence.stride = sizeof(std::uint16_t) * 2U;
         source.confidence.pixelType = Pylon::PixelType_Confidence16;
         source.hasConfidence = true;
+        source.intensity.readableBytes = sizeof(intensitySamples);
+        source.confidence.readableBytes = sizeof(confidenceSamples);
 
         std::size_t storageCalls = 0U;
         std::shared_ptr<std::uint8_t> storageBlock;
@@ -235,8 +252,10 @@ int main()
         });
 
         BlazeGraphicsFrameAdapter blaze;
-        blaze.setFrameStorage(storage);
-        const auto scene = blaze.convertSource(source, {});
+        TrackedContextSource frameSource(storage);
+        GraphicsFrameRequest rangeAndCloud;
+        rangeAndCloud.components = GraphicsFrameComponent::Range | GraphicsFrameComponent::PointCloud;
+        const auto scene = blaze.convertSource(source, rangeAndCloud, frameSource);
         assert(scene.has_value());
         const GraphicsFrame sharedScene = *scene;
         assert(sharedScene.ranges().front().payload.zValues.data()
@@ -273,7 +292,7 @@ int main()
         // derived cloud, without unrelated auxiliary channels.
         GraphicsFrameRequest cloudOnlyRequest;
         cloudOnlyRequest.components = GraphicsFrameComponent::PointCloud;
-        const auto cloudOnly = blaze.convertSource(source, cloudOnlyRequest);
+        const auto cloudOnly = blaze.convertSource(source, cloudOnlyRequest, frameSource);
         assert(cloudOnly.has_value() && cloudOnly->pointClouds().empty());
         assert(cloudOnly->ranges().size() == 1U);
         const RangeFrame& cloudOnlyRange = cloudOnly->ranges().front().payload;
@@ -284,7 +303,7 @@ int main()
         // A Range-only request keeps no cloud colours.
         GraphicsFrameRequest rangeOnlyRequest;
         rangeOnlyRequest.components = GraphicsFrameComponent::Range;
-        const auto rangeOnly = blaze.convertSource(source, rangeOnlyRequest);
+        const auto rangeOnly = blaze.convertSource(source, rangeOnlyRequest, frameSource);
         assert(rangeOnly.has_value() && rangeOnly->pointClouds().empty());
         assert(rangeOnly->ranges().size() == 1U);
         assert(rangeOnly->ranges().front().payload.rgb.empty());
@@ -292,22 +311,22 @@ int main()
         // Range evidence names the real failed rule, keeps the SDK sequence, and
         // stays empty when a valid range (and its intensity) is retained.
         std::optional<PylonRangeRejection> rejection;
-        const auto retainedRange = blaze.convertSource(source, {}, 82U, &rejection);
+        const auto retainedRange = blaze.convertSource(source, rangeAndCloud, frameSource, 82U, &rejection);
         assert(retainedRange.has_value() && !rejection.has_value());
 
         BlazeRangeSource missing;
         missing.width = 2;
         missing.height = 2;
         rejection.reset();
-        assert(!blaze.convertSource(missing, {}, 83U, &rejection).has_value());
+        assert(!blaze.convertSource(missing, {}, frameSource, 83U, &rejection).has_value());
         assert(rejection.has_value());
         assert(rejection->reason == PylonRangeRejection::Reason::MissingData);
         assert(rejection->frameSequence == 83U);
         assert(rejection->width == 2U && rejection->height == 2U);
 
-        blaze.setFrameStorage(testContext([](const std::size_t) { return std::shared_ptr<std::uint8_t>(); }));
+        frameSource.context = testContext([](const std::size_t) { return std::shared_ptr<std::uint8_t>(); });
         rejection.reset();
-        assert(!blaze.convertSource(source, {}, 84U, &rejection).has_value());
+        assert(!blaze.convertSource(source, rangeAndCloud, frameSource, 84U, &rejection).has_value());
         assert(rejection.has_value());
         assert(rejection->reason == PylonRangeRejection::Reason::StorageRefused);
         assert(rejection->frameSequence == 84U);
@@ -316,12 +335,12 @@ int main()
         assert(rejection->readableBytes == sizeof(coordinates));
         assert(rejection->requiredBytes == sizeof(coordinates));
 
-        blaze.setFrameStorage(GraphicsFrameContext::local());
+        frameSource.context = GraphicsFrameContext::local();
         auto shortStride = source;
         shortStride.coordinateStride = source.coordinateStride / 2U;
         shortStride.reportedCoordinateStride = shortStride.coordinateStride;
         rejection.reset();
-        assert(!blaze.convertSource(shortStride, {}, 85U, &rejection).has_value());
+        assert(!blaze.convertSource(shortStride, {}, frameSource, 85U, &rejection).has_value());
         assert(rejection && rejection->reason == PylonRangeRejection::Reason::StrideBelowMinimum);
         assert(rejection->reportedStride == shortStride.reportedCoordinateStride);
         assert(rejection->effectiveStride == shortStride.coordinateStride);
@@ -330,7 +349,8 @@ int main()
         GraphicsFrameRequest unrequested;
         unrequested.components = GraphicsFrameComponent::Image;
         rejection.reset();
-        assert(!blaze.convertSource(source, unrequested, 86U, &rejection).has_value());
+        const auto imageOnly = blaze.convertSource(source, unrequested, frameSource, 86U, &rejection);
+        assert(imageOnly && imageOnly->hasImage() && !imageOnly->hasRangeFrame());
         assert(!rejection.has_value());
     }
     return 0;
