@@ -131,7 +131,7 @@ void CameraSourceController::beginRejectionRun(const bool single) {
     cancelFrameRun();
     _graphicsStream.reset();
     _droppedFrames.store(0, std::memory_order_relaxed);
-    _frameClassRefused.store(false, std::memory_order_release);
+    _refusedFrames.store(0, std::memory_order_relaxed);
     _graphicsStream = std::make_unique<PylonGraphicsFrameStream>(
         _camera,
         [this](GraphicsFrame&& payload, unsigned int sourceIndex) {
@@ -144,10 +144,11 @@ void CameraSourceController::beginRejectionRun(const bool single) {
         [this](const PylonImageRejection& evidence) { reportImageRejection(evidence); },
         [this](const PylonRangeRejection& evidence) { reportRangeRejection(evidence); },
         [this](GraphicsFrameError error) {
-            if (error == GraphicsFrameError::NoReadyCredit || error == GraphicsFrameError::ClassRefused)
+            if (error == GraphicsFrameError::NoReadyCredit || error == GraphicsFrameError::ClassRefused
+                || error == GraphicsFrameError::Capacity)
                 _droppedFrames.fetch_add(1, std::memory_order_relaxed);
-            if (error == GraphicsFrameError::ClassRefused)
-                _frameClassRefused.store(true, std::memory_order_release);
+            if (error == GraphicsFrameError::ClassRefused || error == GraphicsFrameError::Capacity)
+                _refusedFrames.fetch_add(1, std::memory_order_relaxed);
         });
     _graphicsStream->setFrameContextSource(_contextSource);
     _rejectionRunSingle.store(single, std::memory_order_relaxed);

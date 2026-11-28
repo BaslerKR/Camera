@@ -201,7 +201,7 @@ private:
     std::unique_ptr<PylonGraphicsFrameStream> _graphicsStream;
     std::shared_ptr<GraphicsFrameContextSource> _contextSource;
     std::atomic<std::uint64_t> _droppedFrames{0};
-    std::atomic<bool> _frameClassRefused{false};
+    std::atomic<std::uint64_t> _refusedFrames{0};
     const DeviceImageRejectionSink _imageRejectionSink = nullptr;
     const DeviceRangeRejectionSink _rangeRejectionSink = nullptr;
     std::array<std::atomic<std::uint64_t>,

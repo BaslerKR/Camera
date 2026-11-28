@@ -94,26 +94,33 @@ private slots:
         source->error = GraphicsFrameError::ClassRefused;
         oldCallback(image, 2U);
         QCOMPARE(source->calls, 2);
-        QVERIFY(controller._frameClassRefused.load());
+        QCOMPARE(controller._refusedFrames.load(), std::uint64_t{1});
         QCOMPARE(controller._droppedFrames.load(), std::uint64_t{2});
         {
             std::lock_guard<std::mutex> lock(observationMutex);
             QVERIFY(!imageObservations.empty());
             QCOMPARE(imageObservations.back().reason, DeviceImageRejection::StorageRefused);
         }
+        // A refusal drops that frame only: the next frame tries again and is counted.
         oldCallback(image, 3U);
-        QCOMPARE(source->calls, 2);
-        controller.cancelFrameRun();
-        source->error = GraphicsFrameError::None;
-        controller.beginRejectionRun(false);
-        oldCallback(image, 4U);
-        QCOMPARE(source->calls, 2);
+        QCOMPARE(source->calls, 3);
+        QCOMPARE(controller._refusedFrames.load(), std::uint64_t{2});
+        QCOMPARE(controller._droppedFrames.load(), std::uint64_t{3});
         QCOMPARE(published, 0);
+        source->error = GraphicsFrameError::None;
+        oldCallback(image, 4U);
+        QCOMPARE(source->calls, 4);
+        QCOMPARE(published, 1);
+        controller.cancelFrameRun();
+        controller.beginRejectionRun(false);
+        oldCallback(image, 5U);
+        QCOMPARE(source->calls, 4);
+        QCOMPARE(published, 1);
         QVERIFY(!camera._grabCallbacks.empty());
         auto newCallback = camera._grabCallbacks.begin()->second;
-        newCallback(image, 5U);
-        QCOMPARE(source->calls, 3);
-        QCOMPARE(published, 1);
+        newCallback(image, 6U);
+        QCOMPARE(source->calls, 5);
+        QCOMPARE(published, 2);
     }
 
     void singleEmitsEveryFailure() {

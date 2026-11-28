@@ -1256,17 +1256,12 @@ DeviceConnectionResult CameraSourceController::requestSingle(std::string connect
                 "Single acquisition did not finish within 30 s; accepted effects may have occurred.",
                 DeviceConnectionEffect::Applied, copiedConnectionState(_camera->connectionState())};
         }
-        if (_frameClassRefused.load(std::memory_order_acquire)) {
-            lock.unlock();
-            cancelFrameRun();
-            _camera->stop();
-            return {DeviceConnectionError::BackendFailure, "Camera frame storage class was refused.",
-                DeviceConnectionEffect::Applied, copiedConnectionState(_camera->connectionState())};
-        }
         if (wait->delivered == 0) {
             lock.unlock();
             _camera->stop();
-            return {DeviceConnectionError::BackendFailure, "Single acquisition delivered no frame.",
+            return {DeviceConnectionError::BackendFailure,
+                _refusedFrames.load(std::memory_order_acquire) != 0U
+                    ? "Camera frame storage class was refused." : "Single acquisition delivered no frame.",
                 DeviceConnectionEffect::Applied, copiedConnectionState(_camera->connectionState())};
         }
         return {{}, {}, DeviceConnectionEffect::Applied, copiedConnectionState(_camera->connectionState())};

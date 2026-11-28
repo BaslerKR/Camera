@@ -38,6 +38,16 @@ public:
 
     void cancel() noexcept { _cancelled.store(true, std::memory_order_release); }
 
+    /** A refused or oversized frame is dropped alone; the message is surfaced once per run. */
+    void surfaceRefusal(const GraphicsFrameError error)
+    {
+        if (error != GraphicsFrameError::ClassRefused && error != GraphicsFrameError::Capacity) return;
+        if (_refusalSurfaced.exchange(true, std::memory_order_acq_rel)) return;
+        CameraSystem::syslog(error == GraphicsFrameError::ClassRefused
+            ? "Camera frame storage class was refused."
+            : "Camera frame exceeded the storage capacity.", true);
+    }
+
     void setFrameContextSource(std::shared_ptr<GraphicsFrameContextSource> source)
     {
         std::lock_guard<std::mutex> lock(_storageMutex);
@@ -52,7 +62,7 @@ private:
     PylonGraphicsFrameAdapter _adapter;
     std::mutex _storageMutex;
     std::atomic<bool> _cancelled{false};
-    std::atomic<bool> _refused{false};
+    std::atomic<bool> _refusalSurfaced{false};
     CameraStorageOutcomeCallback _storageOutcome;
     std::shared_ptr<GraphicsFrameContextSource> _contextSource;
     GraphicsFrameCallbackGate _callbackGate;
@@ -78,8 +88,7 @@ PylonGraphicsFrameStream::Impl::Impl(
     _grabCallbackId = _camera->registerGrabCallback(
         [this, callbackToken](const Pylon::CPylonImage& image, const std::size_t sequence) {
             GraphicsFrameCallbackGate::Lease lease(callbackToken);
-            if (!lease || _cancelled.load(std::memory_order_acquire)
-                || _refused.load(std::memory_order_acquire)) return;
+            if (!lease || _cancelled.load(std::memory_order_acquire)) return;
             try
             {
                 std::shared_ptr<GraphicsFrameContextSource> contextSource;
@@ -100,18 +109,17 @@ PylonGraphicsFrameStream::Impl::Impl(
                     &storageError, &_cancelled);
                 if (!frame)
                 {
-                    if (storageError == GraphicsFrameError::ClassRefused)
-                        _refused.store(true, std::memory_order_release);
                     if (_storageOutcome && storageError != GraphicsFrameError::None)
                         _storageOutcome(storageError);
                     if (_imageRejection && rejection && storageError != GraphicsFrameError::Disconnected
                         && storageError != GraphicsFrameError::NoReadyCredit) _imageRejection(*rejection);
+                    surfaceRefusal(storageError);
                     if (storageError != GraphicsFrameError::None && storageError != GraphicsFrameError::NoReadyCredit
-                        && storageError != GraphicsFrameError::Disconnected)
+                        && storageError != GraphicsFrameError::Disconnected
+                        && storageError != GraphicsFrameError::ClassRefused
+                        && storageError != GraphicsFrameError::Capacity)
                     {
-                        CameraSystem::syslog(storageError == GraphicsFrameError::ClassRefused
-                            ? "Camera frame storage class was refused."
-                            : "Camera GraphicsFrame 2D storage failed.", true);
+                        CameraSystem::syslog("Camera GraphicsFrame 2D storage failed.", true);
                     }
                     return;
                 }
@@ -132,8 +140,7 @@ PylonGraphicsFrameStream::Impl::Impl(
     _grab3DCallbackId = _camera->registerGrab3DCallback(
         [this, callbackToken](const Pylon::CPylonDataContainer& container, const std::size_t sequence) {
             GraphicsFrameCallbackGate::Lease lease(callbackToken);
-            if (!lease || _cancelled.load(std::memory_order_acquire)
-                || _refused.load(std::memory_order_acquire)) return;
+            if (!lease || _cancelled.load(std::memory_order_acquire)) return;
             try
             {
                 std::optional<PylonImageRejection> imageRejection;
@@ -150,10 +157,7 @@ PylonGraphicsFrameStream::Impl::Impl(
                     sequence, _imageRejection ? &imageRejection : nullptr,
                     _rangeRejection ? &rangeRejection : nullptr, contextSource.get(),
                     &storageError, &_cancelled, &anomalies);
-                if (storageError == GraphicsFrameError::ClassRefused) {
-                    _refused.store(true, std::memory_order_release);
-                    CameraSystem::syslog("Camera frame storage class was refused.", true);
-                }
+                surfaceRefusal(storageError);
                 if (_storageOutcome && storageError != GraphicsFrameError::None)
                     _storageOutcome(storageError);
                 // Ordered, best-effort evidence: 2D first, then the range rule.
