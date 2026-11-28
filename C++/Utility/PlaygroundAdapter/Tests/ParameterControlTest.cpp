@@ -1578,6 +1578,7 @@ private slots:
         auto* camera = system.addCamera(); QVERIFY(camera);
         {
         CameraSourceController controller(camera);
+        controller.setFrameContextSource(std::make_shared<GraphicsLocalFrameContextSource>());
         auto* connection = qobject_cast<IDeviceConnectionControl*>(&controller); QVERIFY(connection);
         const auto run = [](auto& future) {
             const bool ready = future.wait_for(std::chrono::seconds(30)) == std::future_status::ready;
