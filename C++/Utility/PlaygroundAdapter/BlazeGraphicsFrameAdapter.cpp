@@ -71,7 +71,10 @@ struct BlazeFrameOptions
     case Pylon::PixelType_Confidence16:
         return 2U;
     default:
-        return 0U;
+        try {
+            const auto bits = Pylon::BitPerPixel(pixelType);
+            return bits == 8U || bits == 16U || bits == 24U || bits == 32U ? bits / 8U : 0U;
+        } catch (...) { return 0U; }
     }
 }
 
@@ -104,15 +107,6 @@ struct BlazeFrameOptions
     return stride > 0U;
 }
 
-[[nodiscard]] bool hasSameExtent(const Pylon::CPylonDataComponent& component,
-                                 const std::size_t width,
-                                 const std::size_t height)
-{
-    return component.IsValid()
-        && static_cast<std::size_t>(component.GetWidth()) == width
-        && static_cast<std::size_t>(component.GetHeight()) == height;
-}
-
 [[nodiscard]] std::size_t orientedIndex(const std::size_t x,
                                         const std::size_t y,
                                         const std::size_t width,
@@ -127,7 +121,8 @@ struct BlazeFrameOptions
 [[nodiscard]] std::uint16_t boundedScalar(const BlazeScalarSource& source,
                                                 std::size_t x, std::size_t y) noexcept
 {
-    const auto bytes = bytesPerPixel(source.pixelType);
+    const auto knownBytes = bytesPerPixel(source.pixelType);
+    const auto bytes = knownBytes ? knownBytes : 1U;
     const auto max = (std::numeric_limits<std::size_t>::max)();
     if (!source.data || !source.stride || !bytes || y > max / source.stride || x > max / bytes) return 0U;
     const auto row = y * source.stride;
@@ -137,7 +132,7 @@ struct BlazeFrameOptions
     if (offset >= source.readableBytes) return 0U;
     std::uint16_t value = 0U;
     std::memcpy(&value, source.data + offset,
-                (std::min)({bytes, source.stride - column, source.readableBytes - offset}));
+                (std::min)({bytes, sizeof(value), source.stride - column, source.readableBytes - offset}));
     return value;
 }
 
@@ -186,11 +181,8 @@ void writeScalarComponent(const BlazeScalarSource& component,
 {
     if (!component.IsValid()) return std::nullopt;
     const auto pixelType = component.GetPixelType();
-    const std::size_t pixelBytes = bytesPerPixel(pixelType);
-    if (pixelBytes == 0U || !hasSameExtent(component, width, height))
-    {
-        return std::nullopt;
-    }
+    const std::size_t pixelBytes = bytesPerPixel(pixelType) == 2U ? 2U : 1U;
+    if (!component.GetWidth() || !component.GetHeight()) return std::nullopt;
 
     const auto* src = static_cast<const std::uint8_t*>(component.GetData());
     if (src == nullptr)
@@ -302,40 +294,58 @@ std::optional<GraphicsFrame> buildBlazeFrame(
 {
     const bool wantsRangeFrame = hasGraphicsFrameComponent(options.components, GraphicsFrameComponent::Range);
     const bool wantsPointCloud = hasGraphicsFrameComponent(options.components, GraphicsFrameComponent::PointCloud);
+    const bool rangePresent = source.coordinates && source.coordinateReadableBytes != 0U && !source.rangeAsImage;
+    const bool rawRangeImage = (wantsRangeFrame || wantsPointCloud) && source.rangeAsImage
+        && source.rawRange.data && source.rawRange.readableBytes;
+    const bool intensityPresent = source.hasIntensity && source.intensity.data && source.intensity.readableBytes;
+    const bool confidencePresent = source.hasConfidence && source.confidence.data && source.confidence.readableBytes;
+    const bool hasRange = (wantsRangeFrame || wantsPointCloud) && rangePresent;
     const bool wantsImage = hasGraphicsFrameComponent(options.components, GraphicsFrameComponent::Image)
-        && source.hasIntensity;
-    if (!wantsRangeFrame && !wantsPointCloud && !wantsImage)
+        && intensityPresent;
+    const bool confidenceImage = !hasRange && confidencePresent && (wantsRangeFrame || wantsPointCloud);
+    const bool intensityImage = wantsImage || (!hasRange && intensityPresent && (wantsRangeFrame || wantsPointCloud));
+    if (!hasRange && !intensityImage && !confidenceImage && !rawRangeImage)
     {
-        // Not a failed rule: the request never asked for range data.
+        if (wantsRangeFrame || wantsPointCloud)
+            recordRangeRejection(rejection, rangeEvidence(source, frameSequence,
+                source.coordinates ? PylonRangeRejection::Reason::MissingRange : PylonRangeRejection::Reason::MissingData));
         return std::nullopt;
     }
     const auto minimumRowBytes = source.width > 0
         && static_cast<std::uint64_t>(source.width)
             <= (std::numeric_limits<std::uint64_t>::max)() / sizeof(Coord3DPoint)
         ? static_cast<std::uint64_t>(source.width) * sizeof(Coord3DPoint) : 0U;
-    if (source.coordinates == nullptr || source.coordinateStride == 0U
-        || source.width <= 0 || source.height <= 0)
-    {
-        const auto reason = source.coordinates == nullptr
-            ? PylonRangeRejection::Reason::MissingData
-            : (source.width <= 0 || source.height <= 0
-                ? PylonRangeRejection::Reason::InvalidDimensions
-                : PylonRangeRejection::Reason::InvalidLayout);
-        recordRangeRejection(rejection, rangeEvidence(source, frameSequence, reason, minimumRowBytes));
+    if (source.width <= 0 || source.height <= 0) {
+        recordRangeRejection(rejection, rangeEvidence(source, frameSequence,
+            PylonRangeRejection::Reason::InvalidDimensions, minimumRowBytes));
         return std::nullopt;
     }
-
-    if (source.coordinateStride < minimumRowBytes)
+    if (!rangePresent && (wantsRangeFrame || wantsPointCloud))
+        recordRangeRejection(rejection, rangeEvidence(source, frameSequence,
+            PylonRangeRejection::Reason::MissingRange, minimumRowBytes));
+    else if (rangePresent && source.coordinateStride < minimumRowBytes)
         recordRangeRejection(rejection, rangeEvidence(source, frameSequence,
             PylonRangeRejection::Reason::StrideBelowMinimum, minimumRowBytes, source.coordinateStride));
-    else if (source.coordinateStride != 0U && static_cast<std::size_t>(source.height)
+    else if (rangePresent && source.coordinateStride != 0U && static_cast<std::size_t>(source.height)
              > source.coordinateReadableBytes / source.coordinateStride)
         recordRangeRejection(rejection, rangeEvidence(source, frameSequence,
             PylonRangeRejection::Reason::TruncatedData, minimumRowBytes, source.coordinateStride));
 
     const std::size_t width = static_cast<std::size_t>(source.width);
     const std::size_t height = static_cast<std::size_t>(source.height);
-    const bool allValid = !hasInvalidPoint(source, width, height);
+    const auto diagnoseScalar = [&](const BlazeScalarSource& scalar, bool present) {
+        if (!present) return;
+        const auto bytes = bytesPerPixel(scalar.pixelType);
+        if (!bytes)
+            recordRangeRejection(rejection, rangeEvidence(source, frameSequence, PylonRangeRejection::Reason::UnsupportedFormat));
+        else if (!scalar.stride || scalar.stride < width * bytes)
+            recordRangeRejection(rejection, rangeEvidence(source, frameSequence, PylonRangeRejection::Reason::StrideBelowMinimum));
+        else if (height > scalar.readableBytes / scalar.stride)
+            recordRangeRejection(rejection, rangeEvidence(source, frameSequence, PylonRangeRejection::Reason::TruncatedData));
+    };
+    diagnoseScalar(source.intensity, intensityPresent);
+    diagnoseScalar(source.confidence, confidencePresent);
+    const bool allValid = !hasRange || !hasInvalidPoint(source, width, height);
     // A point cloud is derived from the range by the consumer, so a
     // PointCloud-only request still carries the range. Its RGB channel keeps
     // the grayscale intensity colours the explicit cloud used to carry.
@@ -357,35 +367,44 @@ std::optional<GraphicsFrame> buildBlazeFrame(
     layout.channels.intensity = includeIntensity;
     layout.channels.confidence = includeConfidence;
     layout.channels.rgb = includePointColors;
-    const bool hasRange = wantsRangeFrame || wantsPointCloud;
     auto rangePlan = planGraphicsRangeWrite(layout);
     if (hasRange && !rangePlan) {
         if (storageError) *storageError = rangePlan.error();
         return std::nullopt;
     }
-    GraphicsImageWriterSource imageSource;
-    GraphicsImageWriteLayout imageLayout;
-    if (wantsImage) {
-        imageSource.data = source.intensity.data;
-        imageSource.size = source.intensity.readableBytes;
-        imageSource.width = source.width;
-        imageSource.height = source.height;
-        if (source.intensity.stride > static_cast<std::size_t>((std::numeric_limits<int>::max)())) return std::nullopt;
-        imageSource.stride = static_cast<int>(source.intensity.stride);
-        imageSource.pixelFormat = bytesPerPixel(source.intensity.pixelType) == 1U
-            ? GraphicsImagePixelFormat::Mono8 : GraphicsImagePixelFormat::Mono16;
-        imageSource.bitsPerPixel = scalarBits(source.intensity.pixelType);
-        imageSource.sourceFormat = static_cast<int>(source.intensity.pixelType);
-        imageSource.frameSequence = frameSequence;
-        auto plan = planGraphicsImageWrite(imageSource);
-        if (!plan) return std::nullopt;
-        imageLayout = plan.value();
+    auto planImage = [&](const BlazeScalarSource& scalar, GraphicsImageWriteLayout& layout) {
+        GraphicsImageWriterSource image;
+        image.data = scalar.data;
+        image.width = source.width; image.height = source.height;
+        const auto bpp = bytesPerPixel(scalar.pixelType);
+        image.pixelFormat = bpp == 2U ? GraphicsImagePixelFormat::Mono16
+            : bpp == 3U ? GraphicsImagePixelFormat::RGB24
+            : bpp == 4U ? GraphicsImagePixelFormat::Mono32 : GraphicsImagePixelFormat::Mono8;
+        image.bitsPerPixel = GraphicsImageValidation::packedBitsPerPixel(image.pixelFormat);
+        const auto rowBytes = GraphicsImageValidation::minimumRowBytes(image.pixelFormat, image.width);
+        if (!rowBytes || rowBytes > static_cast<std::size_t>((std::numeric_limits<int>::max)())
+            || height > (std::numeric_limits<std::size_t>::max)() / rowBytes) return false;
+        image.stride = static_cast<int>(rowBytes); image.size = rowBytes * height;
+        auto plan = planGraphicsImageWrite(image);
+        if (!plan) return false;
+        layout = plan.value();
+        if (bpp == 0U || scalar.stride < rowBytes || (scalar.stride && height > scalar.readableBytes / scalar.stride))
+            recordRangeRejection(rejection, rangeEvidence(source, frameSequence,
+                bpp == 0U ? PylonRangeRejection::Reason::UnsupportedFormat : PylonRangeRejection::Reason::TruncatedData));
+        return true;
+    };
+    GraphicsImageWriteLayout intensityLayout, confidenceLayout, rawRangeLayout;
+    if ((intensityImage && !planImage(source.intensity, intensityLayout))
+        || (confidenceImage && !planImage(source.confidence, confidenceLayout))
+        || (rawRangeImage && !planImage(source.rawRange, rawRangeLayout))) {
+        if (storageError) *storageError = GraphicsFrameError::Capacity; return std::nullopt;
     }
     std::size_t sampleBytes = 0U;
-    if ((wantsImage && !appendAligned(sampleBytes, imageLayout.bytes, imageLayout.alignment))
+    if ((intensityImage && !appendAligned(sampleBytes, intensityLayout.bytes, intensityLayout.alignment))
+        || (confidenceImage && !appendAligned(sampleBytes, confidenceLayout.bytes, confidenceLayout.alignment))
+        || (rawRangeImage && !appendAligned(sampleBytes, rawRangeLayout.bytes, rawRangeLayout.alignment))
         || (hasRange && !appendAligned(sampleBytes, rangePlan.value().totalBytes, rangePlan.value().alignment))) {
-        if (storageError) *storageError = GraphicsFrameError::Capacity;
-        return std::nullopt;
+        if (storageError) *storageError = GraphicsFrameError::Capacity; return std::nullopt;
     }
     if (cancelled && cancelled->load(std::memory_order_acquire)) {
         if (storageError) *storageError = GraphicsFrameError::Disconnected;
@@ -401,19 +420,38 @@ std::optional<GraphicsFrame> buildBlazeFrame(
         return std::nullopt;
     }
     GraphicsFrameBuilder builder(context.value());
-    if (wantsImage) {
-        auto image = writeGraphicsImageWithFailure(builder, imageSource, nullptr);
-        if (!image.isValid()) {
-            if (storageError) *storageError = GraphicsFrameError::Allocation;
-            return std::nullopt;
+    auto appendImage = [&](const BlazeScalarSource& scalar, const GraphicsImageWriteLayout& imageLayout,
+                           const char* id, const char* label) {
+        auto reserved = builder.reserve<std::uint8_t>(imageLayout.bytes, imageLayout.alignment);
+        if (!reserved) { if (storageError) *storageError = reserved.error(); return false; }
+        auto region = std::move(reserved).value();
+        std::memset(region.data(), 0, region.size());
+        const auto rowBytes = static_cast<std::size_t>(imageLayout.strideBytes);
+        const auto stride = scalar.stride ? scalar.stride : rowBytes;
+        for (std::size_t y = 0; y < height; ++y) {
+            if (stride && y > (std::numeric_limits<std::size_t>::max)() / stride) break;
+            const auto offset = y * stride;
+            if (offset >= scalar.readableBytes) break;
+            std::memcpy(region.data() + y * rowBytes, scalar.data + offset,
+                        (std::min)({rowBytes, stride, scalar.readableBytes - offset}));
         }
-        builder.addImage("image", std::move(image), "Intensity", "primary");
+        GraphicsImage image;
+        image.pixels = builder.seal(std::move(region)); image.width = source.width; image.height = source.height;
+        image.stride = imageLayout.strideBytes; image.pixelFormat = imageLayout.format;
+        image.bitsPerPixel = GraphicsImageValidation::packedBitsPerPixel(imageLayout.format);
+        image.sourceFormat = static_cast<int>(scalar.pixelType); image.frameSequence = frameSequence;
+        builder.addImage(id, std::move(image), label, "primary");
         if (hasRange) {
             auto& descriptor = builder.content().images.back().descriptor;
             descriptor.registration = GraphicsImageRegistration::RegisteredToRange;
             descriptor.registeredResourceId = "range";
         }
-    }
+        return true;
+    };
+    if ((intensityImage && !appendImage(source.intensity, intensityLayout, "image", "Intensity"))
+        || (confidenceImage && !appendImage(source.confidence, confidenceLayout, "confidence", "Confidence"))
+        || (rawRangeImage && !appendImage(source.rawRange, rawRangeLayout, "range-raw", "Range")))
+        return std::nullopt;
     if (!hasRange) {
         auto published = std::move(builder).publish();
         if (!published) { if (storageError) *storageError = published.error(); return std::nullopt; }
@@ -588,76 +626,46 @@ std::optional<GraphicsFrame> BlazeGraphicsFrameAdapter::convertGraphicsFrame(
         }
     }
     const auto& range = parts.range;
-    if (!range.IsValid())
-    {
-        recordRangeRejection(rejection, rangeEvidence({}, frameSequence,
-            PylonRangeRejection::Reason::MissingRange));
-        return std::nullopt;
-    }
-
-    const std::size_t width = static_cast<std::size_t>(range.GetWidth());
-    const std::size_t height = static_cast<std::size_t>(range.GetHeight());
-    if (width > static_cast<std::size_t>((std::numeric_limits<int>::max)())
-        || height > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
-        recordRangeRejection(rejection, rangeEvidence({}, frameSequence, PylonRangeRejection::Reason::InvalidDimensions));
-        return std::nullopt;
-    }
-    const auto* src = static_cast<const std::uint8_t*>(range.GetData());
-    const std::size_t readableBytes = src != nullptr ? range.GetDataSize() : 0U;
-    std::size_t reportedStride = 0U;
-    if (!range.GetStride(reportedStride)) reportedStride = 0U;
-    BlazeRangeSource source;
-    source.coordinates = src;
-    source.reportedCoordinateStride = reportedStride;
-    source.coordinateReadableBytes = readableBytes;
-    source.width = static_cast<int>(width);
-    source.height = static_cast<int>(height);
-    source.rangePixelType = range.GetPixelType();
-    const auto componentEvidence = [&](const PylonRangeRejection::Reason reason,
-                                       const std::uint64_t minimum = 0U) {
-        recordRangeRejection(rejection, rangeEvidence(source, frameSequence, reason, minimum));
+    const auto hasData = [](const Pylon::CPylonDataComponent& part) {
+        return part.IsValid() && part.GetData() && part.GetDataSize() != 0U;
     };
-    if (source.rangePixelType != Pylon::PixelType_Coord3D_ABC32f)
-    {
-        componentEvidence(PylonRangeRejection::Reason::UnsupportedFormat);
+    const auto& reference = hasData(range) ? range : hasData(parts.intensity) ? parts.intensity : parts.confidence;
+    if (!hasData(reference)) {
+        recordRangeRejection(rejection, rangeEvidence({}, frameSequence, PylonRangeRejection::Reason::MissingRange));
+        if (storageError) *storageError = GraphicsFrameError::InvalidInput;
         return std::nullopt;
     }
-
-    if (width == 0U || height == 0U)
-    {
-        componentEvidence(PylonRangeRejection::Reason::InvalidDimensions);
+    const auto width = static_cast<std::size_t>(reference.GetWidth());
+    const auto height = static_cast<std::size_t>(reference.GetHeight());
+    if (!width || !height || width > static_cast<std::size_t>((std::numeric_limits<int>::max)())
+        || height > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
+        if (storageError) *storageError = GraphicsFrameError::Capacity;
         return std::nullopt;
     }
-
-    if (src == nullptr)
-    {
-        componentEvidence(PylonRangeRejection::Reason::MissingData);
-        return std::nullopt;
+    BlazeRangeSource source;
+    source.width = static_cast<int>(width); source.height = static_cast<int>(height);
+    if (hasData(range)) {
+        source.coordinates = static_cast<const std::uint8_t*>(range.GetData());
+        source.coordinateReadableBytes = range.GetDataSize();
+        source.rangePixelType = range.GetPixelType();
+        if (range.GetStride(source.reportedCoordinateStride)) source.coordinateStride = source.reportedCoordinateStride;
+        else if (!componentStride(range, sizeof(Coord3DPoint), source.coordinateStride))
+            source.coordinateStride = width * sizeof(Coord3DPoint);
+        if (source.rangePixelType != Pylon::PixelType_Coord3D_ABC32f) {
+            recordRangeRejection(rejection, rangeEvidence(source, frameSequence,
+                PylonRangeRejection::Reason::UnsupportedFormat));
+            source.rangeAsImage = true;
+            source.rawRange = {source.coordinates, source.coordinateStride, source.rangePixelType, source.coordinateReadableBytes};
+        }
+    } else {
+        recordRangeRejection(rejection, rangeEvidence(source, frameSequence, PylonRangeRejection::Reason::MissingRange));
     }
-
-    std::size_t stride = 0;
-    if (!componentStride(range, sizeof(Coord3DPoint), stride))
-    {
-        componentEvidence(PylonRangeRejection::Reason::InvalidLayout,
-                          width <= (std::numeric_limits<std::size_t>::max)() / sizeof(Coord3DPoint)
-                              ? width * sizeof(Coord3DPoint) : 0U);
-        return std::nullopt;
+    if (const auto intensity = scalarComponentSource(parts.intensity, width, height)) {
+        source.intensity = *intensity; source.hasIntensity = true;
     }
-
-    source.coordinateStride = stride;
-    if (const auto intensity = scalarComponentSource(
-            parts.intensity, width, height))
-    {
-        source.intensity = *intensity;
-        source.hasIntensity = true;
+    if (const auto confidence = scalarComponentSource(parts.confidence, width, height)) {
+        source.confidence = *confidence; source.hasConfidence = true;
     }
-    if (const auto confidence = scalarComponentSource(
-            parts.confidence, width, height))
-    {
-        source.confidence = *confidence;
-        source.hasConfidence = true;
-    }
-
     return buildBlazeFrame(source, blazeFrameOptionsFromRequest(request), contextSource,
                            frameSequence, rejection, storageError, cancelled);
 }

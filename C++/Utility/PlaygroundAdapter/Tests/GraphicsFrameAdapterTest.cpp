@@ -686,6 +686,25 @@ int main()
         assert(fittedShort->ranges().front().payload.zValues[3] == 0.0F);
         assert(fittedShort->ranges().front().payload.intensity[1] == 0.0F);
 
+        auto noRange = source;
+        noRange.coordinates = nullptr; noRange.coordinateReadableBytes = 0U;
+        rejection.reset();
+        const auto auxOnly = blaze.convertSource(noRange, {}, frameSource, 87U, &rejection);
+        assert(auxOnly && auxOnly->images().size() == 2U && !auxOnly->hasRangeFrame());
+        assert(rejection && rejection->reason == PylonRangeRejection::Reason::MissingRange);
+        assert(auxOnly->images().front().payload.data()[0] == 100U);
+
+        auto oddRange = source;
+        oddRange.rangeAsImage = true;
+        const std::uint8_t rawBytes[] = {1U, 2U, 3U};
+        oddRange.rawRange = {rawBytes, 2U, Pylon::PixelType_BayerGR8, sizeof(rawBytes)};
+        rejection.reset();
+        const auto retainedRaw = blaze.convertSource(oddRange, {}, frameSource, 88U, &rejection);
+        assert(retainedRaw && retainedRaw->images().size() == 3U && !retainedRaw->hasRangeFrame());
+        assert(rejection);
+        const auto& raw = retainedRaw->images().back().payload;
+        assert(raw.data()[0] == 1U && raw.data()[1] == 2U && raw.data()[2] == 3U && raw.data()[3] == 0U);
+
         GraphicsFrameRequest unrequested;
         unrequested.components = GraphicsFrameComponent::Image;
         rejection.reset();

@@ -44,6 +44,8 @@ struct BlazeRangeSource
     Pylon::EPixelType rangePixelType = Pylon::PixelType_Coord3D_ABC32f;
     BlazeScalarSource intensity;
     BlazeScalarSource confidence;
+    BlazeScalarSource rawRange;
+    bool rangeAsImage = false;
     bool hasIntensity = false;
     bool hasConfidence = false;
     /** SDK-reported stride and readable extent. Zero denotes an unavailable value. */
