@@ -1,4 +1,5 @@
 #include "PylonGraphicsFrameAdapter.h"
+#include "graphics/data/GraphicsRangeFrameWriter.h"
 
 #include <pylon/PylonBase.h>
 #include <pylon/PylonDataContainer.h>
@@ -200,6 +201,28 @@ int main()
     assert(bgr.data()[static_cast<std::size_t>(bgr.stride) + 1U] == 22U);
     assert(bgr.data()[static_cast<std::size_t>(bgr.stride) + 2U] == 12U);
 
+    // Whole-frame admission happens once before the SDK conversion path.
+    {
+        TrackedContextSource tracked(GraphicsFrameContext::local());
+        GraphicsFrameError error = GraphicsFrameError::None;
+        auto converted = adapter.convertGraphicsImageFrame(planar, tracked, 90U, nullptr, &error);
+        assert(converted && converted->hasImage());
+        assert(tracked.calls == 1U && tracked.requestedBytes == 12U);
+        assert(converted->images().front().payload.data()[0] == 30U);
+        tracked.error = GraphicsFrameError::NoReadyCredit;
+        error = GraphicsFrameError::None;
+        assert(!adapter.convertGraphicsImageFrame(planar, tracked, 91U, nullptr, &error));
+        assert(error == GraphicsFrameError::NoReadyCredit && tracked.calls == 2U);
+        tracked.error = GraphicsFrameError::Disconnected;
+        error = GraphicsFrameError::None;
+        assert(!adapter.convertGraphicsImageFrame(planar, tracked, 92U, nullptr, &error));
+        assert(error == GraphicsFrameError::Disconnected && tracked.calls == 3U);
+        std::atomic<bool> cancelled{true};
+        error = GraphicsFrameError::None;
+        assert(!adapter.convertGraphicsImageFrame(planar, tracked, 93U, nullptr, &error, &cancelled));
+        assert(error == GraphicsFrameError::Disconnected && tracked.calls == 3U);
+    }
+
     const Pylon::CPylonImage empty;
     assert(!adapter.convertGraphicsImage(empty, bgrBuilder).isValid());
 
@@ -257,6 +280,13 @@ int main()
         rangeAndCloud.components = GraphicsFrameComponent::Range | GraphicsFrameComponent::PointCloud;
         const auto scene = blaze.convertSource(source, rangeAndCloud, frameSource);
         assert(scene.has_value());
+        GraphicsRangeFrameLayout expected;
+        expected.width = 2; expected.height = 2;
+        expected.channels.x = true; expected.channels.y = true; expected.channels.validMask = true;
+        expected.channels.intensity = true; expected.channels.confidence = true; expected.channels.rgb = true;
+        const auto expectedPlan = planGraphicsRangeWrite(expected);
+        assert(expectedPlan && frameSource.calls == 1U);
+        assert(frameSource.requestedBytes == expectedPlan.value().totalBytes);
         const GraphicsFrame sharedScene = *scene;
         assert(sharedScene.ranges().front().payload.zValues.data()
             == scene->ranges().front().payload.zValues.data());
