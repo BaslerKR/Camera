@@ -1164,11 +1164,6 @@ void registerColorImageToRange(
 
 } // namespace
 
-void PylonGraphicsFrameAdapter::setFrameStorage(GraphicsFrameContext storage)
-{
-    _blazeAdapter.setFrameStorage(std::move(storage));
-}
-
 GraphicsImage PylonGraphicsFrameAdapter::convertGraphicsImage(
     const Pylon::CPylonImage& image,
     GraphicsFrameBuilder& builder,
@@ -1350,14 +1345,17 @@ std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsFrame(
     const PylonScene3DProfile& profile,
     const std::uint64_t frameSequence,
     std::optional<PylonImageRejection>* imageRejection,
-    std::optional<PylonRangeRejection>* rangeRejection) const
+    std::optional<PylonRangeRejection>* rangeRejection,
+    GraphicsFrameContextSource* contextSource, GraphicsFrameError* storageError,
+    const std::atomic<bool>* cancelled) const
 {
     std::optional<GraphicsFrame> result;
     switch (profile.family)
     {
     case PylonScene3DProfile::DeviceFamily::Blaze:
+        if (!contextSource) { if (storageError) *storageError = GraphicsFrameError::Disconnected; break; }
         result = _blazeAdapter.convertGraphicsFrame(
-            container, request, frameSequence, rangeRejection);
+            container, request, *contextSource, frameSequence, rangeRejection, storageError, cancelled);
         break;
     case PylonScene3DProfile::DeviceFamily::StereoMini:
         result = buildDirectXyzScene(container, request, profile, "Basler Stereo mini",

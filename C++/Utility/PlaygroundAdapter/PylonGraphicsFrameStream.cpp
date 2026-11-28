@@ -131,15 +131,29 @@ PylonGraphicsFrameStream::Impl::Impl(
     _grab3DCallbackId = _camera->registerGrab3DCallback(
         [this, callbackToken](const Pylon::CPylonDataContainer& container, const std::size_t sequence) {
             GraphicsFrameCallbackGate::Lease lease(callbackToken);
-            if (!lease || _cancelled.load(std::memory_order_acquire)) return;
+            if (!lease || _cancelled.load(std::memory_order_acquire)
+                || _refused.load(std::memory_order_acquire)) return;
             try
             {
                 std::optional<PylonImageRejection> imageRejection;
                 std::optional<PylonRangeRejection> rangeRejection;
+                std::shared_ptr<GraphicsFrameContextSource> contextSource;
+                {
+                    std::lock_guard<std::mutex> lock(_storageMutex);
+                    contextSource = _contextSource;
+                }
+                GraphicsFrameError storageError = GraphicsFrameError::None;
                 auto frame = _adapter.convertGraphicsFrame(
                     container, cameraGraphicsFrameRequest(), _camera->scene3DProfile(),
                     sequence, _imageRejection ? &imageRejection : nullptr,
-                    _rangeRejection ? &rangeRejection : nullptr);
+                    _rangeRejection ? &rangeRejection : nullptr, contextSource.get(),
+                    &storageError, &_cancelled);
+                if (storageError == GraphicsFrameError::ClassRefused) {
+                    _refused.store(true, std::memory_order_release);
+                    CameraSystem::syslog("Camera frame storage class was refused.", true);
+                }
+                if (_storageOutcome && storageError != GraphicsFrameError::None)
+                    _storageOutcome(storageError);
                 // Ordered, best-effort evidence: 2D first, then the range rule.
                 // A fallback that produced an image is not an assembly rejection.
                 if (_imageRejection && imageRejection && (!frame || !frame->hasImage()))

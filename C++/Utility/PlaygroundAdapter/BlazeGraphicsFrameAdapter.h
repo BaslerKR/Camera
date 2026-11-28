@@ -11,6 +11,7 @@
 
 #include <pylon/PylonIncludes.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -23,6 +24,7 @@ struct BlazeScalarSource
     const std::uint8_t* data = nullptr;
     std::size_t stride = 0;
     Pylon::EPixelType pixelType = Pylon::PixelType_Mono8;
+    std::size_t readableBytes = 0;
 };
 
 /**
@@ -50,21 +52,16 @@ struct BlazeRangeSource
 };
 
 class BlazeGraphicsFrameAdapter final
-    : public GraphicsFrameAdapter<BlazeGraphicsFrameAdapter, Pylon::CPylonDataContainer>
 {
 public:
     BlazeGraphicsFrameAdapter() = default;
     ~BlazeGraphicsFrameAdapter() = default;
 
-    using GraphicsFrameAdapter<BlazeGraphicsFrameAdapter, Pylon::CPylonDataContainer>::convertFrame;
-
-    /** Sets where range samples are written; empty restores storage of the adapter's own. */
-    void setFrameStorage(GraphicsFrameContext storage);
-
     /** Converts a neutral source view; the pylon adapter and tests share it. */
     [[nodiscard]] std::optional<GraphicsFrame> convertSource(
         const BlazeRangeSource& source,
         const GraphicsFrameRequest& request,
+        GraphicsFrameContextSource& contextSource,
         std::uint64_t frameSequence = 0U,
         std::optional<PylonRangeRejection>* rejection = nullptr) const;
 
@@ -72,16 +69,10 @@ public:
     [[nodiscard]] std::optional<GraphicsFrame> convertGraphicsFrame(
         const Pylon::CPylonDataContainer& container,
         const GraphicsFrameRequest& request,
+        GraphicsFrameContextSource& contextSource,
         std::uint64_t frameSequence,
-        std::optional<PylonRangeRejection>* rejection) const;
+        std::optional<PylonRangeRejection>* rejection,
+        GraphicsFrameError* storageError,
+        const std::atomic<bool>* cancelled) const;
 
-private:
-    friend class GraphicsFrameAdapter<BlazeGraphicsFrameAdapter, Pylon::CPylonDataContainer>;
-
-    [[nodiscard]] std::optional<GraphicsFrame> convertGraphicsFrame(
-        const Pylon::CPylonDataContainer& container,
-        const GraphicsFrameRequest& request) const;
-
-    mutable std::mutex _storageMutex;
-    GraphicsFrameContext _storage = GraphicsFrameContext::local();
 };
