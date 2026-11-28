@@ -22,10 +22,19 @@ struct Coord3DPoint
     float z;
 };
 
-struct StereoParts {
-    Pylon::CPylonDataComponent intensity, range, disparity;
-};
+using StereoParts = CameraStereoParts;
 
+[[nodiscard]] CameraStereoPartView stereoPartView(const Pylon::CPylonDataComponent& part)
+{
+    CameraStereoPartView view;
+    if (!part.IsValid()) return view;
+    view.valid = true;
+    view.data = part.GetData(); view.bytes = part.GetDataSize();
+    view.width = part.GetWidth(); view.height = part.GetHeight();
+    view.pixelType = part.GetPixelType(); view.padding = part.GetPaddingX();
+    view.hasStride = part.GetStride(view.stride);
+    return view;
+}
 [[nodiscard]] StereoParts stereoParts(const Pylon::CPylonDataContainer& container)
 {
     StereoParts parts;
@@ -33,9 +42,9 @@ struct StereoParts {
         auto part = container.GetDataComponent(i);
         if (!part.IsValid()) continue;
         switch (part.GetComponentType()) {
-        case Pylon::ComponentType_Intensity: if (!parts.intensity.IsValid()) parts.intensity = part; break;
-        case Pylon::ComponentType_Range: if (!parts.range.IsValid()) parts.range = part; break;
-        case Pylon::ComponentType_Disparity: if (!parts.disparity.IsValid()) parts.disparity = part; break;
+        case Pylon::ComponentType_Intensity: if (!parts.intensity.IsValid()) parts.intensity = stereoPartView(part); break;
+        case Pylon::ComponentType_Range: if (!parts.range.IsValid()) parts.range = stereoPartView(part); break;
+        case Pylon::ComponentType_Disparity: if (!parts.disparity.IsValid()) parts.disparity = stereoPartView(part); break;
         default: break;
         }
     }
@@ -64,7 +73,7 @@ struct StereoParts {
     }
 }
 
-[[nodiscard]] bool componentStride(const Pylon::CPylonDataComponent& component,
+[[nodiscard]] bool componentStride(const CameraStereoPartView& component,
                                    std::size_t& stride)
 {
     const std::size_t pixelBytes = bytesPerPixel(component.GetPixelType());
@@ -220,7 +229,7 @@ void recordRangeRejection(
 }
 
 [[nodiscard]] RangeEvidenceContext componentRangeContext(
-    const Pylon::CPylonDataComponent& component,
+    const CameraStereoPartView& component,
     const std::uint64_t frameSequence)
 {
     RangeEvidenceContext context;
@@ -342,7 +351,7 @@ void recordWriterFailure(
 }
 
 [[nodiscard]] GraphicsImage componentToGraphicsImage(
-    const Pylon::CPylonDataComponent& component,
+    const CameraStereoPartView& component,
     GraphicsFrameBuilder& builder,
     const std::uint64_t frameSequence = 0U,
     std::optional<PylonImageRejection>* rejection = nullptr)
@@ -687,7 +696,7 @@ void recordWriterFailure(
          + static_cast<std::size_t>(sourceX);
 }
 
-bool copyScalarIntensity(const Pylon::CPylonDataComponent& component, RangeFrame& frame,
+bool copyScalarIntensity(const CameraStereoPartView& component, RangeFrame& frame,
                          GraphicsFrameBuilder& builder)
 {
     if (!component.IsValid() || component.GetData() == nullptr
@@ -734,7 +743,7 @@ bool copyScalarIntensity(const Pylon::CPylonDataComponent& component, RangeFrame
     return true;
 }
 
-bool copyPointCloudRgb(const Pylon::CPylonDataComponent& component, RangeFrame& frame,
+bool copyPointCloudRgb(const CameraStereoPartView& component, RangeFrame& frame,
                        GraphicsFrameBuilder& builder)
 {
     if (!component.IsValid() || component.GetData() == nullptr
@@ -781,7 +790,7 @@ bool copyPointCloudRgb(const Pylon::CPylonDataComponent& component, RangeFrame& 
     return true;
 }
 
-void appendColorImage(const Pylon::CPylonDataComponent& intensity,
+void appendColorImage(const CameraStereoPartView& intensity,
                       const GraphicsFrameRequest& request,
                       const PylonScene3DProfile& profile,
                       GraphicsFrameBuilder& builder,
@@ -1437,39 +1446,11 @@ std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsFrame(
             container, request, *contextSource, frameSequence, rangeRejection, storageError, cancelled);
         break;
     case PylonScene3DProfile::DeviceFamily::StereoMini:
-    case PylonScene3DProfile::DeviceFamily::StereoAce: {
+    case PylonScene3DProfile::DeviceFamily::StereoAce:
         if (!contextSource) { if (storageError) *storageError = GraphicsFrameError::Disconnected; break; }
-        const bool ace = profile.family == PylonScene3DProfile::DeviceFamily::StereoAce;
-        const auto parts = stereoParts(container);
-        std::size_t sampleBytes = 0U;
-        if (!planStereo(parts, request, profile, ace, frameSequence, sampleBytes)) {
-            if (storageError) *storageError = GraphicsFrameError::InvalidInput;
-            if (rangeRejection) {
-                const auto& part = ace ? parts.disparity : parts.range;
-                recordRangeRejection(rangeRejection, componentRangeContext(part, frameSequence),
-                    PylonRangeRejection::Reason::InvalidLayout);
-            }
-            break;
-        }
-        if (sampleBytes == 0U) break;
-        if (cancelled && cancelled->load(std::memory_order_acquire)) {
-            if (storageError) *storageError = GraphicsFrameError::Disconnected;
-            break;
-        }
-        auto context = contextSource->beginFrame(sampleBytes);
-        if (!context) { if (storageError) *storageError = context.error(); break; }
-        if (cancelled && cancelled->load(std::memory_order_acquire)) {
-            if (storageError) *storageError = GraphicsFrameError::Disconnected;
-            break;
-        }
-        if (ace)
-            result = buildStereoAceScene(parts, request, profile, context.value(), storageError,
-                cancelled, frameSequence, imageRejection, rangeRejection);
-        else
-            result = buildDirectXyzScene(parts, request, profile, context.value(), storageError,
-                cancelled, "Basler Stereo mini", frameSequence, imageRejection, rangeRejection);
+        result = convertStereoParts(stereoParts(container), request, profile, *contextSource,
+                                    frameSequence, imageRejection, rangeRejection, storageError, cancelled);
         break;
-    }
     case PylonScene3DProfile::DeviceFamily::Image2D:
         break;
     }
@@ -1495,4 +1476,43 @@ std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertGraphicsFrame(
         }
     }
     return result;
+}
+
+std::optional<GraphicsFrame> PylonGraphicsFrameAdapter::convertStereoParts(
+    const CameraStereoParts& parts, const GraphicsFrameRequest& request,
+    const PylonScene3DProfile& profile, GraphicsFrameContextSource& contextSource,
+    const std::uint64_t frameSequence, std::optional<PylonImageRejection>* imageRejection,
+    std::optional<PylonRangeRejection>* rangeRejection, GraphicsFrameError* storageError,
+    const std::atomic<bool>* cancelled) const
+{
+    const bool ace = profile.family == PylonScene3DProfile::DeviceFamily::StereoAce;
+    if (!ace && profile.family != PylonScene3DProfile::DeviceFamily::StereoMini) {
+        if (storageError) *storageError = GraphicsFrameError::InvalidInput;
+        return std::nullopt;
+    }
+    std::size_t sampleBytes = 0U;
+    if (!planStereo(parts, request, profile, ace, frameSequence, sampleBytes)) {
+        if (storageError) *storageError = GraphicsFrameError::InvalidInput;
+        if (rangeRejection) {
+            const auto& part = ace ? parts.disparity : parts.range;
+            recordRangeRejection(rangeRejection, componentRangeContext(part, frameSequence),
+                                 PylonRangeRejection::Reason::InvalidLayout);
+        }
+        return std::nullopt;
+    }
+    if (sampleBytes == 0U) return std::nullopt;
+    if (cancelled && cancelled->load(std::memory_order_acquire)) {
+        if (storageError) *storageError = GraphicsFrameError::Disconnected;
+        return std::nullopt;
+    }
+    auto context = contextSource.beginFrame(sampleBytes);
+    if (!context) { if (storageError) *storageError = context.error(); return std::nullopt; }
+    if (cancelled && cancelled->load(std::memory_order_acquire)) {
+        if (storageError) *storageError = GraphicsFrameError::Disconnected;
+        return std::nullopt;
+    }
+    if (ace) return buildStereoAceScene(parts, request, profile, context.value(), storageError,
+                                        cancelled, frameSequence, imageRejection, rangeRejection);
+    return buildDirectXyzScene(parts, request, profile, context.value(), storageError,
+                               cancelled, "Basler Stereo mini", frameSequence, imageRejection, rangeRejection);
 }

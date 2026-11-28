@@ -12,6 +12,24 @@
 #include <cstdint>
 #include <optional>
 
+/** Non-owning SDK part view; payload stays owned by the caller through conversion. */
+struct CameraStereoPartView
+{
+    const void* data = nullptr;
+    std::size_t bytes = 0, width = 0, height = 0, stride = 0, padding = 0;
+    Pylon::EPixelType pixelType = Pylon::PixelType_Undefined;
+    bool valid = false, hasStride = false;
+    bool IsValid() const noexcept { return valid; }
+    const void* GetData() const noexcept { return data; }
+    std::size_t GetDataSize() const noexcept { return bytes; }
+    std::size_t GetWidth() const noexcept { return width; }
+    std::size_t GetHeight() const noexcept { return height; }
+    std::size_t GetPaddingX() const noexcept { return padding; }
+    Pylon::EPixelType GetPixelType() const noexcept { return pixelType; }
+    bool GetStride(std::size_t& out) const noexcept { out = stride; return hasStride; }
+};
+struct CameraStereoParts { CameraStereoPartView intensity, range, disparity; };
+
 class PylonGraphicsFrameAdapter final
 {
 public:
@@ -25,6 +43,16 @@ public:
         std::optional<PylonImageRejection>* imageRejection = nullptr,
         std::optional<PylonRangeRejection>* rangeRejection = nullptr,
         GraphicsFrameContextSource* contextSource = nullptr,
+        GraphicsFrameError* storageError = nullptr,
+        const std::atomic<bool>* cancelled = nullptr) const;
+
+    /** Converts non-owning Stereo part views while their SDK container is retained. */
+    [[nodiscard]] std::optional<GraphicsFrame> convertStereoParts(
+        const CameraStereoParts& parts, const GraphicsFrameRequest& request,
+        const PylonScene3DProfile& profile, GraphicsFrameContextSource& contextSource,
+        std::uint64_t frameSequence = 0U,
+        std::optional<PylonImageRejection>* imageRejection = nullptr,
+        std::optional<PylonRangeRejection>* rangeRejection = nullptr,
         GraphicsFrameError* storageError = nullptr,
         const std::atomic<bool>* cancelled = nullptr) const;
 
